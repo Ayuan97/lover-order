@@ -1,0 +1,116 @@
+{
+  "pages": [
+    {
+      "path": "pages/login/index",
+      "style": {
+        "navigationStyle": "custom",
+        "backgroundColor": "#FF8A65"
+      }
+    },
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "Love Order",
+        "navigationBarBackgroundColor": "#FF8A65",
+        "navigationBarTextStyle": "white",
+        "backgroundColor": "#FAFAFA"
+      }
+    },
+    {
+      "path": "pages/recipes/index",
+      "style": {
+        "navigationBarTitleText": "菜谱管理",
+        "navigationBarBackgroundColor": "#FF8A65",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/orders/index",
+      "style": {
+        "navigationBarTitleText": "我的订单",
+        "navigationBarBackgroundColor": "#FF8A65",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/profile/index",
+      "style": {
+        "navigationBarTitleText": "个人中心",
+        "navigationBarBackgroundColor": "#FF8A65",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/family/index",
+      "style": {
+        "navigationBarTitleText": "家庭管理",
+        "navigationBarBackgroundColor": "#FF8A65",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/guest/share",
+      "style": {
+        "navigationBarTitleText": "邀请朋友",
+        "navigationBarBackgroundColor": "#FF8A65",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/guest/index",
+      "style": {
+        "navigationBarTitleText": "访客体验",
+        "navigationBarBackgroundColor": "#FF8A65",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/demo/guest-flow",
+      "style": {
+        "navigationBarTitleText": "访客分享演示",
+        "navigationBarBackgroundColor": "#FF8A65",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/test-api",
+      "style": {
+        "navigationBarTitleText": "API测试",
+        "navigationBarBackgroundColor": "#FF8A65",
+        "navigationBarTextStyle": "white"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "Love Order",
+    "navigationBarBackgroundColor": "#FF8A65",
+    "backgroundColor": "#FAFAFA",
+    "backgroundTextStyle": "light",
+    "enablePullDownRefresh": false
+  },
+  "tabBar": {
+    "color": "#999999",
+    "selectedColor": "#FF8A65",
+    "backgroundColor": "#FFFFFF",
+    "borderStyle": "black",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "首页"
+      },
+      {
+        "pagePath": "pages/recipes/index",
+        "text": "菜谱"
+      },
+      {
+        "pagePath": "pages/orders/index",
+        "text": "订单"
+      },
+      {
+        "pagePath": "pages/profile/index",
+        "text": "我的"
+      }
+    ]
+  }
+}

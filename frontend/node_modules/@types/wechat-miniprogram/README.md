@@ -1,0 +1,15 @@
+# Installation
+> `npm install --save @types/wechat-miniprogram`
+
+# Summary
+This package contains type definitions for wechat-miniprogram (https://developers.weixin.qq.com/miniprogram/dev/api/).
+
+# Details
+Files were exported from https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/wechat-miniprogram.
+
+### Additional Details
+ * Last updated: Wed, 23 Oct 2024 03:36:41 GMT
+ * Dependencies: none
+
+# Credits
+These definitions were written by [Wechat Miniprogram](https://github.com/wechat-miniprogram), [SgLy](https://github.com/SgLy), and [TtTRz](https://github.com/TtTRz).

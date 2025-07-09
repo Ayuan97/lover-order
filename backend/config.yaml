@@ -1,0 +1,56 @@
+# Love Order Backend Configuration
+
+server:
+  port: 8081
+  mode: debug # debug, release, test
+
+database:
+  host: 127.0.0.1
+  port: 3306
+  username: root
+  password: root
+  database: love_order
+  charset: utf8mb4
+  parse_time: true
+  loc: Local
+  max_idle_conns: 10
+  max_open_conns: 100
+  conn_max_lifetime: 3600 # seconds
+
+jwt:
+  secret: love-order-jwt-secret-key-2024
+  expire_hours: 24
+
+wechat:
+  app_id: wxc844a0f93f489e6e
+  app_secret: f05dba288ef6c4c278697a4119f615f8
+
+upload:
+  path: ./uploads
+  max_size: 5242880 # 5MB
+  allowed_types:
+    - jpg
+    - jpeg
+    - png
+    - gif
+
+log:
+  level: info # debug, info, warn, error
+  file: ./logs/app.log
+  max_size: 100 # MB
+  max_backups: 3
+  max_age: 28 # days
+
+cors:
+  allow_origins:
+    - "*"
+  allow_methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+  allow_headers:
+    - Origin
+    - Content-Type
+    - Authorization
