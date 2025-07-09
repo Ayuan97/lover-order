@@ -188,8 +188,8 @@ MIT License
 
 ## 👥 团队
 
-- 开发者: [Your Name]
-- 设计师: [Designer Name]
+- 开发者: [ayuan]
+- 设计师: [ayuan]
 
 ---
 
