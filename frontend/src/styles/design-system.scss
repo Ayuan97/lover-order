@@ -1,0 +1,348 @@
+/**
+ * Love Order 设计系统 - SCSS 变量
+ *
+ * 设计理念：温馨活泼的家庭风格
+ * 核心特征：温暖橙粉色系 + 适度圆润 + 精简装饰
+ */
+
+// ============================================
+// 色彩系统（Color System）
+// ============================================
+
+// 主色调（Primary Colors）
+$primary: #FF8A65;
+$primary-dark: #FF7043;
+$primary-light: #FFAB91;
+
+// 辅助色（Secondary Colors）
+$secondary: #FFB4A2;
+$secondary-light: #FFD4C8;
+
+// 功能色（Functional Colors）
+$success: #66BB6A;
+$success-light: #81C784;
+
+$warning: #FFA726;
+$warning-light: #FFB74D;
+
+$danger: #F44336;
+$danger-light: #E57373;
+
+$info: #42A5F5;
+$info-light: #64B5F6;
+
+// 中性色（Neutral Colors）
+// 文字颜色
+$text-primary: #333333;
+$text-secondary: #666666;
+$text-tertiary: #999999;
+$text-placeholder: #CCCCCC;
+$text-disabled: #DDDDDD;
+
+// 背景颜色
+$bg-page: #FAFAFA;
+$bg-card: #FFFFFF;
+$bg-section: #F8F8F8;
+$bg-hover: #F5F5F5;
+$bg-disabled: #F0F0F0;
+
+// 边框颜色
+$border-light: #F0F0F0;
+$border-base: #E0E0E0;
+$border-dark: #CCCCCC;
+
+// 渐变（Gradients）
+$gradient-primary: linear-gradient(135deg, #FF8A65 0%, #FF7043 100%);
+$gradient-secondary: linear-gradient(135deg, #FFB4A2 0%, #FF8A65 100%);
+$gradient-warm: linear-gradient(135deg, #FFF3E0 0%, #FFE4B5 100%);
+$gradient-header: linear-gradient(135deg, #FF8A65 0%, #FF7043 100%);
+$gradient-card: linear-gradient(135deg, #FFB4A2 0%, #FF8A65 100%);
+
+// Instagram 渐变（用于 Stories 边框）
+$instagram-gradient: linear-gradient(
+  45deg,
+  #f09433 0%,
+  #e6683c 25%,
+  #dc2743 50%,
+  #cc2366 75%,
+  #bc1888 100%
+);
+
+// 别名（保持向后兼容）
+$error: $danger;
+
+// ============================================
+// 字体系统（Typography）
+// ============================================
+
+// 字号
+$font-size-xxl: 48rpx;
+$font-size-xl: 40rpx;
+$font-size-lg: 36rpx;
+$font-size-md: 32rpx;
+$font-size-base: 28rpx;
+$font-size-sm: 26rpx;
+$font-size-xs: 24rpx;
+$font-size-xxs: 22rpx;
+$font-size-tiny: 20rpx;
+
+// 字重
+$font-weight-light: 300;
+$font-weight-normal: 400;
+$font-weight-medium: 500;
+$font-weight-bold: 700;
+
+// 行高
+$line-height-tight: 1.2;
+$line-height-base: 1.5;
+$line-height-relaxed: 1.8;
+
+// ============================================
+// 间距系统（Spacing）
+// ============================================
+
+$spacing-xs: 8rpx;
+$spacing-sm: 12rpx;
+$spacing-md: 16rpx;
+$spacing-base: 24rpx;
+$spacing-lg: 32rpx;
+$spacing-xl: 48rpx;
+$spacing-xxl: 64rpx;
+
+// ============================================
+// 圆角系统（Border Radius）
+// ============================================
+
+$radius-none: 0;
+$radius-sm: 8rpx;
+$radius-base: 12rpx;
+$radius-md: 16rpx;
+$radius-lg: 20rpx;
+$radius-xl: 24rpx;
+$radius-button: 40rpx;
+$radius-round: 50%;
+
+// ============================================
+// 阴影系统（Shadows）
+// ============================================
+
+$shadow-xs: 0 2rpx 4rpx rgba(0, 0, 0, 0.05);
+$shadow-sm: 0 2rpx 8rpx rgba(0, 0, 0, 0.08);
+$shadow-base: 0 4rpx 12rpx rgba(0, 0, 0, 0.1);
+$shadow-md: 0 8rpx 16rpx rgba(0, 0, 0, 0.12);
+$shadow-lg: 0 12rpx 24rpx rgba(0, 0, 0, 0.15);
+
+// 主色阴影
+$shadow-primary: 0 4rpx 12rpx rgba(255, 138, 101, 0.3);
+$shadow-primary-hover: 0 6rpx 16rpx rgba(255, 138, 101, 0.4);
+
+// ============================================
+// 动画系统（Animation）
+// ============================================
+
+// 动画时长
+$duration-fast: 0.2s;
+$duration-base: 0.3s;
+$duration-slow: 0.5s;
+
+// 缓动函数
+$ease-in: cubic-bezier(0.4, 0, 1, 1);
+$ease-out: cubic-bezier(0, 0, 0.2, 1);
+$ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+$ease-sharp: cubic-bezier(0.4, 0, 0.6, 1);
+
+// ============================================
+// Z-Index 层级
+// ============================================
+
+$z-index-dropdown: 100;
+$z-index-sticky: 200;
+$z-index-fixed: 300;
+$z-index-modal-backdrop: 400;
+$z-index-modal: 500;
+$z-index-popover: 600;
+$z-index-tooltip: 700;
+$z-index-notification: 800;
+
+// ============================================
+// Mixins（混合器）
+// ============================================
+
+// 点击缩放效果
+@mixin tap-scale($scale: 0.96) {
+  transition: transform $duration-fast $ease-out;
+
+  &:active {
+    transform: scale($scale);
+  }
+}
+
+// 文本溢出省略
+@mixin text-ellipsis($lines: 1) {
+  @if $lines == 1 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  } @else {
+    display: -webkit-box;
+    -webkit-line-clamp: $lines;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+// Flex 居中
+@mixin flex-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+// Flex 垂直布局
+@mixin flex-column {
+  display: flex;
+  flex-direction: column;
+}
+
+// Flex 水平布局
+@mixin flex-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+// Flex 间距分布
+@mixin flex-between {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+// 清除浮动
+@mixin clearfix {
+  &::after {
+    content: '';
+    display: table;
+    clear: both;
+  }
+}
+
+// 绝对定位居中
+@mixin absolute-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+// 安全区域
+@mixin safe-area-top {
+  padding-top: constant(safe-area-inset-top);
+  padding-top: env(safe-area-inset-top);
+}
+
+@mixin safe-area-bottom {
+  padding-bottom: constant(safe-area-inset-bottom);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+// ============================================
+// 常用类（Utility Classes）
+// ============================================
+
+// 文字对齐
+.text-left { text-align: left; }
+.text-center { text-align: center; }
+.text-right { text-align: right; }
+
+// 文字颜色
+.text-primary { color: $text-primary; }
+.text-secondary { color: $text-secondary; }
+.text-tertiary { color: $text-tertiary; }
+.text-placeholder { color: $text-placeholder; }
+
+// 主题色文字
+.text-brand { color: $primary; }
+.text-success { color: $success; }
+.text-warning { color: $warning; }
+.text-danger { color: $danger; }
+.text-info { color: $info; }
+
+// 字重
+.font-light { font-weight: $font-weight-light; }
+.font-normal { font-weight: $font-weight-normal; }
+.font-medium { font-weight: $font-weight-medium; }
+.font-bold { font-weight: $font-weight-bold; }
+
+// Flex 布局
+.flex { display: flex; }
+.flex-center { @include flex-center; }
+.flex-column { @include flex-column; }
+.flex-row { @include flex-row; }
+.flex-between { @include flex-between; }
+.flex-1 { flex: 1; }
+
+// 溢出隐藏
+.overflow-hidden { overflow: hidden; }
+.overflow-auto { overflow: auto; }
+.overflow-scroll { overflow: scroll; }
+
+// ============================================
+// 组件基础样式
+// ============================================
+
+// 按钮基础样式
+%button-base {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: $spacing-sm;
+  padding: $spacing-base $spacing-xl;
+  border: none;
+  border-radius: $radius-button;
+  font-size: $font-size-base;
+  font-weight: $font-weight-bold;
+  transition: all $duration-base $ease-out;
+  cursor: pointer;
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}
+
+// 卡片基础样式
+%card-base {
+  background: $bg-card;
+  border-radius: $radius-lg;
+  padding: $spacing-lg;
+  box-shadow: $shadow-base;
+}
+
+// 输入框基础样式
+%input-base {
+  width: 100%;
+  padding: $spacing-base;
+  background: $bg-section;
+  border: 2rpx solid transparent;
+  border-radius: $radius-base;
+  font-size: $font-size-base;
+  color: $text-primary;
+  transition: all $duration-base $ease-out;
+
+  &::placeholder {
+    color: $text-placeholder;
+  }
+
+  &:focus {
+    background: white;
+    border-color: $primary;
+    outline: none;
+  }
+
+  &:disabled {
+    background: $bg-disabled;
+    color: $text-disabled;
+  }
+}

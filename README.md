@@ -4,21 +4,32 @@
 
 ## 📋 项目概述
 
+Love Order 是一个温馨的情侣/家庭点餐微信小程序。
+
+**核心定位：**
+这不是一个商业化的点餐系统，而是一个充满爱意的家庭互动工具。主要场景包括：
+- 👫 **情侣日常**：一方想吃什么，另一方看到后为TA准备
+- 👨‍👩‍👧‍👦 **家庭互动**：家人之间分享美食愿望，互相烹饪
+- 🏠 **朋友来访**：偶尔有朋友来家里做客时临时点餐
+
+**设计理念：**
+- ❤️ **温馨互动**：不是冰冷的订单管理，而是充满爱的美食分享
+- 😊 **简单自然**：去除繁琐的商业化流程，让点餐和做饭都变得轻松有趣
+- 💕 **情感连接**：通过食物传递爱意，记录美好的共餐时光
+
 ### 功能特点
 - 🍳 家庭菜谱管理（上传、编辑、分类）
 - 👨‍👩‍👧‍👦 家庭成员权限管理
-- 🛒 可爱简约的点餐界面
+- 🛒 社交互动风格的点餐界面（Instagram + Pinterest + Facebook 设计）
 - 👥 访客点餐功能（朋友来做客时使用）
 - 📊 订单管理和统计
 - 💝 收藏和评价系统
 
 ### 技术栈
-- **前端**: uni-app + Vue 3 + TypeScript + uni-ui
+- **前端**: uni-app + Vue 3 + TypeScript
 - **后端**: Go + Gin + GORM
 - **数据库**: MySQL 8.0+
 - **认证**: JWT + 微信小程序登录
-- **部署**: Docker + Nginx
-- **跨端支持**: 微信小程序、H5、支付宝小程序等
 
 ## 🛠 开发环境准备
 
@@ -27,15 +38,6 @@
 - Go 1.19+
 - MySQL 8.0+
 - 微信开发者工具 (小程序调试)
-- Git
-
-### 开发工具推荐
-- VS Code + Volar插件 (Vue开发)
-- HBuilderX (uni-app官方IDE，可选)
-- 微信开发者工具 (小程序开发调试)
-- Chrome DevTools (H5调试)
-- Navicat/DBeaver (数据库管理)
-- Postman (API测试)
 
 ## 📁 项目结构
 
@@ -43,6 +45,7 @@
 love-order/
 ├── backend/                 # Go后端
 │   ├── cmd/                # 应用入口
+│   │   └── server/        # 主服务器
 │   ├── internal/           # 内部包
 │   │   ├── api/           # API路由和处理器
 │   │   ├── model/         # 数据模型
@@ -50,33 +53,25 @@ love-order/
 │   │   ├── middleware/    # 中间件
 │   │   └── config/        # 配置
 │   ├── pkg/               # 公共包
-│   ├── migrations/        # 数据库迁移
-│   ├── docs/             # API文档
+│   ├── config.yaml        # 配置文件
 │   ├── go.mod
 │   └── go.sum
 ├── frontend/              # uni-app + Vue前端
 │   ├── src/              # 源代码
-│   │   ├── components/   # 组件
-│   │   ├── pages/        # 页面
-│   │   ├── composables/  # 组合式函数
-│   │   ├── store/        # 状态管理(Pinia)
-│   │   ├── utils/        # 工具函数
 │   │   ├── api/          # API接口
-│   │   ├── types/        # TypeScript类型定义
-│   │   ├── styles/       # 样式文件
-│   │   ├── static/       # 静态资源
-│   │   ├── uni_modules/  # uni-app插件
+│   │   ├── pages/        # 页面
+│   │   ├── styles/       # 样式文件（设计系统）
 │   │   ├── App.vue       # 应用入口
 │   │   ├── main.ts       # 主入口文件
 │   │   ├── manifest.json # 应用配置
 │   │   └── pages.json    # 页面路由配置
 │   ├── package.json      # 依赖配置
 │   ├── tsconfig.json     # TypeScript配置
-│   ├── vite.config.ts    # Vite配置
-│   └── index.html        # H5入口文件
-├── docs/                 # 项目文档
-├── docker/               # Docker配置
-├── scripts/              # 脚本文件
+│   └── vite.config.ts    # Vite配置
+├── CLAUDE.md             # Claude Code 项目说明
+├── SOCIAL_DESIGN_SYSTEM.md  # 社交互动设计系统文档
+├── TODO.md               # 开发任务清单
+├── init_database.sql     # 数据库初始化脚本
 └── README.md
 ```
 
@@ -93,23 +88,23 @@ love-order/
 - `recipe_reviews` - 评价表
 - `family_invitations` - 家庭邀请表
 
-详细的数据库设计请参考 `docs/database.md`
-
 ## 🎨 UI设计规范
 
-### 色彩方案
-- **主色调**: 温暖橙色 `#FF8A65`
-- **辅助色**: 柔和粉色 `#F8BBD9`
-- **强调色**: 清新绿色 `#81C784`
-- **背景色**: 米白色 `#FAFAFA`
-- **文字色**: 深灰色 `#424242`
+### 社交互动风格设计系统
 
-### 设计原则
-- 圆角设计（12px统一圆角）
-- 卡片式布局
-- 轻微阴影效果
-- 可爱友好的图标
-- 流畅的动画过渡
+Love Order 采用**社交媒体互动风格**，融合三大社交平台精髓：
+
+1. **Instagram Stories 动态条** - 圆形头像 + 渐变边框
+2. **Pinterest 网格布局** - 双列响应式美食卡片
+3. **Facebook Timeline 时间线** - 状态节点 + 连接线设计
+
+详细设计规范请参考 `SOCIAL_DESIGN_SYSTEM.md`
+
+### 色彩方案
+- **主色调**: 珊瑚橙 `#FF8A65`
+- **辅助色**: 柔和粉色 `#FFB4A2`
+- **强调色**: 清新绿色 `#66BB6A`
+- **背景色**: 米白色 `#FAFAFA`
 
 ## 🚀 快速开始
 
@@ -119,78 +114,84 @@ git clone <repository-url>
 cd love-order
 ```
 
-### 2. 后端启动
-```bash
-cd backend
-go mod tidy
-go run cmd/main.go
-```
-
-### 3. 前端启动
-```bash
-cd frontend
-npm install
-
-# 开发微信小程序
-npm run dev:mp-weixin
-
-# 开发H5版本
-npm run dev:h5
-
-# 构建生产版本
-npm run build:mp-weixin  # 构建微信小程序
-npm run build:h5         # 构建H5版本
-```
-
-### 4. 数据库初始化
+### 2. 数据库初始化
 ```bash
 # 创建数据库
 mysql -u root -p -e "CREATE DATABASE love_order CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 
-# 运行迁移
-cd backend
-go run cmd/migrate.go
+# 导入初始数据（可选）
+mysql -u root -p love_order < init_database.sql
 ```
+
+### 3. 后端启动
+```bash
+cd backend
+
+# 安装依赖
+go mod tidy
+
+# 启动服务（端口 8081）
+go run cmd/server/main.go
+```
+
+### 4. 前端启动
+```bash
+cd frontend
+
+# 安装依赖
+npm install
+
+# 开发微信小程序
+npm run dev
+
+# 构建生产版本
+npm run build
+```
+
+### 5. 微信开发者工具
+1. 打开微信开发者工具
+2. 导入项目：选择 `frontend/dist/dev/mp-weixin` 目录
+3. 开始开发
 
 ## 📚 开发文档
 
-- [开发指南](docs/development-guide.md)
-- [API文档](docs/api.md)
-- [数据库设计](docs/database.md)
-- [部署指南](docs/deployment.md)
-- [测试指南](docs/testing.md)
+- **项目说明**: `CLAUDE.md` - 详细的项目架构和开发指南
+- **设计系统**: `SOCIAL_DESIGN_SYSTEM.md` - UI设计规范和组件库
+- **任务清单**: `TODO.md` - 功能实现进度追踪
 
-## 🔄 开发流程
+## 🔄 订单流程设计
 
-详细的开发步骤请参考 `docs/development-guide.md`
+订单系统采用温馨互动的设计理念：
 
-## 📝 更新日志
+**4个核心状态：**
+1. **💭 想吃（pending）** - 点餐人提交心愿
+2. **👨‍🍳 在做啦（cooking）** - 做饭人接单并开始烹饪
+3. **🔔 做好啦（completed）** - 美食完成
+4. **😋 已品尝（reviewed）** - 用餐完成并反馈
 
-### v1.0.0 (计划中)
-- [ ] 基础项目架构搭建
-- [ ] 用户认证系统
-- [ ] 菜谱管理功能
-- [ ] 基础点餐功能
-- [ ] 访客功能
-- [ ] UI美化和优化
+详细流程说明请参考 `CLAUDE.md`
+
+## 📝 配置说明
+
+### 后端配置
+编辑 `backend/config.yaml`:
+- 服务端口：默认 8081
+- 数据库凭据：根据实际环境配置
+- JWT 密钥：生产环境请更换
+- 微信 app_id 和 app_secret：需要真实的微信小程序凭据
+
+### 前端配置
+- API 地址：`frontend/src/api/config.ts`
+- 微信小程序配置：`frontend/src/manifest.json`
 
 ## 🤝 贡献指南
 
-1. Fork 项目
-2. 创建功能分支
-3. 提交更改
-4. 推送到分支
-5. 创建 Pull Request
+详细开发规范请参考 `CLAUDE.md` 中的"开发规则"章节。
 
 ## 📄 许可证
 
 MIT License
 
-## 👥 团队
-
-- 开发者: [ayuan]
-- 设计师: [ayuan]
-
 ---
 
-💡 **提示**: 这是一个家庭使用的私人项目，请根据实际需求调整功能和配置。
+💡 **提示**: 这是一个家庭使用的私人项目，专注于温馨的家庭互动体验。

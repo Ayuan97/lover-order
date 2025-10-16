@@ -676,23 +676,25 @@ const formatJoinDate = (dateStr: string) => {
 </script>
 
 <style lang="scss" scoped>
+@use '@/styles/design-system.scss' as *;
+
 .family-page {
-  padding: 24rpx;
-  background-color: #FAFAFA;
+  padding: $spacing-base;
+  background: linear-gradient(180deg, #FAFAFA 0%, #FFFFFF 100%);
   min-height: 100vh;
 }
 
 .card {
-  background-color: #fff;
-  border-radius: 12rpx;
-  box-shadow: 0 2rpx 8rpx rgba(0, 0, 0, 0.1);
-  margin-bottom: 24rpx;
+  background-color: $bg-card;
+  border-radius: $radius-lg;
+  box-shadow: $shadow-base;
+  margin-bottom: $spacing-base;
 }
 
 // 家庭信息卡片
 .family-info {
-  padding: 32rpx;
-  background: linear-gradient(135deg, #FF8A65 0%, #FF7043 100%);
+  padding: $spacing-xl;
+  background: $gradient-primary;
   color: white;
   position: relative;
   overflow: hidden;
@@ -711,13 +713,13 @@ const formatJoinDate = (dateStr: string) => {
   .family-header {
     display: flex;
     align-items: center;
-    margin-bottom: 32rpx;
+    margin-bottom: $spacing-xl;
     position: relative;
     z-index: 2;
 
     .family-avatar-container {
       position: relative;
-      margin-right: 24rpx;
+      margin-right: $spacing-lg;
 
       .family-avatar {
         width: 120rpx;
@@ -732,17 +734,15 @@ const formatJoinDate = (dateStr: string) => {
         right: -8rpx;
         width: 40rpx;
         height: 40rpx;
-        background-color: #4CAF50;
+        background-color: $success;
         border-radius: 20rpx;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        @include flex-center;
         border: 3rpx solid white;
 
         .badge-text {
-          font-size: 20rpx;
+          font-size: $font-size-xxs;
           color: white;
-          font-weight: bold;
+          font-weight: $font-weight-bold;
         }
       }
     }
@@ -752,44 +752,44 @@ const formatJoinDate = (dateStr: string) => {
 
       .family-name {
         display: block;
-        font-size: 36rpx;
-        font-weight: bold;
+        font-size: $font-size-xl;
+        font-weight: $font-weight-bold;
         color: white;
-        margin-bottom: 8rpx;
+        margin-bottom: $spacing-xs;
       }
 
       .family-desc {
         display: block;
-        font-size: 28rpx;
+        font-size: $font-size-base;
         color: rgba(255, 255, 255, 0.9);
-        margin-bottom: 16rpx;
+        margin-bottom: $spacing-md;
       }
 
       .invite-code-container {
         display: flex;
         align-items: center;
         background-color: rgba(255, 255, 255, 0.2);
-        padding: 12rpx 16rpx;
-        border-radius: 20rpx;
+        padding: $spacing-sm $spacing-md;
+        border-radius: $radius-button;
         backdrop-filter: blur(10rpx);
 
         .invite-code-label {
-          font-size: 24rpx;
+          font-size: $font-size-xs;
           color: rgba(255, 255, 255, 0.8);
-          margin-right: 12rpx;
+          margin-right: $spacing-sm;
         }
 
         .invite-code {
-          font-size: 28rpx;
+          font-size: $font-size-base;
           color: white;
-          font-weight: bold;
+          font-weight: $font-weight-bold;
           font-family: 'Courier New', monospace;
           flex: 1;
         }
 
         .copy-icon {
-          font-size: 24rpx;
-          margin-left: 12rpx;
+          font-size: $font-size-xs;
+          margin-left: $spacing-sm;
         }
       }
     }
@@ -800,8 +800,8 @@ const formatJoinDate = (dateStr: string) => {
     align-items: center;
     justify-content: space-around;
     background-color: rgba(255, 255, 255, 0.15);
-    padding: 24rpx;
-    border-radius: 16rpx;
+    padding: $spacing-lg;
+    border-radius: $radius-md;
     backdrop-filter: blur(10rpx);
     position: relative;
     z-index: 2;
@@ -812,14 +812,14 @@ const formatJoinDate = (dateStr: string) => {
       align-items: center;
 
       .stat-number {
-        font-size: 32rpx;
-        font-weight: bold;
+        font-size: $font-size-xl;
+        font-weight: $font-weight-bold;
         color: white;
         margin-bottom: 4rpx;
       }
 
       .stat-label {
-        font-size: 24rpx;
+        font-size: $font-size-xs;
         color: rgba(255, 255, 255, 0.8);
       }
     }
@@ -838,26 +838,22 @@ const formatJoinDate = (dateStr: string) => {
 }
 
 // 无家庭状态
-.no-family-state {
-  display: flex;
+.no-family {
+  @include flex-center;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 80rpx 40rpx;
+  padding: 80rpx 40rpx 100rpx;
   text-align: center;
 
   .no-family-illustration {
     position: relative;
-    margin-bottom: 48rpx;
+    margin-bottom: $spacing-xxl;
 
     .illustration-bg {
       width: 200rpx;
       height: 200rpx;
-      background: linear-gradient(135deg, #FF8A65 0%, #FF7043 100%);
+      background: $gradient-primary;
       border-radius: 100rpx;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      @include flex-center;
       box-shadow: 0 20rpx 40rpx rgba(255, 138, 101, 0.3);
       animation: pulse 2s ease-in-out infinite;
 
@@ -877,7 +873,7 @@ const formatJoinDate = (dateStr: string) => {
         position: absolute;
         width: 12rpx;
         height: 12rpx;
-        background-color: #FF8A65;
+        background-color: $primary;
         border-radius: 6rpx;
         opacity: 0.6;
 
@@ -903,72 +899,74 @@ const formatJoinDate = (dateStr: string) => {
   }
 
   .no-family-title {
-    font-size: 36rpx;
-    font-weight: bold;
-    color: #333;
-    margin-bottom: 8rpx;
+    font-size: $font-size-xl;
+    font-weight: $font-weight-bold;
+    color: $text-primary;
+    margin-bottom: $spacing-xs;
   }
 
   .no-family-subtitle {
-    font-size: 28rpx;
-    color: #FF8A65;
-    margin-bottom: 24rpx;
-    font-weight: 500;
+    font-size: $font-size-base;
+    color: $primary;
+    margin-bottom: $spacing-lg;
+    font-weight: $font-weight-medium;
   }
 
   .no-family-desc {
-    font-size: 28rpx;
-    color: #666;
-    line-height: 1.6;
-    margin-bottom: 48rpx;
+    font-size: $font-size-base;
+    color: $text-secondary;
+    line-height: $line-height-base;
+    margin-bottom: $spacing-xxl;
     max-width: 500rpx;
   }
 
   .family-actions {
     display: flex;
-    gap: 24rpx;
+    gap: $spacing-lg;
     justify-content: center;
-    margin-bottom: 48rpx;
+    margin-bottom: 60rpx;
+    width: 100%;
 
     .action-btn {
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 12rpx;
-      padding: 20rpx 32rpx;
-      border-radius: 50rpx;
-      font-weight: bold;
+      gap: $spacing-sm;
+      padding: $spacing-lg $spacing-xxl;
+      border-radius: $radius-button;
+      font-weight: $font-weight-bold;
       border: none;
-      box-shadow: 0 8rpx 24rpx rgba(0, 0, 0, 0.1);
-      transition: all 0.3s ease;
+      box-shadow: $shadow-base;
+      transition: all $duration-base;
+      min-height: 96rpx;
 
       &.primary {
-        background: linear-gradient(135deg, #FF8A65 0%, #FF7043 100%);
+        background: $gradient-primary;
         color: white;
 
         &:active {
           transform: translateY(2rpx);
-          box-shadow: 0 4rpx 12rpx rgba(255, 138, 101, 0.4);
+          box-shadow: $shadow-primary;
         }
       }
 
       &.secondary {
         background-color: white;
-        color: #333;
-        border: 2rpx solid #E0E0E0;
+        color: $text-primary;
+        border: 2rpx solid $border-base;
 
         &:active {
           transform: translateY(2rpx);
-          background-color: #F5F5F5;
+          background-color: $bg-section;
         }
       }
 
       .btn-icon {
-        font-size: 24rpx;
+        font-size: $font-size-xs;
       }
 
       .btn-text {
-        font-size: 28rpx;
+        font-size: $font-size-base;
       }
     }
   }
@@ -978,6 +976,7 @@ const formatJoinDate = (dateStr: string) => {
     justify-content: space-around;
     width: 100%;
     max-width: 600rpx;
+    margin-top: 80rpx;
 
     .feature-item {
       display: flex;
@@ -987,12 +986,12 @@ const formatJoinDate = (dateStr: string) => {
 
       .feature-icon {
         font-size: 48rpx;
-        margin-bottom: 12rpx;
+        margin-bottom: $spacing-sm;
       }
 
       .feature-text {
-        font-size: 24rpx;
-        color: #666;
+        font-size: $font-size-xs;
+        color: $text-secondary;
         text-align: center;
       }
     }
@@ -1011,15 +1010,15 @@ const formatJoinDate = (dateStr: string) => {
 
 // 快捷操作
 .quick-actions {
-  padding: 32rpx;
+  padding: $spacing-xl;
 
   .actions-header {
-    margin-bottom: 24rpx;
+    margin-bottom: $spacing-lg;
 
     .actions-title {
-      font-size: 32rpx;
-      font-weight: bold;
-      color: #333;
+      font-size: $font-size-lg;
+      font-weight: $font-weight-bold;
+      color: $text-primary;
     }
   }
 
@@ -1032,31 +1031,29 @@ const formatJoinDate = (dateStr: string) => {
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 32rpx 16rpx;
-      background-color: #FAFAFA;
-      border-radius: 16rpx;
-      transition: all 0.3s ease;
+      padding: $spacing-xl $spacing-md;
+      background-color: $bg-section;
+      border-radius: $radius-md;
+      transition: all $duration-base;
 
       &:active {
         transform: scale(0.95);
-        background-color: #F0F0F0;
+        background-color: $bg-hover;
       }
 
       .action-icon-bg {
         width: 80rpx;
         height: 80rpx;
         border-radius: 40rpx;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin-bottom: 16rpx;
+        @include flex-center;
+        margin-bottom: $spacing-md;
 
         &.primary {
-          background: linear-gradient(135deg, #FF8A65 0%, #FF7043 100%);
+          background: $gradient-primary;
         }
 
         &.secondary {
-          background: linear-gradient(135deg, #42A5F5 0%, #1E88E5 100%);
+          background: $gradient-secondary;
         }
 
         &.success {
@@ -1068,21 +1065,21 @@ const formatJoinDate = (dateStr: string) => {
         }
 
         .action-icon {
-          font-size: 32rpx;
+          font-size: $font-size-xl;
           color: white;
         }
       }
 
       .action-title {
-        font-size: 26rpx;
-        font-weight: bold;
-        color: #333;
+        font-size: $font-size-sm;
+        font-weight: $font-weight-bold;
+        color: $text-primary;
         margin-bottom: 4rpx;
       }
 
       .action-desc {
-        font-size: 22rpx;
-        color: #666;
+        font-size: $font-size-xxs;
+        color: $text-secondary;
         text-align: center;
       }
     }
@@ -1091,29 +1088,29 @@ const formatJoinDate = (dateStr: string) => {
 
 // 成员列表
 .members-section {
-  padding: 32rpx;
+  padding: $spacing-xl;
 
   .section-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 24rpx;
+    margin-bottom: $spacing-lg;
 
     .section-title {
-      font-size: 32rpx;
-      font-weight: bold;
-      color: #333;
+      font-size: $font-size-lg;
+      font-weight: $font-weight-bold;
+      color: $text-primary;
     }
 
     .member-count-badge {
-      background-color: #FF8A65;
+      background-color: $primary;
       color: white;
-      padding: 8rpx 16rpx;
-      border-radius: 20rpx;
+      padding: $spacing-xs $spacing-md;
+      border-radius: $radius-button;
 
       .count-text {
-        font-size: 24rpx;
-        font-weight: bold;
+        font-size: $font-size-xs;
+        font-weight: $font-weight-bold;
       }
     }
   }
@@ -1127,10 +1124,10 @@ const formatJoinDate = (dateStr: string) => {
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 24rpx 16rpx;
-      background-color: #FAFAFA;
-      border-radius: 16rpx;
-      transition: all 0.3s ease;
+      padding: $spacing-lg $spacing-md;
+      background-color: $bg-section;
+      border-radius: $radius-md;
+      transition: all $duration-base;
 
       &:active {
         transform: scale(0.95);
@@ -1138,14 +1135,14 @@ const formatJoinDate = (dateStr: string) => {
 
       .member-avatar-container {
         position: relative;
-        margin-bottom: 16rpx;
+        margin-bottom: $spacing-md;
 
         .member-avatar {
           width: 80rpx;
           height: 80rpx;
           border-radius: 40rpx;
           border: 3rpx solid white;
-          box-shadow: 0 4rpx 12rpx rgba(0, 0, 0, 0.1);
+          box-shadow: $shadow-sm;
         }
 
         .member-role-badge {
@@ -1153,71 +1150,67 @@ const formatJoinDate = (dateStr: string) => {
           bottom: -8rpx;
           left: 50%;
           transform: translateX(-50%);
-          padding: 4rpx 12rpx;
-          border-radius: 12rpx;
+          padding: 4rpx $spacing-sm;
+          border-radius: $radius-sm;
 
           &.admin {
-            background-color: #FF8A65;
+            background-color: $primary;
           }
 
           &.member {
-            background-color: #42A5F5;
+            background-color: $info;
           }
 
           &.guest {
-            background-color: #66BB6A;
+            background-color: $success;
           }
 
           .role-text {
-            font-size: 20rpx;
+            font-size: $font-size-xxs;
             color: white;
-            font-weight: bold;
+            font-weight: $font-weight-bold;
           }
         }
       }
 
       .member-name {
-        font-size: 24rpx;
-        font-weight: bold;
-        color: #333;
+        font-size: $font-size-xs;
+        font-weight: $font-weight-bold;
+        color: $text-primary;
         margin-bottom: 4rpx;
         text-align: center;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        @include text-ellipsis(1);
         width: 100%;
       }
 
       .member-join-date {
-        font-size: 20rpx;
-        color: #999;
+        font-size: $font-size-xxs;
+        color: $text-tertiary;
         text-align: center;
       }
 
       &.add-member {
-        border: 2rpx dashed #DDD;
+        border: 2rpx dashed $border-base;
         background-color: transparent;
 
         .add-member-icon {
           width: 80rpx;
           height: 80rpx;
           border-radius: 40rpx;
-          background-color: #F5F5F5;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          margin-bottom: 16rpx;
+          background-color: $bg-section;
+          @include flex-center;
+          margin-bottom: $spacing-md;
 
           .add-icon {
             font-size: 40rpx;
-            color: #999;
-            font-weight: bold;
+            color: $text-tertiary;
+            font-weight: $font-weight-bold;
           }
         }
 
         .add-member-text {
-          font-size: 24rpx;
-          color: #666;
+          font-size: $font-size-xs;
+          color: $text-secondary;
         }
       }
     }
@@ -1226,15 +1219,15 @@ const formatJoinDate = (dateStr: string) => {
 
 // 家庭设置
 .family-settings {
-  padding: 32rpx;
+  padding: $spacing-xl;
 
   .settings-header {
-    margin-bottom: 24rpx;
+    margin-bottom: $spacing-lg;
 
     .settings-title {
-      font-size: 32rpx;
-      font-weight: bold;
-      color: #333;
+      font-size: $font-size-lg;
+      font-weight: $font-weight-bold;
+      color: $text-primary;
     }
   }
 
@@ -1242,33 +1235,31 @@ const formatJoinDate = (dateStr: string) => {
     .setting-item {
       display: flex;
       align-items: center;
-      padding: 24rpx 0;
-      border-bottom: 1rpx solid #F0F0F0;
-      transition: all 0.3s ease;
+      padding: $spacing-lg 0;
+      border-bottom: 1rpx solid $border-light;
+      transition: all $duration-base;
 
       &:last-child {
         border-bottom: none;
       }
 
       &:active {
-        background-color: #FAFAFA;
-        margin: 0 -32rpx;
-        padding: 24rpx 32rpx;
-        border-radius: 12rpx;
+        background-color: $bg-section;
+        margin: 0 (-$spacing-xl);
+        padding: $spacing-lg $spacing-xl;
+        border-radius: $radius-base;
       }
 
       .setting-icon {
         width: 64rpx;
         height: 64rpx;
-        background-color: #F5F5F5;
+        background-color: $bg-section;
         border-radius: 32rpx;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        @include flex-center;
         margin-right: 20rpx;
 
         .icon {
-          font-size: 28rpx;
+          font-size: $font-size-base;
         }
       }
 
@@ -1277,22 +1268,22 @@ const formatJoinDate = (dateStr: string) => {
 
         .setting-title {
           display: block;
-          font-size: 28rpx;
-          font-weight: bold;
-          color: #333;
+          font-size: $font-size-base;
+          font-weight: $font-weight-bold;
+          color: $text-primary;
           margin-bottom: 4rpx;
         }
 
         .setting-desc {
           display: block;
-          font-size: 24rpx;
-          color: #666;
+          font-size: $font-size-xs;
+          color: $text-secondary;
         }
       }
 
       .setting-arrow {
-        font-size: 24rpx;
-        color: #CCC;
+        font-size: $font-size-xs;
+        color: $text-placeholder;
       }
     }
   }
@@ -1300,17 +1291,17 @@ const formatJoinDate = (dateStr: string) => {
 
 // 危险操作区域
 .danger-zone {
-  padding: 32rpx;
-  border: 2rpx solid #FFEBEE;
-  background-color: #FAFAFA;
+  padding: $spacing-xl;
+  border: 2rpx solid rgba(244, 67, 54, 0.2);
+  background-color: $bg-section;
 
   .danger-header {
-    margin-bottom: 24rpx;
+    margin-bottom: $spacing-lg;
 
     .danger-title {
-      font-size: 32rpx;
-      font-weight: bold;
-      color: #F44336;
+      font-size: $font-size-lg;
+      font-weight: $font-weight-bold;
+      color: $danger;
     }
   }
 
@@ -1319,24 +1310,24 @@ const formatJoinDate = (dateStr: string) => {
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 12rpx;
+      gap: $spacing-sm;
       width: 100%;
       padding: 20rpx;
       background-color: transparent;
-      border: 2rpx solid #F44336;
-      border-radius: 12rpx;
-      color: #F44336;
-      font-size: 28rpx;
-      font-weight: bold;
-      transition: all 0.3s ease;
+      border: 2rpx solid $danger;
+      border-radius: $radius-base;
+      color: $danger;
+      font-size: $font-size-base;
+      font-weight: $font-weight-bold;
+      transition: all $duration-base;
 
       &:active {
-        background-color: #F44336;
+        background-color: $danger;
         color: white;
       }
 
       .btn-icon {
-        font-size: 24rpx;
+        font-size: $font-size-xs;
       }
     }
   }
@@ -1350,30 +1341,28 @@ const formatJoinDate = (dateStr: string) => {
   right: 0;
   bottom: 0;
   background-color: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  @include flex-center;
   z-index: 1000;
 
   .modal-content {
     width: 680rpx;
     max-height: 80vh;
     background-color: white;
-    border-radius: 24rpx;
+    border-radius: $radius-xl;
     overflow: hidden;
-    animation: modalSlideIn 0.3s ease-out;
+    animation: modalSlideIn $duration-base ease-out;
 
     .modal-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 32rpx;
-      background: linear-gradient(135deg, #FF8A65 0%, #FF7043 100%);
+      padding: $spacing-xl;
+      background: $gradient-primary;
       color: white;
 
       .modal-title {
-        font-size: 32rpx;
-        font-weight: bold;
+        font-size: $font-size-lg;
+        font-weight: $font-weight-bold;
       }
 
       .modal-close {
@@ -1381,71 +1370,69 @@ const formatJoinDate = (dateStr: string) => {
         height: 48rpx;
         border-radius: 24rpx;
         background-color: rgba(255, 255, 255, 0.2);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 24rpx;
+        @include flex-center;
+        font-size: $font-size-xs;
       }
     }
 
     .modal-tabs {
       display: flex;
-      background-color: #F8F8F8;
+      background-color: $bg-section;
 
       .tab-item {
         flex: 1;
         display: flex;
         flex-direction: column;
         align-items: center;
-        padding: 24rpx;
-        transition: all 0.3s ease;
+        padding: $spacing-lg;
+        transition: all $duration-base;
 
         &.active {
           background-color: white;
-          color: #FF8A65;
+          color: $primary;
         }
 
         .tab-icon {
-          font-size: 32rpx;
-          margin-bottom: 8rpx;
+          font-size: $font-size-xl;
+          margin-bottom: $spacing-xs;
         }
 
         .tab-text {
-          font-size: 26rpx;
-          font-weight: bold;
+          font-size: $font-size-sm;
+          font-weight: $font-weight-bold;
         }
       }
     }
 
     .tab-content {
-      padding: 32rpx;
+      padding: $spacing-xl;
 
       .form-section {
-        margin-bottom: 24rpx;
+        margin-bottom: $spacing-lg;
 
         .form-item {
-          margin-bottom: 24rpx;
+          margin-bottom: $spacing-lg;
 
           .form-label {
             display: block;
-            font-size: 28rpx;
-            color: #333;
-            font-weight: bold;
-            margin-bottom: 12rpx;
+            font-size: $font-size-base;
+            color: $text-primary;
+            font-weight: $font-weight-bold;
+            margin-bottom: $spacing-sm;
           }
 
           .form-input, .form-textarea {
             width: 100%;
             padding: 20rpx;
-            border: 2rpx solid #E0E0E0;
-            border-radius: 12rpx;
-            font-size: 28rpx;
-            color: #333;
-            background-color: #FAFAFA;
-            transition: border-color 0.3s ease;
+            border: 2rpx solid $border-base;
+            border-radius: $radius-base;
+            font-size: $font-size-base;
+            color: $text-primary;
+            background-color: $bg-section;
+            transition: border-color $duration-base;
 
             &:focus {
-              border-color: #FF8A65;
+              border-color: $primary;
             }
           }
 
@@ -1457,7 +1444,7 @@ const formatJoinDate = (dateStr: string) => {
           .invite-input {
             text-align: center;
             font-family: 'Courier New', monospace;
-            font-weight: bold;
+            font-weight: $font-weight-bold;
             letter-spacing: 4rpx;
           }
         }
@@ -1467,21 +1454,21 @@ const formatJoinDate = (dateStr: string) => {
         display: flex;
         align-items: flex-start;
         padding: 20rpx;
-        background-color: #FFF3E0;
-        border-radius: 12rpx;
-        margin-bottom: 32rpx;
+        background-color: rgba(255, 152, 0, 0.1);
+        border-radius: $radius-base;
+        margin-bottom: $spacing-xl;
 
         .tips-icon {
-          font-size: 24rpx;
-          margin-right: 12rpx;
+          font-size: $font-size-xs;
+          margin-right: $spacing-sm;
           margin-top: 2rpx;
         }
 
         .tips-text {
           flex: 1;
-          font-size: 24rpx;
-          color: #666;
-          line-height: 1.5;
+          font-size: $font-size-xs;
+          color: $text-secondary;
+          line-height: $line-height-base;
         }
       }
 
@@ -1490,18 +1477,18 @@ const formatJoinDate = (dateStr: string) => {
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 12rpx;
+        gap: $spacing-sm;
         padding: 20rpx;
-        border-radius: 12rpx;
-        font-size: 28rpx;
-        font-weight: bold;
+        border-radius: $radius-base;
+        font-size: $font-size-base;
+        font-weight: $font-weight-bold;
         border: none;
-        transition: all 0.3s ease;
+        transition: all $duration-base;
 
         &.create-btn {
-          background: linear-gradient(135deg, #FF8A65 0%, #FF7043 100%);
+          background: $gradient-primary;
           color: white;
-          box-shadow: 0 8rpx 24rpx rgba(255, 138, 101, 0.4);
+          box-shadow: $shadow-primary;
         }
 
         &.join-btn {
@@ -1520,7 +1507,7 @@ const formatJoinDate = (dateStr: string) => {
         }
 
         .btn-icon {
-          font-size: 24rpx;
+          font-size: $font-size-xs;
         }
       }
     }
@@ -1535,21 +1522,19 @@ const formatJoinDate = (dateStr: string) => {
   right: 0;
   bottom: 0;
   background-color: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  @include flex-center;
   z-index: 1000;
 
   .confirm-content {
     width: 600rpx;
     background-color: white;
-    border-radius: 24rpx;
-    padding: 48rpx 32rpx 32rpx;
+    border-radius: $radius-xl;
+    padding: $spacing-xxl $spacing-xl $spacing-xl;
     text-align: center;
-    animation: modalSlideIn 0.3s ease-out;
+    animation: modalSlideIn $duration-base ease-out;
 
     .confirm-icon {
-      margin-bottom: 24rpx;
+      margin-bottom: $spacing-lg;
 
       .icon {
         font-size: 80rpx;
@@ -1558,40 +1543,40 @@ const formatJoinDate = (dateStr: string) => {
 
     .confirm-title {
       display: block;
-      font-size: 32rpx;
-      font-weight: bold;
-      color: #333;
-      margin-bottom: 16rpx;
+      font-size: $font-size-lg;
+      font-weight: $font-weight-bold;
+      color: $text-primary;
+      margin-bottom: $spacing-md;
     }
 
     .confirm-message {
       display: block;
-      font-size: 26rpx;
-      color: #666;
-      line-height: 1.6;
-      margin-bottom: 48rpx;
+      font-size: $font-size-sm;
+      color: $text-secondary;
+      line-height: $line-height-base;
+      margin-bottom: $spacing-xxl;
     }
 
     .confirm-actions {
       display: flex;
-      gap: 16rpx;
+      gap: $spacing-md;
 
       .confirm-btn {
         flex: 1;
-        padding: 16rpx 24rpx;
-        border-radius: 12rpx;
-        font-size: 28rpx;
-        font-weight: bold;
+        padding: $spacing-md $spacing-lg;
+        border-radius: $radius-base;
+        font-size: $font-size-base;
+        font-weight: $font-weight-bold;
         border: none;
-        transition: all 0.3s ease;
+        transition: all $duration-base;
 
         &.cancel {
-          background-color: #F5F5F5;
-          color: #333;
+          background-color: $bg-section;
+          color: $text-primary;
         }
 
         &.danger {
-          background-color: #F44336;
+          background-color: $danger;
           color: white;
         }
 

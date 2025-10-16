@@ -49,33 +49,41 @@
       }
     },
     {
-      "path": "pages/guest/share",
+      "path": "pages/guest/join",
       "style": {
-        "navigationBarTitleText": "邀请朋友",
+        "navigationBarTitleText": "受邀做客",
         "navigationBarBackgroundColor": "#FF8A65",
         "navigationBarTextStyle": "white"
       }
     },
     {
-      "path": "pages/guest/index",
+      "path": "pages/recipes/add",
       "style": {
-        "navigationBarTitleText": "访客体验",
+        "navigationBarTitleText": "添加菜谱",
         "navigationBarBackgroundColor": "#FF8A65",
         "navigationBarTextStyle": "white"
       }
     },
     {
-      "path": "pages/demo/guest-flow",
+      "path": "pages/recipes/detail",
       "style": {
-        "navigationBarTitleText": "访客分享演示",
+        "navigationBarTitleText": "菜谱详情",
         "navigationBarBackgroundColor": "#FF8A65",
         "navigationBarTextStyle": "white"
       }
     },
     {
-      "path": "pages/test-api",
+      "path": "pages/orders/create",
       "style": {
-        "navigationBarTitleText": "API测试",
+        "navigationBarTitleText": "创建订单",
+        "navigationBarBackgroundColor": "#FF8A65",
+        "navigationBarTextStyle": "white"
+      }
+    },
+    {
+      "path": "pages/orders/detail",
+      "style": {
+        "navigationBarTitleText": "订单详情",
         "navigationBarBackgroundColor": "#FF8A65",
         "navigationBarTextStyle": "white"
       }

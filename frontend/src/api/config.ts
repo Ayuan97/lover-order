@@ -1,8 +1,8 @@
 // 获取API基础URL
 function getBaseURL(): string {
   // #ifdef MP-WEIXIN
-  // 小程序环境下使用本机IP地址
-  return 'http://192.168.4.15:8081/api/v1'
+  // 小程序环境下使用localhost（开发环境）
+  return 'http://127.0.0.1:8081/api/v1'
   // #endif
 
   // #ifdef H5

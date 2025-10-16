@@ -213,8 +213,8 @@ const showUserAgreement = () => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
   padding: 40rpx;
+  box-sizing: border-box;
 }
 
 .bg-decoration {
@@ -270,6 +270,8 @@ const showUserAgreement = () => {
   z-index: 1;
   width: 100%;
   max-width: 600rpx;
+  margin-top: 120rpx;
+  margin-bottom: 60rpx;
 }
 
 .logo-section {
@@ -369,9 +371,11 @@ const showUserAgreement = () => {
 }
 
 .version-info {
-  position: absolute;
-  bottom: 40rpx;
-  
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  padding-bottom: 40rpx;
+
   .version-text {
     font-size: 20rpx;
     color: rgba(255, 255, 255, 0.6);

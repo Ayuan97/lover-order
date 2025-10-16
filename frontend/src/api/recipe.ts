@@ -110,24 +110,18 @@ export class RecipeService {
       backendParams.sort_order = defaultParams.sort_order
     }
 
-    try {
-      // 先尝试使用开发测试接口
-      const response = await request.get<any>(API_ENDPOINTS.DEV.RECIPES, backendParams)
+    // 使用正式的认证接口，确保获取到当前用户家庭的菜谱
+    const response = await request.get<RecipeListResponse>(API_ENDPOINTS.RECIPES.LIST, backendParams)
 
-      // 处理开发接口的响应格式 {code: 200, data: {list: Array, total: number}, message: "获取成功"}
-      const responseData = response.data.data || response.data
+    // 后端返回的格式可能是 {data: {...}} 或直接是数据对象
+    const responseData = response.data.data || response.data
 
-      return {
-        recipes: responseData.list || [],
-        total: responseData.total || 0,
-        page: responseData.page || 1,
-        page_size: responseData.size || 10,
-        total_pages: Math.ceil((responseData.total || 0) / (responseData.size || 10))
-      }
-    } catch (error) {
-      // 如果失败，尝试正常接口
-      const response = await request.get<RecipeListResponse>(API_ENDPOINTS.RECIPES.LIST, backendParams)
-      return response.data
+    return {
+      recipes: responseData.list || responseData.recipes || [],
+      total: responseData.total || 0,
+      page: responseData.page || 1,
+      page_size: responseData.size || responseData.page_size || 10,
+      total_pages: Math.ceil((responseData.total || 0) / (responseData.size || responseData.page_size || 10))
     }
   }
 
@@ -196,26 +190,20 @@ export interface CategoryStats {
 export class CategoryService {
   // 获取分类列表
   static async getCategoryList(): Promise<Category[]> {
-    try {
-      // 先尝试使用开发测试接口
-      const response = await request.get<any>(API_ENDPOINTS.DEV.CATEGORIES)
+    // 使用正式的认证接口
+    const response = await request.get<Category[]>(API_ENDPOINTS.CATEGORIES.LIST)
 
-      // 处理开发接口的响应格式 {code: 200, data: Array, message: "获取成功"}
-      if (response.data && response.data.data && Array.isArray(response.data.data)) {
-        return response.data.data
-      }
+    // 处理响应格式
+    if (response.data && response.data.data && Array.isArray(response.data.data)) {
+      return response.data.data
+    }
 
-      // 如果是直接的数组格式
-      if (Array.isArray(response.data)) {
-        return response.data
-      }
-
-      return []
-    } catch (error) {
-      // 如果失败，尝试正常接口
-      const response = await request.get<Category[]>(API_ENDPOINTS.CATEGORIES.LIST)
+    // 如果是直接的数组格式
+    if (Array.isArray(response.data)) {
       return response.data
     }
+
+    return []
   }
 
   // 获取分类详情
