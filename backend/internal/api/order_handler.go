@@ -527,3 +527,105 @@ func (h *OrderHandler) GetPendingOrders(c *gin.Context) {
 		"data":    resp,
 	})
 }
+
+// CreateOrderReply 创建订单回复
+func (h *OrderHandler) CreateOrderReply(c *gin.Context) {
+	user, exists := middleware.GetCurrentUser(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户信息不存在",
+		})
+		return
+	}
+
+	if user.FamilyID == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "用户未加入任何家庭",
+		})
+		return
+	}
+
+	orderIDStr := c.Param("id")
+	orderID, err := strconv.ParseUint(orderIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "无效的订单ID",
+		})
+		return
+	}
+
+	var req service.CreateReplyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "请求参数错误",
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	reply, err := h.orderService.CreateOrderReply(uint(orderID), &req, user.ID, *user.FamilyID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "创建回复失败",
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "回复成功",
+		"data":    reply,
+	})
+}
+
+// GetOrderReplies 获取订单回复列表
+func (h *OrderHandler) GetOrderReplies(c *gin.Context) {
+	user, exists := middleware.GetCurrentUser(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户信息不存在",
+		})
+		return
+	}
+
+	if user.FamilyID == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "用户未加入任何家庭",
+		})
+		return
+	}
+
+	orderIDStr := c.Param("id")
+	orderID, err := strconv.ParseUint(orderIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "无效的订单ID",
+		})
+		return
+	}
+
+	replies, err := h.orderService.GetOrderReplies(uint(orderID), *user.FamilyID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "获取回复列表失败",
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "获取成功",
+		"data":    replies,
+	})
+}

@@ -114,6 +114,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
+import { FamilyService } from '@/api/family'
 
 // 状态数据
 const currentStep = ref(1) // 1: 输入邀请码, 2: 输入昵称
@@ -150,16 +151,13 @@ const verifyInviteCode = async () => {
   try {
     isVerifying.value = true
 
-    // TODO: 调用后端API验证邀请码
-    // const response = await GuestService.verifyInviteCode(inviteCode.value)
+    // 调用后端API验证邀请码
+    const result = await FamilyService.checkGuestInvite(inviteCode.value)
 
-    // 模拟API调用
-    await new Promise(resolve => setTimeout(resolve, 1000))
-
-    // 模拟数据
+    // 保存家庭信息
     familyInfo.value = {
-      id: 1,
-      name: '小明的家'
+      id: result.family_id,
+      name: result.family_name || '朋友的家'
     }
 
     // 验证成功，进入下一步
@@ -169,10 +167,10 @@ const verifyInviteCode = async () => {
       title: '邀请码验证成功',
       icon: 'success'
     })
-  } catch (error) {
+  } catch (error: any) {
     console.error('验证邀请码失败:', error)
     uni.showToast({
-      title: '邀请码无效或已过期',
+      title: error.message || '邀请码无效或已过期',
       icon: 'none'
     })
   } finally {
@@ -198,16 +196,24 @@ const joinAsGuest = async () => {
   try {
     isJoining.value = true
 
-    // TODO: 调用后端API注册访客
-    // const response = await GuestService.joinByInviteCode({
-    //   code: inviteCode.value,
-    //   nickname: nickname.value.trim()
-    // })
+    // 调用后端API注册访客
+    const result = await FamilyService.guestRegister({
+      invite_code: inviteCode.value,
+      user_info: {
+        nickname: nickname.value.trim(),
+        avatar_url: '',
+        gender: 0
+      }
+    })
 
-    // 模拟API调用
-    await new Promise(resolve => setTimeout(resolve, 1000))
+    // 保存访客信息和 token 到本地
+    if (result.token) {
+      uni.setStorageSync('token', result.token)
+    }
+    if (result.user) {
+      uni.setStorageSync('user_info', result.user)
+    }
 
-    // 保存访客信息到本地
     uni.setStorageSync('isGuest', true)
     uni.setStorageSync('guestNickname', nickname.value.trim())
     uni.setStorageSync('guestExpiresAt', Date.now() + 24 * 3600 * 1000) // 24小时后过期
@@ -224,10 +230,10 @@ const joinAsGuest = async () => {
         url: '/pages/index/index'
       })
     }, 1500)
-  } catch (error) {
+  } catch (error: any) {
     console.error('加入失败:', error)
     uni.showToast({
-      title: '加入失败，请重试',
+      title: error.message || '加入失败，请重试',
       icon: 'none'
     })
   } finally {

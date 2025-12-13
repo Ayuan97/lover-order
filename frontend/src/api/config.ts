@@ -85,6 +85,7 @@ export const API_ENDPOINTS = {
     SUMMARY: '/orders/summary',
     TODAY: '/orders/today',
     PENDING: '/orders/pending',
+    REPLIES: (id: number) => `/orders/${id}/replies`,
   },
   
   // 家庭相关
@@ -108,6 +109,7 @@ export const API_ENDPOINTS = {
     INVITATIONS: '/guest/invitations',
     EXTEND: (id: number) => `/guest/${id}/extend`,
     REVOKE: (id: number) => `/guest/${id}/revoke`,
+    END_PARTY: '/guest/party/end',
   }
 }
 

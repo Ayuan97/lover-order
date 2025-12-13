@@ -388,13 +388,85 @@
       </view>
     </view>
   </view>
+
+  <!-- 回复弹窗 -->
+  <view class="reply-modal" v-if="showReplyDialog" @click="closeReplyDialog">
+    <view class="modal-content" @click.stop>
+      <view class="modal-header">
+        <text class="header-title">💬 回复Ta</text>
+        <view class="close-btn" @click="closeReplyDialog">
+          <text class="close-icon">×</text>
+        </view>
+      </view>
+
+      <view class="modal-body">
+        <!-- 订单信息 -->
+        <view class="order-info" v-if="replyTargetOrder">
+          <view class="order-user">
+            <image v-if="replyTargetOrder.user?.avatar" class="user-avatar" :src="replyTargetOrder.user.avatar" mode="aspectFill" />
+            <view v-else class="user-avatar placeholder">
+              <text class="avatar-text">{{ replyTargetOrder.user?.nickname?.charAt(0) }}</text>
+            </view>
+            <text class="user-name">{{ replyTargetOrder.user?.nickname }}</text>
+            <text class="order-note">{{ replyTargetOrder.note || '想吃这些美食～' }}</text>
+          </view>
+        </view>
+
+        <!-- 回复列表 -->
+        <view class="replies-list" v-if="orderReplies.length > 0">
+          <view class="reply-item" v-for="reply in orderReplies" :key="reply.id">
+            <image v-if="reply.user?.avatar" class="reply-avatar" :src="reply.user.avatar" mode="aspectFill" />
+            <view v-else class="reply-avatar placeholder">
+              <text class="avatar-text">{{ reply.user?.nickname?.charAt(0) }}</text>
+            </view>
+            <view class="reply-content">
+              <view class="reply-header">
+                <text class="reply-name">{{ reply.user?.nickname }}</text>
+                <text class="reply-time">{{ formatReplyTime(reply.created_at) }}</text>
+              </view>
+              <text class="reply-text">{{ reply.content }}</text>
+            </view>
+          </view>
+        </view>
+
+        <!-- 空状态 -->
+        <view class="replies-empty" v-else-if="!isLoadingReplies">
+          <text class="empty-text">还没有回复，快来说点什么吧～</text>
+        </view>
+
+        <!-- 加载中 -->
+        <view class="replies-loading" v-if="isLoadingReplies">
+          <text class="loading-text">加载中...</text>
+        </view>
+      </view>
+
+      <!-- 输入区域 -->
+      <view class="reply-input-area">
+        <input
+          class="reply-input"
+          v-model="replyContent"
+          type="text"
+          placeholder="说点什么..."
+          maxlength="200"
+          :disabled="isSubmittingReply"
+        />
+        <button
+          class="send-btn"
+          @click="submitReply"
+          :disabled="isSubmittingReply || !replyContent.trim()"
+        >
+          <text class="btn-text">{{ isSubmittingReply ? '发送中' : '发送' }}</text>
+        </button>
+      </view>
+    </view>
+  </view>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { FamilyService } from '@/api/family'
-import { OrderService, type Order, type OrderStatus } from '@/api/order'
+import { OrderService, type Order, type OrderStatus, type OrderReply } from '@/api/order'
 import { RecipeService, type Recipe } from '@/api/recipe'
 
 // 状态数据
@@ -419,6 +491,14 @@ const favoriteRecipes = ref<Recipe[]>([])
 const showInvite = ref(false)
 const invitationCode = ref('')
 const guestCount = computed(() => members.value.filter(m => m.role === 'guest').length)
+
+// 回复弹窗数据
+const showReplyDialog = ref(false)
+const replyTargetOrder = ref<Order | null>(null)
+const replyContent = ref('')
+const orderReplies = ref<OrderReply[]>([])
+const isLoadingReplies = ref(false)
+const isSubmittingReply = ref(false)
 
 // 显示模式
 const displayMode = computed(() => {
@@ -592,9 +672,9 @@ const loadAllPendingOrders = async () => {
 
     allPendingOrders.value = (response.list || []).map(order => ({
       ...order,
-      liked: false, // TODO: 从后端获取点赞状态
-      like_count: 0, // TODO: 从后端获取点赞数
-      comment_count: 0 // TODO: 从后端获取评论数
+      liked: getLikeStatus(order.id), // 从本地存储获取点赞状态
+      like_count: 0,
+      comment_count: 0
     }))
 
     console.log('[首页] 所有待处理订单加载成功:', allPendingOrders.value.length, '个')
@@ -696,11 +776,84 @@ const markAsDone = async (order: Order) => {
 }
 
 // 回复对方
-const replyToPartner = (order: Order) => {
-  uni.showToast({
-    title: '回复功能开发中',
-    icon: 'none'
-  })
+const replyToPartner = async (order: Order) => {
+  replyTargetOrder.value = order
+  replyContent.value = ''
+  orderReplies.value = []
+  showReplyDialog.value = true
+  await loadOrderReplies(order.id)
+}
+
+// 加载订单回复
+const loadOrderReplies = async (orderId: number) => {
+  try {
+    isLoadingReplies.value = true
+    orderReplies.value = await OrderService.getOrderReplies(orderId)
+  } catch (error) {
+    console.error('加载回复失败:', error)
+  } finally {
+    isLoadingReplies.value = false
+  }
+}
+
+// 提交回复
+const submitReply = async () => {
+  if (!replyContent.value.trim() || !replyTargetOrder.value) {
+    uni.showToast({
+      title: '请输入回复内容',
+      icon: 'none'
+    })
+    return
+  }
+
+  try {
+    isSubmittingReply.value = true
+    const reply = await OrderService.createOrderReply(
+      replyTargetOrder.value.id,
+      replyContent.value.trim()
+    )
+    orderReplies.value.push(reply)
+    replyContent.value = ''
+    uni.showToast({
+      title: '回复成功',
+      icon: 'success'
+    })
+  } catch (error) {
+    console.error('回复失败:', error)
+    uni.showToast({
+      title: '回复失败',
+      icon: 'none'
+    })
+  } finally {
+    isSubmittingReply.value = false
+  }
+}
+
+// 关闭回复弹窗
+const closeReplyDialog = () => {
+  showReplyDialog.value = false
+  replyTargetOrder.value = null
+  replyContent.value = ''
+  orderReplies.value = []
+}
+
+// 格式化回复时间
+const formatReplyTime = (dateStr: string) => {
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diff = now.getTime() - date.getTime()
+  const minutes = Math.floor(diff / 60000)
+  const hours = Math.floor(diff / 3600000)
+
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes}分钟前`
+  if (hours < 24) return `${hours}小时前`
+
+  const month = date.getMonth() + 1
+  const day = date.getDate()
+  const hour = date.getHours().toString().padStart(2, '0')
+  const minute = date.getMinutes().toString().padStart(2, '0')
+  return `${month}月${day}日 ${hour}:${minute}`
 }
 
 // 查看订单详情
@@ -806,16 +959,18 @@ const endParty = async () => {
     success: async (res) => {
       if (res.confirm) {
         try {
-          // TODO: 调用后端API结束聚会
-          // await FamilyService.endParty()
+          // 调用后端API结束聚会
+          const result = await FamilyService.endParty()
 
           uni.showToast({
-            title: '聚会已结束',
-            icon: 'success'
+            title: `聚会已结束，已移除${result.removed_count}位访客`,
+            icon: 'success',
+            duration: 2000
           })
 
           closeInviteDialog()
           await loadMembers()
+          await refreshData()
         } catch (error) {
           console.error('结束聚会失败:', error)
           uni.showToast({
@@ -848,7 +1003,7 @@ const viewMemberOrders = (member: any) => {
   }
 }
 
-// 点赞/取消点赞
+// 点赞/取消点赞（使用本地存储持久化）
 const toggleLike = (order: any) => {
   order.liked = !order.liked
   if (order.liked) {
@@ -857,8 +1012,40 @@ const toggleLike = (order: any) => {
     order.like_count = Math.max((order.like_count || 0) - 1, 0)
   }
 
-  // TODO: 调用后端API保存点赞状态
-  // await OrderService.toggleLike(order.id)
+  // 保存点赞状态到本地存储
+  saveLikeStatus(order.id, order.liked)
+}
+
+// 保存点赞状态
+const saveLikeStatus = (orderId: number, liked: boolean) => {
+  try {
+    const likedOrders = uni.getStorageSync('liked_orders') || {}
+    if (liked) {
+      likedOrders[orderId] = true
+    } else {
+      delete likedOrders[orderId]
+    }
+    uni.setStorageSync('liked_orders', likedOrders)
+  } catch (error) {
+    console.error('保存点赞状态失败:', error)
+  }
+}
+
+// 获取点赞状态
+const getLikeStatus = (orderId: number): boolean => {
+  try {
+    const likedOrders = uni.getStorageSync('liked_orders') || {}
+    return !!likedOrders[orderId]
+  } catch (error) {
+    return false
+  }
+}
+
+// 应用点赞状态到订单列表
+const applyLikeStatus = (orders: any[]) => {
+  orders.forEach(order => {
+    order.liked = getLikeStatus(order.id)
+  })
 }
 
 // 分享订单
@@ -2025,5 +2212,226 @@ const viewAllOrders = () => {
 @keyframes heartBeat {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.3); }
+}
+
+// 回复弹窗样式
+.reply-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  @include flex-center;
+  z-index: 1000;
+  padding: 40rpx;
+
+  .modal-content {
+    width: 100%;
+    max-width: 650rpx;
+    max-height: 80vh;
+    background: white;
+    border-radius: $radius-xl;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    animation: modalSlideUp 0.3s ease-out;
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 32rpx 24rpx;
+    border-bottom: 1rpx solid $border-light;
+
+    .header-title {
+      font-size: $font-size-xl;
+      font-weight: $font-weight-bold;
+      color: $text-primary;
+    }
+
+    .close-btn {
+      width: 56rpx;
+      height: 56rpx;
+      @include flex-center;
+      border-radius: 50%;
+      background: $bg-section;
+
+      &:active {
+        background: $bg-hover;
+        transform: scale(0.9);
+      }
+
+      .close-icon {
+        font-size: 48rpx;
+        color: $text-tertiary;
+        line-height: 1;
+      }
+    }
+  }
+
+  .modal-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24rpx;
+    max-height: 50vh;
+
+    .order-info {
+      background: $bg-section;
+      border-radius: $radius-lg;
+      padding: 16rpx;
+      margin-bottom: 20rpx;
+
+      .order-user {
+        display: flex;
+        align-items: center;
+        gap: 12rpx;
+
+        .user-avatar {
+          width: 48rpx;
+          height: 48rpx;
+          border-radius: 50%;
+
+          &.placeholder {
+            background: $gradient-primary;
+            @include flex-center;
+
+            .avatar-text {
+              font-size: $font-size-sm;
+              font-weight: $font-weight-bold;
+              color: white;
+            }
+          }
+        }
+
+        .user-name {
+          font-size: $font-size-base;
+          font-weight: $font-weight-bold;
+          color: $text-primary;
+        }
+
+        .order-note {
+          flex: 1;
+          font-size: $font-size-sm;
+          color: $text-secondary;
+          @include text-ellipsis(1);
+        }
+      }
+    }
+
+    .replies-list {
+      .reply-item {
+        display: flex;
+        gap: 12rpx;
+        padding: 16rpx 0;
+        border-bottom: 1rpx solid $border-light;
+
+        &:last-child {
+          border-bottom: none;
+        }
+
+        .reply-avatar {
+          width: 56rpx;
+          height: 56rpx;
+          border-radius: 50%;
+          flex-shrink: 0;
+
+          &.placeholder {
+            background: $gradient-primary;
+            @include flex-center;
+
+            .avatar-text {
+              font-size: $font-size-sm;
+              font-weight: $font-weight-bold;
+              color: white;
+            }
+          }
+        }
+
+        .reply-content {
+          flex: 1;
+
+          .reply-header {
+            display: flex;
+            align-items: center;
+            gap: 12rpx;
+            margin-bottom: 8rpx;
+
+            .reply-name {
+              font-size: $font-size-base;
+              font-weight: $font-weight-bold;
+              color: $text-primary;
+            }
+
+            .reply-time {
+              font-size: $font-size-xs;
+              color: $text-tertiary;
+            }
+          }
+
+          .reply-text {
+            font-size: $font-size-base;
+            color: $text-primary;
+            line-height: $line-height-base;
+          }
+        }
+      }
+    }
+
+    .replies-empty,
+    .replies-loading {
+      @include flex-center;
+      padding: 60rpx 20rpx;
+
+      .empty-text,
+      .loading-text {
+        font-size: $font-size-sm;
+        color: $text-tertiary;
+      }
+    }
+  }
+
+  .reply-input-area {
+    display: flex;
+    gap: 12rpx;
+    padding: 16rpx 24rpx;
+    border-top: 1rpx solid $border-light;
+    background: $bg-section;
+
+    .reply-input {
+      flex: 1;
+      height: 72rpx;
+      background: white;
+      border: 1rpx solid $border-light;
+      border-radius: $radius-button;
+      padding: 0 20rpx;
+      font-size: $font-size-base;
+
+      &:focus {
+        border-color: $primary;
+      }
+    }
+
+    .send-btn {
+      width: 120rpx;
+      height: 72rpx;
+      background: $gradient-primary;
+      color: white;
+      border: none;
+      border-radius: $radius-button;
+      font-size: $font-size-base;
+      font-weight: $font-weight-bold;
+      @include flex-center;
+
+      &:disabled {
+        opacity: 0.5;
+      }
+
+      &:active:not(:disabled) {
+        transform: scale(0.95);
+      }
+    }
+  }
 }
 </style>

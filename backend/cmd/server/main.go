@@ -164,6 +164,8 @@ func main() {
 				orders.POST("/:id/repeat", orderHandler.RepeatOrder)
 				orders.GET("/stats", orderHandler.GetOrderStats)
 				orders.GET("/summary", orderHandler.GetUserOrderSummary)
+				orders.POST("/:id/replies", orderHandler.CreateOrderReply)
+				orders.GET("/:id/replies", orderHandler.GetOrderReplies)
 
 				// 管理员功能
 				adminOrders := orders.Group("")
@@ -200,6 +202,7 @@ func main() {
 					adminGuest.GET("/invitations", guestHandler.GetInvitationList)
 					adminGuest.PUT("/:id/extend", guestHandler.ExtendGuestPermission)
 					adminGuest.POST("/:id/revoke", guestHandler.RevokeGuestPermission)
+					adminGuest.POST("/party/end", guestHandler.EndParty)
 				}
 			}
 		}

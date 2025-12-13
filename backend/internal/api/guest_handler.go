@@ -396,3 +396,49 @@ func (h *GuestHandler) CheckInviteCode(c *gin.Context) {
 
 	c.JSON(http.StatusOK, response)
 }
+
+// EndParty 结束聚会（移除所有访客）
+func (h *GuestHandler) EndParty(c *gin.Context) {
+	user, exists := middleware.GetCurrentUser(c)
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"code":    401,
+			"message": "用户信息不存在",
+		})
+		return
+	}
+
+	if user.FamilyID == nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "用户未加入任何家庭",
+		})
+		return
+	}
+
+	if !user.IsAdmin() {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":    403,
+			"message": "需要管理员权限",
+		})
+		return
+	}
+
+	removedCount, err := h.guestService.EndParty(user.ID, *user.FamilyID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    400,
+			"message": "结束聚会失败",
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    200,
+		"message": "聚会已结束",
+		"data": gin.H{
+			"removed_count": removedCount,
+		},
+	})
+}

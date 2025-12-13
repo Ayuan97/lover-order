@@ -131,3 +131,21 @@ func (o *Order) CalculateTotalAmount() error {
 		"item_count":   count,
 	}).Error
 }
+
+// OrderReply 订单回复模型
+type OrderReply struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	OrderID   uint      `json:"order_id" gorm:"not null;index;comment:订单ID"`
+	UserID    uint      `json:"user_id" gorm:"not null;index;comment:回复用户ID"`
+	Content   string    `json:"content" gorm:"type:text;not null;comment:回复内容"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// 关联关系
+	Order Order `json:"order,omitempty" gorm:"foreignKey:OrderID"`
+	User  User  `json:"user,omitempty" gorm:"foreignKey:UserID"`
+}
+
+// TableName 指定表名
+func (OrderReply) TableName() string {
+	return "order_replies"
+}

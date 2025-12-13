@@ -134,10 +134,10 @@
       </view>
 
       <view class="members-grid">
-        <view
-          class="member-card"
+        <view class="member-card"
           v-for="member in members"
           :key="member.id"
+          @click="openMemberManage(member)"
         >
           <view class="member-avatar-container">
             <image
@@ -358,6 +358,9 @@ const members = ref([])
 // 弹窗控制
 const showFamilyModal = ref(false)
 const showLeaveConfirm = ref(false)
+const showEditFamilyModal = ref(false)
+const showMemberManageModal = ref(false)
+const selectedMember = ref<any>(null)
 const activeTab = ref('create')
 
 // 表单数据
@@ -370,10 +373,17 @@ const joinForm = ref({
   inviteCode: ''
 })
 
+const editFamilyForm = ref({
+  name: '',
+  description: ''
+})
+
 // 操作状态
 const isCreating = ref(false)
 const isJoining = ref(false)
 const isLeaving = ref(false)
+const isSavingFamily = ref(false)
+const isUpdatingRole = ref(false)
 
 // 默认头像
 const defaultAvatar = ref('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHJlY3Qgd2lkdGg9IjQwIiBoZWlnaHQ9IjQwIiByeD0iMjAiIGZpbGw9IiNGRkY4QTY1Ii8+Cjx0ZXh0IHg9IjIwIiB5PSIyNiIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjE2IiBmaWxsPSJ3aGl0ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+8J+RpDwvdGV4dD4KPHN2Zz4=')
@@ -619,9 +629,147 @@ const showAddMember = () => {
 
 // 编辑家庭信息
 const editFamilyInfo = () => {
-  uni.showToast({
-    title: '功能开发中',
-    icon: 'none'
+  if (familyInfo.value) {
+    editFamilyForm.value = {
+      name: familyInfo.value.name || '',
+      description: familyInfo.value.description || ''
+    }
+    showEditFamilyModal.value = true
+  }
+}
+
+// 保存家庭信息
+const saveFamilyInfo = async () => {
+  if (!editFamilyForm.value.name.trim()) {
+    uni.showToast({
+      title: '请输入家庭名称',
+      icon: 'none'
+    })
+    return
+  }
+
+  try {
+    isSavingFamily.value = true
+
+    await FamilyService.updateFamily({
+      name: editFamilyForm.value.name.trim(),
+      description: editFamilyForm.value.description.trim()
+    })
+
+    uni.showToast({
+      title: '保存成功',
+      icon: 'success'
+    })
+
+    showEditFamilyModal.value = false
+    await loadFamilyInfo()
+
+  } catch (error: any) {
+    console.error('保存家庭信息失败:', error)
+    uni.showToast({
+      title: error.message || '保存失败',
+      icon: 'error'
+    })
+  } finally {
+    isSavingFamily.value = false
+  }
+}
+
+// 关闭编辑家庭弹窗
+const closeEditFamilyModal = () => {
+  showEditFamilyModal.value = false
+}
+
+// 打开成员管理弹窗
+const openMemberManage = (member: any) => {
+  // 获取当前用户信息
+  const currentUser = AuthService.getCurrentUser()
+  // 只有管理员可以管理成员
+  if (currentUser?.role !== 'admin') {
+    uni.showToast({
+      title: '需要管理员权限',
+      icon: 'none'
+    })
+    return
+  }
+  // 不能管理自己
+  if (member.id === currentUser?.id) {
+    uni.showToast({
+      title: '不能修改自己的角色',
+      icon: 'none'
+    })
+    return
+  }
+
+  selectedMember.value = member
+  showMemberManageModal.value = true
+}
+
+// 关闭成员管理弹窗
+const closeMemberManageModal = () => {
+  showMemberManageModal.value = false
+  selectedMember.value = null
+}
+
+// 更新成员角色
+const updateMemberRole = async (newRole: string) => {
+  if (!selectedMember.value) return
+
+  try {
+    isUpdatingRole.value = true
+
+    await AuthService.updateMemberRole(selectedMember.value.id, newRole)
+
+    uni.showToast({
+      title: '角色已更新',
+      icon: 'success'
+    })
+
+    closeMemberManageModal()
+    await loadFamilyInfo()
+
+  } catch (error: any) {
+    console.error('更新角色失败:', error)
+    uni.showToast({
+      title: error.message || '更新失败',
+      icon: 'error'
+    })
+  } finally {
+    isUpdatingRole.value = false
+  }
+}
+
+// 移除成员
+const removeMember = async () => {
+  if (!selectedMember.value) return
+
+  uni.showModal({
+    title: '确认移除',
+    content: `确定要将 ${selectedMember.value.nickname} 移出家庭吗？`,
+    confirmText: '移除',
+    confirmColor: '#F44336',
+    success: async (res) => {
+      if (res.confirm) {
+        try {
+          await AuthService.deactivateMember(selectedMember.value.id)
+
+          uni.showToast({
+            title: '已移除成员',
+            icon: 'success'
+          })
+
+          closeMemberManageModal()
+          await loadFamilyInfo()
+
+        } catch (error: any) {
+          console.error('移除成员失败:', error)
+          uni.showToast({
+            title: error.message || '移除失败',
+            icon: 'error'
+          })
+        }
+      }
+    }
   })
 }
 

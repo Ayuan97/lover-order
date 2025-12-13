@@ -186,6 +186,12 @@ export class FamilyService {
   static generateShareText(familyName: string, inviteCode: string): string {
     return `🏠 ${familyName} 邀请您品尝美味家常菜！\n\n📖 浏览精选菜谱\n🛒 在线点餐服务\n✨ 温馨家庭料理\n\n邀请码：${inviteCode}\n\n点击链接立即体验：${this.generateShareLink(inviteCode)}`
   }
+
+  // 结束聚会（移除所有访客）
+  static async endParty(): Promise<{ removed_count: number }> {
+    const response = await request.post(API_ENDPOINTS.GUEST.END_PARTY)
+    return response.data.data as { removed_count: number }
+  }
 }
 
 // 导出默认服务

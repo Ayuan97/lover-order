@@ -87,6 +87,14 @@
         "navigationBarBackgroundColor": "#FF8A65",
         "navigationBarTextStyle": "white"
       }
+    },
+    {
+      "path": "pages/favorites/index",
+      "style": {
+        "navigationBarTitleText": "我的收藏",
+        "navigationBarBackgroundColor": "#FF8A65",
+        "navigationBarTextStyle": "white"
+      }
     }
   ],
   "globalStyle": {

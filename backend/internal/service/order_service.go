@@ -505,3 +505,58 @@ func generateOrderNo(userID uint) string {
 	userStr := fmt.Sprintf("%04d", userID%10000)
 	return "LO" + timestamp + userStr
 }
+
+// CreateReplyRequest 创建回复请求
+type CreateReplyRequest struct {
+	Content string `json:"content" binding:"required,min=1,max=500"`
+}
+
+// CreateOrderReply 创建订单回复
+func (s *OrderService) CreateOrderReply(orderID uint, req *CreateReplyRequest, userID, familyID uint) (*model.OrderReply, error) {
+	// 验证订单存在且属于同一家庭
+	var order model.Order
+	if err := model.DB.Where("id = ? AND family_id = ?", orderID, familyID).First(&order).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("订单不存在")
+		}
+		return nil, fmt.Errorf("查询订单失败: %v", err)
+	}
+
+	// 创建回复
+	reply := &model.OrderReply{
+		OrderID: orderID,
+		UserID:  userID,
+		Content: req.Content,
+	}
+
+	if err := model.DB.Create(reply).Error; err != nil {
+		return nil, fmt.Errorf("创建回复失败: %v", err)
+	}
+
+	// 加载用户信息
+	model.DB.Preload("User").First(reply, reply.ID)
+
+	return reply, nil
+}
+
+// GetOrderReplies 获取订单回复列表
+func (s *OrderService) GetOrderReplies(orderID, familyID uint) ([]model.OrderReply, error) {
+	// 验证订单存在且属于同一家庭
+	var order model.Order
+	if err := model.DB.Where("id = ? AND family_id = ?", orderID, familyID).First(&order).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("订单不存在")
+		}
+		return nil, fmt.Errorf("查询订单失败: %v", err)
+	}
+
+	var replies []model.OrderReply
+	if err := model.DB.Where("order_id = ?", orderID).
+		Preload("User").
+		Order("created_at ASC").
+		Find(&replies).Error; err != nil {
+		return nil, fmt.Errorf("查询回复列表失败: %v", err)
+	}
+
+	return replies, nil
+}

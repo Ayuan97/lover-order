@@ -121,6 +121,20 @@ export interface UserOrderSummary {
   }>
 }
 
+// 订单回复接口
+export interface OrderReply {
+  id: number
+  order_id: number
+  user_id: number
+  content: string
+  created_at: string
+  user?: {
+    id: number
+    nickname: string
+    avatar?: string
+  }
+}
+
 // 订单服务
 export const OrderService = {
   /**
@@ -237,6 +251,22 @@ export const OrderService = {
   async reviewOrder(orderId: number, review: { rating: number; comment?: string; emoji?: string }): Promise<OrderReview> {
     const response = await request.post(`/orders/${orderId}/review`, review)
     return response.data.data || response.data
+  },
+
+  /**
+   * 创建订单回复
+   */
+  async createOrderReply(orderId: number, content: string): Promise<OrderReply> {
+    const response = await request.post(`/orders/${orderId}/replies`, { content })
+    return response.data.data || response.data
+  },
+
+  /**
+   * 获取订单回复列表
+   */
+  async getOrderReplies(orderId: number): Promise<OrderReply[]> {
+    const response = await request.get(`/orders/${orderId}/replies`)
+    return response.data.data || []
   }
 }
 

@@ -87,6 +87,7 @@ func AutoMigrate() error {
 		&Favorite{},         // 7. 收藏表（依赖users, recipes）
 		&RecipeReview{},     // 8. 评价表（依赖users, recipes, orders）
 		&FamilyInvitation{}, // 9. 家庭邀请表（依赖families, users）
+		&OrderReply{},       // 10. 订单回复表（依赖orders, users）
 	}
 
 	for _, table := range tables {

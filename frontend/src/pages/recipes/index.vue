@@ -131,11 +131,72 @@
       </view>
     </scroll-view>
 
-    <!-- 浮动添加按钮 -->
+    <!-- 浮动按钮组 -->
     <view class="fab-container" v-if="hasFamily">
-      <button class="fab" @click="addRecipe">
+      <!-- 购物车按钮 -->
+      <view class="fab fab-cart" @click="showCartModal = true" v-if="cartItemCount > 0">
+        <text class="fab-icon">🛒</text>
+        <view class="cart-badge">{{ cartItemCount }}</view>
+      </view>
+      <!-- 添加菜谱按钮 -->
+      <button class="fab fab-add" @click="addRecipe">
         <text class="fab-icon">+</text>
       </button>
+    </view>
+
+    <!-- 购物车弹窗 -->
+    <view class="cart-modal-mask" v-if="showCartModal" @click="showCartModal = false">
+      <view class="cart-modal" @click.stop>
+        <!-- 弹窗头部 -->
+        <view class="cart-header">
+          <text class="cart-title">🛒 我的购物车</text>
+          <view class="cart-actions">
+            <text class="clear-btn" @click="clearCart" v-if="cartItems.length > 0">清空</text>
+            <text class="close-btn" @click="showCartModal = false">✕</text>
+          </view>
+        </view>
+
+        <!-- 购物车内容 -->
+        <scroll-view class="cart-content" scroll-y v-if="cartItems.length > 0">
+          <view class="cart-item" v-for="item in cartItems" :key="item.id">
+            <image class="item-image" :src="item.image || defaultRecipeImage" mode="aspectFill" />
+            <view class="item-info">
+              <text class="item-name">{{ item.name }}</text>
+              <text class="item-time">⏱️ {{ item.cooking_time }}分钟</text>
+            </view>
+            <view class="item-quantity">
+              <view class="qty-btn" @click="decreaseQty(item)">
+                <text>-</text>
+              </view>
+              <text class="qty-num">{{ item.quantity }}</text>
+              <view class="qty-btn" @click="increaseQty(item)">
+                <text>+</text>
+              </view>
+            </view>
+            <view class="item-delete" @click="removeFromCart(item)">
+              <text>🗑️</text>
+            </view>
+          </view>
+        </scroll-view>
+
+        <!-- 空购物车 -->
+        <view class="cart-empty" v-else>
+          <text class="empty-icon">🛒</text>
+          <text class="empty-text">购物车是空的</text>
+          <text class="empty-desc">去添加一些想吃的菜吧～</text>
+        </view>
+
+        <!-- 底部操作栏 -->
+        <view class="cart-footer" v-if="cartItems.length > 0">
+          <view class="cart-summary">
+            <text class="summary-label">共 {{ cartItemCount }} 道菜</text>
+            <text class="summary-time">预计 {{ totalCookingTime }} 分钟</text>
+          </view>
+          <button class="checkout-btn" @click="goToCheckout">
+            去下单
+          </button>
+        </view>
+      </view>
     </view>
   </view>
 </template>
@@ -157,6 +218,19 @@ const categories = ref<any[]>([])
 const searchKeyword = ref('')
 const activeCategory = ref<number | null>(null)
 const showFilterModal = ref(false)
+
+// 购物车相关
+const showCartModal = ref(false)
+const cartItems = ref<any[]>([])
+
+// 购物车计算属性
+const cartItemCount = computed(() => {
+  return cartItems.value.reduce((sum, item) => sum + item.quantity, 0)
+})
+
+const totalCookingTime = computed(() => {
+  return cartItems.value.reduce((sum, item) => sum + (item.cooking_time || 0) * item.quantity, 0)
+})
 
 // 默认菜谱图片
 const defaultRecipeImage = ref('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIwIiBoZWlnaHQ9IjEyMCIgdmlld0JveD0iMCAwIDEyMCAxMjAiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iMTIwIiByeD0iMTIiIGZpbGw9IiNGNUY1RjUiLz4KPHRleHQgeD0iNjAiIHk9IjcwIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iNDAiIGZpbGw9IiM5OTkiIHRleHQtYW5jaG9yPSJtaWRkbGUiPvCfk5Y8L3RleHQ+Cjwvc3ZnPg==')
@@ -205,6 +279,7 @@ const emptyDesc = computed(() => {
 
 // 页面加载
 onMounted(async () => {
+  loadCart()
   await checkFamilyStatus()
 })
 
@@ -377,11 +452,8 @@ const toggleFavorite = async (recipe: any) => {
 // 添加到购物车
 const addToCart = (recipe: any) => {
   try {
-    // 获取当前购物车
-    const cart = uni.getStorageSync('shopping_cart') || []
-
     // 检查是否已存在
-    const existingItem = cart.find((item: any) => item.id === recipe.id)
+    const existingItem = cartItems.value.find((item: any) => item.id === recipe.id)
 
     if (existingItem) {
       // 已存在，增加数量
@@ -393,7 +465,7 @@ const addToCart = (recipe: any) => {
       })
     } else {
       // 新添加
-      cart.push({
+      cartItems.value.push({
         id: recipe.id,
         name: recipe.name,
         description: recipe.description,
@@ -410,7 +482,7 @@ const addToCart = (recipe: any) => {
     }
 
     // 保存购物车
-    uni.setStorageSync('shopping_cart', cart)
+    saveCart()
   } catch (error) {
     console.error('添加到购物车失败:', error)
     uni.showToast({
@@ -418,6 +490,74 @@ const addToCart = (recipe: any) => {
       icon: 'error'
     })
   }
+}
+
+// 增加数量
+const increaseQty = (item: any) => {
+  item.quantity += 1
+  saveCart()
+}
+
+// 减少数量
+const decreaseQty = (item: any) => {
+  if (item.quantity > 1) {
+    item.quantity -= 1
+    saveCart()
+  } else {
+    removeFromCart(item)
+  }
+}
+
+// 从购物车移除
+const removeFromCart = (item: any) => {
+  const index = cartItems.value.findIndex((i: any) => i.id === item.id)
+  if (index > -1) {
+    cartItems.value.splice(index, 1)
+    saveCart()
+    uni.showToast({
+      title: '已移除',
+      icon: 'none',
+      duration: 800
+    })
+  }
+}
+
+// 清空购物车
+const clearCart = () => {
+  uni.showModal({
+    title: '清空购物车',
+    content: '确定要清空购物车吗？',
+    success: (res) => {
+      if (res.confirm) {
+        cartItems.value = []
+        saveCart()
+        uni.showToast({
+          title: '已清空',
+          icon: 'none',
+          duration: 800
+        })
+      }
+    }
+  })
+}
+
+// 保存购物车到本地存储
+const saveCart = () => {
+  uni.setStorageSync('shopping_cart', cartItems.value)
+}
+
+// 加载购物车
+const loadCart = () => {
+  const cart = uni.getStorageSync('shopping_cart') || []
+  cartItems.value = cart
+}
+
+// 去下单
+const goToCheckout = () => {
+  showCartModal.value = false
+  uni.navigateTo({
+    url: '/pages/orders/create'
+  })
 }
 
 // 获取难度文本
@@ -433,6 +573,9 @@ const getDifficultyText = (difficulty: number) => {
 // 页面显示时刷新数据（从详情页返回时）
 onShow(async () => {
   console.log('菜谱页面显示，检查是否需要刷新...')
+
+  // 加载购物车（从下单页返回时可能已清空）
+  loadCart()
 
   // 如果正在初始加载，跳过
   if (isLoading.value) {
@@ -828,6 +971,9 @@ onShow(async () => {
   bottom: calc(100rpx + env(safe-area-inset-bottom));
   right: 32rpx;
   z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
 
   .fab {
     width: 96rpx;
@@ -838,6 +984,7 @@ onShow(async () => {
     box-shadow: 0 8rpx 24rpx rgba(255, 138, 101, 0.4);
     transition: all $duration-base;
     border: none;
+    position: relative;
 
     &:active {
       transform: scale(0.9);
@@ -847,6 +994,267 @@ onShow(async () => {
       font-size: 48rpx;
       font-weight: bold;
       color: white;
+    }
+
+    &.fab-cart {
+      width: 88rpx;
+      height: 88rpx;
+      background: white;
+      box-shadow: $shadow-md;
+
+      .fab-icon {
+        font-size: 40rpx;
+        color: $primary;
+      }
+    }
+
+    .cart-badge {
+      position: absolute;
+      top: -8rpx;
+      right: -8rpx;
+      min-width: 36rpx;
+      height: 36rpx;
+      padding: 0 8rpx;
+      background: $error;
+      border-radius: 18rpx;
+      font-size: $font-size-xxs;
+      color: white;
+      font-weight: $font-weight-bold;
+      @include flex-center;
+    }
+  }
+}
+
+// 购物车弹窗遮罩
+.cart-modal-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  display: flex;
+  align-items: flex-end;
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+// 购物车弹窗
+.cart-modal {
+  width: 100%;
+  max-height: 70vh;
+  background: white;
+  border-radius: 32rpx 32rpx 0 0;
+  display: flex;
+  flex-direction: column;
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+// 弹窗头部
+.cart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 32rpx 32rpx 24rpx;
+  border-bottom: 1rpx solid $border-light;
+
+  .cart-title {
+    font-size: $font-size-lg;
+    font-weight: $font-weight-bold;
+    color: $text-primary;
+  }
+
+  .cart-actions {
+    display: flex;
+    align-items: center;
+    gap: 24rpx;
+
+    .clear-btn {
+      font-size: $font-size-sm;
+      color: $text-tertiary;
+
+      &:active {
+        color: $error;
+      }
+    }
+
+    .close-btn {
+      width: 48rpx;
+      height: 48rpx;
+      border-radius: 24rpx;
+      background: $bg-section;
+      @include flex-center;
+      font-size: $font-size-sm;
+      color: $text-secondary;
+
+      &:active {
+        background: $bg-hover;
+      }
+    }
+  }
+}
+
+// 购物车内容
+.cart-content {
+  flex: 1;
+  max-height: 400rpx;
+  padding: 16rpx 32rpx;
+}
+
+// 购物车项目
+.cart-item {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+  padding: 16rpx 0;
+  border-bottom: 1rpx solid $border-light;
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  .item-image {
+    width: 100rpx;
+    height: 100rpx;
+    border-radius: $radius-base;
+    flex-shrink: 0;
+  }
+
+  .item-info {
+    flex: 1;
+    min-width: 0;
+
+    .item-name {
+      display: block;
+      font-size: $font-size-base;
+      font-weight: $font-weight-medium;
+      color: $text-primary;
+      @include text-ellipsis(1);
+      margin-bottom: 8rpx;
+    }
+
+    .item-time {
+      font-size: $font-size-xs;
+      color: $text-tertiary;
+    }
+  }
+
+  .item-quantity {
+    display: flex;
+    align-items: center;
+    gap: 12rpx;
+
+    .qty-btn {
+      width: 48rpx;
+      height: 48rpx;
+      border-radius: 24rpx;
+      background: $bg-section;
+      @include flex-center;
+      font-size: $font-size-lg;
+      color: $text-secondary;
+      transition: all $duration-fast;
+
+      &:active {
+        transform: scale(0.9);
+        background: $bg-hover;
+      }
+    }
+
+    .qty-num {
+      min-width: 40rpx;
+      text-align: center;
+      font-size: $font-size-base;
+      font-weight: $font-weight-bold;
+      color: $text-primary;
+    }
+  }
+
+  .item-delete {
+    width: 48rpx;
+    height: 48rpx;
+    @include flex-center;
+    font-size: 28rpx;
+    opacity: 0.6;
+    transition: all $duration-fast;
+
+    &:active {
+      opacity: 1;
+      transform: scale(1.1);
+    }
+  }
+}
+
+// 空购物车
+.cart-empty {
+  @include flex-center;
+  flex-direction: column;
+  padding: 60rpx 40rpx;
+
+  .empty-icon {
+    font-size: 80rpx;
+    opacity: 0.4;
+    margin-bottom: 20rpx;
+  }
+
+  .empty-text {
+    font-size: $font-size-base;
+    color: $text-secondary;
+    margin-bottom: 8rpx;
+  }
+
+  .empty-desc {
+    font-size: $font-size-sm;
+    color: $text-tertiary;
+  }
+}
+
+// 底部操作栏
+.cart-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24rpx 32rpx;
+  padding-bottom: calc(24rpx + env(safe-area-inset-bottom));
+  border-top: 1rpx solid $border-light;
+  background: white;
+
+  .cart-summary {
+    .summary-label {
+      display: block;
+      font-size: $font-size-base;
+      font-weight: $font-weight-bold;
+      color: $text-primary;
+      margin-bottom: 4rpx;
+    }
+
+    .summary-time {
+      font-size: $font-size-xs;
+      color: $text-tertiary;
+    }
+  }
+
+  .checkout-btn {
+    padding: 20rpx 48rpx;
+    background: $gradient-primary;
+    color: white;
+    border: none;
+    border-radius: $radius-button;
+    font-size: $font-size-base;
+    font-weight: $font-weight-bold;
+    box-shadow: $shadow-primary;
+
+    &:active {
+      transform: scale(0.96);
     }
   }
 }

@@ -343,6 +343,48 @@ func (s *GuestService) GetInvitationList(familyID uint, includeInactive bool) ([
 	return invitations, nil
 }
 
+// EndParty 结束聚会（移除所有访客）
+func (s *GuestService) EndParty(adminUserID, familyID uint) (int64, error) {
+	// 验证管理员权限
+	var adminUser model.User
+	if err := model.DB.First(&adminUser, adminUserID).Error; err != nil {
+		return 0, errors.New("管理员用户不存在")
+	}
+
+	if !adminUser.IsAdmin() {
+		return 0, errors.New("权限不足")
+	}
+
+	if adminUser.FamilyID == nil || *adminUser.FamilyID != familyID {
+		return 0, errors.New("用户不属于该家庭")
+	}
+
+	// 移除所有访客（将其设为过期并清除家庭关联）
+	pastTime := time.Now().Add(-1 * time.Hour)
+	result := model.DB.Model(&model.User{}).
+		Where("family_id = ? AND role = 'guest' AND is_active = ?", familyID, true).
+		Updates(map[string]interface{}{
+			"guest_expires_at": pastTime,
+			"is_active":        false,
+			"family_id":        nil,
+			"updated_at":       time.Now(),
+		})
+
+	if result.Error != nil {
+		return 0, fmt.Errorf("移除访客失败: %v", result.Error)
+	}
+
+	// 同时使所有未使用的访客邀请码失效
+	model.DB.Model(&model.FamilyInvitation{}).
+		Where("family_id = ? AND invite_type = 'guest' AND is_active = ?", familyID, true).
+		Updates(map[string]interface{}{
+			"is_active":  false,
+			"updated_at": time.Now(),
+		})
+
+	return result.RowsAffected, nil
+}
+
 // generateRandomCode 生成随机邀请码
 func generateRandomCode(length int) string {
 	bytes := make([]byte, length/2)
