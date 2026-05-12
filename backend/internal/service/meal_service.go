@@ -320,6 +320,94 @@ func (s *MealService) List(householdID uint, q MealListQuery) (*MealList, error)
 	return &MealList{Total: total, Items: items}, nil
 }
 
+// HouseholdStats 一个家的累积统计
+type HouseholdStats struct {
+	TotalMeals      int64           `json:"total_meals"`
+	TotalDishes     int64           `json:"total_dishes"`
+	RecentDays      int             `json:"recent_days"`
+	RecentMeals     int64           `json:"recent_meals"`
+	TopDishes       []TopDishItem   `json:"top_dishes"`
+	SceneBreakdown  []SceneCountItem `json:"scene_breakdown"`
+}
+
+// TopDishItem 常吃 Top 项
+type TopDishItem struct {
+	Name  string `json:"name"`
+	Image string `json:"image"`
+	Count int64  `json:"count"`
+}
+
+// SceneCountItem 场景分布项
+type SceneCountItem struct {
+	Scene string `json:"scene"`
+	Count int64  `json:"count"`
+}
+
+// Stats 计算一个家的累积统计
+func (s *MealService) Stats(householdID uint) (*HouseholdStats, error) {
+	stats := &HouseholdStats{RecentDays: 30}
+
+	if err := model.DB.Model(&model.MealSession{}).
+		Where("household_id = ? AND status = ?", householdID, model.MealStatusCompleted).
+		Count(&stats.TotalMeals).Error; err != nil {
+		return nil, err
+	}
+
+	if err := model.DB.Model(&model.MealDish{}).
+		Joins("JOIN meal_sessions ON meal_sessions.id = meal_dishes.meal_session_id AND meal_sessions.deleted_at IS NULL").
+		Where("meal_sessions.household_id = ? AND meal_sessions.status = ?", householdID, model.MealStatusCompleted).
+		Count(&stats.TotalDishes).Error; err != nil {
+		return nil, err
+	}
+
+	thirtyDaysAgo := time.Now().AddDate(0, 0, -30)
+	if err := model.DB.Model(&model.MealSession{}).
+		Where("household_id = ? AND status = ? AND COALESCE(completed_at, confirmed_at, created_at) >= ?",
+			householdID, model.MealStatusCompleted, thirtyDaysAgo).
+		Count(&stats.RecentMeals).Error; err != nil {
+		return nil, err
+	}
+
+	rows, err := model.DB.Table("meal_dishes").
+		Select("meal_dishes.recipe_name AS name, MAX(meal_dishes.recipe_image) AS image, COUNT(*) AS cnt").
+		Joins("JOIN meal_sessions ON meal_sessions.id = meal_dishes.meal_session_id AND meal_sessions.deleted_at IS NULL").
+		Where("meal_sessions.household_id = ? AND meal_sessions.status = ?", householdID, model.MealStatusCompleted).
+		Group("meal_dishes.recipe_name").
+		Order("cnt DESC").
+		Limit(5).
+		Rows()
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var item TopDishItem
+			var imagePtr *string
+			if err := rows.Scan(&item.Name, &imagePtr, &item.Count); err == nil {
+				if imagePtr != nil {
+					item.Image = *imagePtr
+				}
+				stats.TopDishes = append(stats.TopDishes, item)
+			}
+		}
+	}
+
+	sceneRows, err := model.DB.Table("meal_sessions").
+		Select("scene, COUNT(*) AS cnt").
+		Where("household_id = ? AND status = ? AND deleted_at IS NULL", householdID, model.MealStatusCompleted).
+		Group("scene").
+		Rows()
+	if err == nil {
+		defer sceneRows.Close()
+		for sceneRows.Next() {
+			var item SceneCountItem
+			if err := sceneRows.Scan(&item.Scene, &item.Count); err == nil {
+				stats.SceneBreakdown = append(stats.SceneBreakdown, item)
+			}
+		}
+	}
+
+	return stats, nil
+}
+
 // Get 取一顿详情
 func (s *MealService) Get(householdID, id uint) (*model.MealSession, error) {
 	var m model.MealSession

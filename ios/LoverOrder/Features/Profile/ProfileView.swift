@@ -17,6 +17,7 @@ struct ProfileView: View {
     @State private var showCategoryManagement: Bool = false
     @State private var confirmLeaveHousehold: Bool = false
     @State private var showEditProfile: Bool = false
+    @State private var stats: HouseholdStats?
 
     var body: some View {
         NavigationStack {
@@ -24,6 +25,9 @@ struct ProfileView: View {
                 VStack(alignment: .leading, spacing: AppSpacing.lg) {
                     header
                     userCard
+                    if let stats {
+                        StatsCard(stats: stats)
+                    }
                     scenePicker
                     householdModeCard
                     moodPicker
@@ -40,6 +44,7 @@ struct ProfileView: View {
             .background(Color.appBackground.ignoresSafeArea())
             .task {
                 selectedTastes = Set(appState.currentUser?.tastePrefs ?? [])
+                await loadStats()
             }
             .navigationBarHidden(true)
             .sheet(isPresented: $showCategoryManagement) {
@@ -62,23 +67,42 @@ struct ProfileView: View {
                     .foregroundStyle(Color.inkPrimary)
                 Spacer()
             }
+            NavigationLink {
+                FuturePlansView()
+                    .environmentObject(appState)
+            } label: {
+                navRow(title: "未来这顿", subtitle: "留着以后吃的菜单", icon: "moon.stars")
+            }
+            .buttonStyle(.plain)
             Button {
                 showCategoryManagement = true
             } label: {
-                HStack {
-                    Text("管理菜谱分类")
-                        .font(AppFont.body(15))
-                        .foregroundStyle(Color.inkPrimary)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .foregroundStyle(Color.inkMuted)
-                }
-                .padding(AppSpacing.md)
-                .background(Color.appBackground)
-                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+                navRow(title: "管理菜谱分类", subtitle: "新建 改名 删除", icon: "square.grid.2x2")
             }
             .buttonStyle(.plain)
         }
+    }
+
+    private func navRow(title: String, subtitle: String, icon: String) -> some View {
+        HStack(spacing: AppSpacing.md) {
+            Image(systemName: icon)
+                .foregroundStyle(Color.brandGreen)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(AppFont.body(15))
+                    .foregroundStyle(Color.inkPrimary)
+                Text(subtitle)
+                    .font(AppFont.caption(11))
+                    .foregroundStyle(Color.inkMuted)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .foregroundStyle(Color.inkMuted)
+        }
+        .padding(AppSpacing.md)
+        .background(Color.appBackground)
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
     }
 
     private var header: some View {
@@ -334,6 +358,109 @@ struct ProfileView: View {
             appState.household = nil
             await appState.refreshProfile()
         } catch {}
+    }
+
+    private func loadStats() async {
+        guard appState.currentUser?.hasHousehold == true else { return }
+        do {
+            stats = try await MealService.shared.stats()
+        } catch {}
+    }
+}
+
+// 我们的小本本：总顿数 / 最近 30 天 / Top 5 常吃 / 场景分布
+private struct StatsCard: View {
+    let stats: HouseholdStats
+
+    var body: some View {
+        SectionCard {
+            HStack(spacing: AppSpacing.sm) {
+                Image(systemName: "book.pages")
+                    .foregroundStyle(Color.brandGreen)
+                Text("我们的小本本")
+                    .font(AppFont.headline(16))
+                    .foregroundStyle(Color.inkPrimary)
+                Spacer()
+            }
+            numbersRow
+            if !stats.topDishes.isEmpty {
+                Divider().background(Color.dividerLine)
+                topDishesView
+            }
+            if !stats.sceneBreakdown.isEmpty {
+                Divider().background(Color.dividerLine)
+                sceneBreakdownView
+            }
+        }
+    }
+
+    private var numbersRow: some View {
+        HStack(spacing: AppSpacing.md) {
+            statBox(value: "\(stats.totalMeals)", label: "一共吃过这么多顿")
+            statBox(value: "\(stats.totalDishes)", label: "一共下肚这么多道")
+            statBox(value: "\(stats.recentMeals)", label: "最近 30 天")
+        }
+    }
+
+    private func statBox(value: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(AppFont.title(22))
+                .foregroundStyle(Color.brandGreen)
+            Text(label)
+                .font(AppFont.caption(11))
+                .foregroundStyle(Color.inkMuted)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(AppSpacing.md)
+        .background(Color.appBackground)
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+    }
+
+    private var topDishesView: some View {
+        VStack(alignment: .leading, spacing: AppSpacing.sm) {
+            Text("最爱吃的几道")
+                .font(AppFont.caption(12))
+                .foregroundStyle(Color.inkMuted)
+            ForEach(Array(stats.topDishes.enumerated()), id: \.element.id) { idx, dish in
+                HStack(spacing: AppSpacing.md) {
+                    Text("\(idx + 1)")
+                        .font(AppFont.mono(13))
+                        .frame(width: 24)
+                        .foregroundStyle(Color.brandGreen)
+                    DishThumb(name: dish.name, image: dish.image)
+                    Text(dish.name)
+                        .font(AppFont.body(14))
+                        .foregroundStyle(Color.inkPrimary)
+                    Spacer()
+                    Text("× \(dish.count)")
+                        .font(AppFont.caption())
+                        .foregroundStyle(Color.inkMuted)
+                }
+            }
+        }
+    }
+
+    private var sceneBreakdownView: some View {
+        VStack(alignment: .leading, spacing: AppSpacing.sm) {
+            Text("吃饭的场合")
+                .font(AppFont.caption(12))
+                .foregroundStyle(Color.inkMuted)
+            FlowLayout(spacing: AppSpacing.sm) {
+                ForEach(stats.sceneBreakdown) { item in
+                    HStack(spacing: 4) {
+                        Text(item.sceneLabel)
+                        Text("× \(item.count)")
+                            .foregroundStyle(Color.brandGreen)
+                    }
+                    .font(AppFont.caption(12))
+                    .padding(.horizontal, AppSpacing.md)
+                    .padding(.vertical, 6)
+                    .background(Color.appBackground)
+                    .clipShape(Capsule())
+                }
+            }
+        }
     }
 }
 

@@ -189,6 +189,17 @@ func (h *MealHandler) Cancel(c *gin.Context) {
 	OK(c, nil)
 }
 
+// Stats 一个家的累积统计
+func (h *MealHandler) Stats(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	stats, err := h.svc.Stats(hid)
+	if err != nil {
+		Fail(c, CodeInternalError, err.Error())
+		return
+	}
+	OK(c, stats)
+}
+
 // Review 留下评价
 func (h *MealHandler) Review(c *gin.Context) {
 	hid, _ := middleware.CurrentHouseholdID(c)

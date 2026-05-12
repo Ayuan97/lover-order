@@ -292,6 +292,15 @@ private struct MenuRecipeCard: View {
                         .foregroundStyle(Color.inkMuted)
                         .lineLimit(1)
                 }
+                if let used = recipe.useCount, used > 0 {
+                    HStack(spacing: 4) {
+                        Image(systemName: "fork.knife")
+                            .font(.system(size: 9))
+                        Text("吃过 \(used) 次")
+                            .font(AppFont.caption(11))
+                    }
+                    .foregroundStyle(Color.brandGreen)
+                }
             }
         }
     }

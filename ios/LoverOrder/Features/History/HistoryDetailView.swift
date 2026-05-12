@@ -11,6 +11,8 @@ struct HistoryDetailView: View {
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
     @State private var showReview: Bool = false
+    @State private var isRepeating: Bool = false
+    @State private var repeatedToast: String?
 
     var body: some View {
         ScrollView {
@@ -228,14 +230,20 @@ struct HistoryDetailView: View {
     }
 
     private func bottomBar(_ meal: MealSession) -> some View {
-        Group {
-            if meal.status == .completed && (meal.reviews ?? []).isEmpty {
-                PrimaryButton(title: "留下这一顿的感受") {
-                    showReview = true
+        VStack(spacing: AppSpacing.sm) {
+            if let repeatedToast {
+                Text(repeatedToast)
+                    .font(AppFont.caption(12))
+                    .foregroundStyle(Color.brandGreen)
+            }
+            HStack(spacing: AppSpacing.md) {
+                if meal.status == .completed && (meal.reviews ?? []).isEmpty {
+                    SecondaryButton(title: "留下感受", icon: "leaf") {
+                        showReview = true
+                    }
                 }
-            } else if meal.status == .completed {
-                SecondaryButton(title: "再来一份感受", icon: "plus.message") {
-                    showReview = true
+                PrimaryButton(title: isRepeating ? "复制中" : "再来一次", icon: "arrow.clockwise", isLoading: isRepeating) {
+                    Task { await repeatMeal(meal) }
                 }
             }
         }
@@ -249,6 +257,32 @@ struct HistoryDetailView: View {
         defer { isLoading = false }
         do {
             meal = try await MealService.shared.detail(id: mealId)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    // 把这一顿的菜复制到当前 scene 的规划中
+    private func repeatMeal(_ meal: MealSession) async {
+        isRepeating = true
+        defer { isRepeating = false }
+        do {
+            let current = try await MealService.shared.current(scene: appState.currentScene, mood: appState.currentMood)
+            let existingRecipeIds = Set((current.dishes ?? []).compactMap { $0.recipeId })
+            let existingNames = Set((current.dishes ?? []).map { $0.recipeName })
+            var added = 0
+            for dish in meal.dishes ?? [] {
+                if let rid = dish.recipeId {
+                    if existingRecipeIds.contains(rid) { continue }
+                    _ = try await MealService.shared.addDish(mealId: current.id, dish: DishInput(recipeId: rid, note: dish.note))
+                    added += 1
+                } else if !dish.recipeName.isEmpty {
+                    if existingNames.contains(dish.recipeName) { continue }
+                    _ = try await MealService.shared.addDish(mealId: current.id, dish: DishInput(name: dish.recipeName, image: dish.recipeImage, note: dish.note))
+                    added += 1
+                }
+            }
+            repeatedToast = "已复制 \(added) 道到\(appState.currentScene.label)"
         } catch {
             errorMessage = error.localizedDescription
         }

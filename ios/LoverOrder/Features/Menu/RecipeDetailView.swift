@@ -162,7 +162,9 @@ struct RecipeDetailView: View {
         if let d = r.difficulty {
             items.append(.init(icon: "flame", label: "难度", value: d.label))
         }
-        if let scenes = r.sceneTags, !scenes.isEmpty {
+        if let used = r.useCount, used > 0 {
+            items.append(.init(icon: "fork.knife", label: "吃过", value: "\(used) 次"))
+        } else if let scenes = r.sceneTags, !scenes.isEmpty {
             items.append(.init(icon: "sun.max", label: "场合", value: scenes.first?.label ?? ""))
         }
         return items

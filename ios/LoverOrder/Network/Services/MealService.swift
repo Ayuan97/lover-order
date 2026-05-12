@@ -65,6 +65,10 @@ final class MealService {
         try await api.get("meals/list", query: query.toQuery())
     }
 
+    func stats() async throws -> HouseholdStats {
+        try await api.get("meals/stats")
+    }
+
     func detail(id: UInt) async throws -> MealSession {
         try await api.get("meals/\(id)")
     }

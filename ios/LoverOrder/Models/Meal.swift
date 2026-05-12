@@ -107,3 +107,39 @@ struct MealListResult: Codable {
     let total: Int
     let items: [MealSession]
 }
+
+// 一个家的累积统计
+struct HouseholdStats: Codable {
+    let totalMeals: Int
+    let totalDishes: Int
+    let recentDays: Int
+    let recentMeals: Int
+    let topDishes: [TopDish]
+    let sceneBreakdown: [SceneCount]
+
+    enum CodingKeys: String, CodingKey {
+        case totalMeals = "total_meals"
+        case totalDishes = "total_dishes"
+        case recentDays = "recent_days"
+        case recentMeals = "recent_meals"
+        case topDishes = "top_dishes"
+        case sceneBreakdown = "scene_breakdown"
+    }
+}
+
+struct TopDish: Codable, Identifiable, Hashable {
+    var id: String { name }
+    let name: String
+    let image: String?
+    let count: Int
+}
+
+struct SceneCount: Codable, Identifiable, Hashable {
+    var id: String { scene }
+    let scene: String
+    let count: Int
+
+    var sceneLabel: String {
+        MealScene(rawValue: scene)?.label ?? scene
+    }
+}

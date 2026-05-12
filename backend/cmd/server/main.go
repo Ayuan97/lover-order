@@ -128,6 +128,7 @@ func registerRoutes(r *gin.Engine) {
 				{
 					meals.GET("/current", mealH.Current)
 					meals.GET("/list", mealH.List)
+					meals.GET("/stats", mealH.Stats)
 					meals.GET("/:id", mealH.Detail)
 					meals.POST("/create", mealH.Create)
 					meals.POST("/:id/update", mealH.Update)

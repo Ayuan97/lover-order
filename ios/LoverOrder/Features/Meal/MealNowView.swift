@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // 首页"我们这顿"
 struct MealNowView: View {
@@ -7,6 +8,7 @@ struct MealNowView: View {
     @State private var showAddDish: Bool = false
     @State private var showReview: Bool = false
     @State private var reviewMealId: UInt?
+    @State private var showCreateRecipe: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -17,8 +19,15 @@ struct MealNowView: View {
                     if !vm.dishes.isEmpty {
                         currentMealCard
                     }
-                    suggestionsSection
-                    frequentsSection
+                    if showEmptyHint {
+                        EmptyMealHint(
+                            onCreateRecipe: { showCreateRecipe = true },
+                            onInvite: { copyInviteCode() }
+                        )
+                    } else {
+                        suggestionsSection
+                        frequentsSection
+                    }
                     Color.clear.frame(height: 80)
                 }
                 .padding(.horizontal, AppSpacing.lg)
@@ -47,7 +56,22 @@ struct MealNowView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showCreateRecipe) {
+                RecipeEditView(mode: .create) { _ in
+                    Task { await vm.load(scene: appState.currentScene, mood: appState.currentMood) }
+                }
+                .environmentObject(appState)
+            }
         }
+    }
+
+    private var showEmptyHint: Bool {
+        !vm.isLoading && vm.suggestions.isEmpty && vm.frequents.isEmpty && vm.dishes.isEmpty
+    }
+
+    private func copyInviteCode() {
+        guard let code = appState.household?.inviteCode else { return }
+        UIPasteboard.general.string = code
     }
 
     private var header: some View {
