@@ -9,10 +9,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// JSON 自定义JSON类型
+// JSON 自定义 JSON 列类型 用于在 MySQL JSON 字段与 Go 类型间转换
 type JSON []byte
 
-// Value 实现driver.Valuer接口
+// Value 实现 driver.Valuer
 func (j JSON) Value() (driver.Value, error) {
 	if len(j) == 0 {
 		return nil, nil
@@ -20,7 +20,7 @@ func (j JSON) Value() (driver.Value, error) {
 	return string(j), nil
 }
 
-// Scan 实现sql.Scanner接口
+// Scan 实现 sql.Scanner
 func (j *JSON) Scan(value interface{}) error {
 	if value == nil {
 		*j = nil
@@ -37,83 +37,69 @@ func (j *JSON) Scan(value interface{}) error {
 	return nil
 }
 
-// RecipeCategory 菜谱分类模型
+// RecipeCategory 菜谱分类
 type RecipeCategory struct {
-	ID        uint           `json:"id" gorm:"primaryKey"`
-	Name      string         `json:"name" gorm:"size:50;not null;comment:分类名称"`
-	Icon      string         `json:"icon" gorm:"size:200;comment:分类图标URL"`
-	Color     string         `json:"color" gorm:"size:20;default:'#FF8A65';comment:分类颜色"`
-	SortOrder int            `json:"sort_order" gorm:"default:0;comment:排序权重"`
-	FamilyID  uint           `json:"family_id" gorm:"not null;index;comment:家庭ID"`
-	IsActive  bool           `json:"is_active" gorm:"default:true;comment:是否启用"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
-
-	// 关联关系
-	Family  Family   `json:"family,omitempty" gorm:"foreignKey:FamilyID"`
-	Recipes []Recipe `json:"recipes,omitempty" gorm:"foreignKey:CategoryID"`
+	ID          uint           `json:"id" gorm:"primaryKey"`
+	Name        string         `json:"name" gorm:"size:32;not null;comment:分类名"`
+	Icon        string         `json:"icon" gorm:"size:32;comment:分类图标 emoji 或字符"`
+	Color       string         `json:"color" gorm:"size:16;default:'#516B4A';comment:分类色"`
+	SortOrder   int            `json:"sort_order" gorm:"default:0;comment:排序"`
+	HouseholdID uint           `json:"household_id" gorm:"not null;index;comment:所属一个家"`
+	IsActive    bool           `json:"is_active" gorm:"default:true;comment:是否启用"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
-// TableName 指定表名
+// TableName 菜谱分类表名
 func (RecipeCategory) TableName() string {
 	return "recipe_categories"
 }
 
-// Recipe 菜谱模型
+// Recipe 菜谱
 type Recipe struct {
 	ID            uint           `json:"id" gorm:"primaryKey"`
-	Name          string         `json:"name" gorm:"size:100;not null;comment:菜品名称"`
-	Description   string         `json:"description" gorm:"type:text;comment:菜品描述"`
-	Image         string         `json:"image" gorm:"size:500;comment:菜品主图"`
-	Images        JSON           `json:"images" gorm:"type:json;comment:菜品图片集合"`
-	Price         float64        `json:"price" gorm:"type:decimal(10,2);default:0;comment:虚拟价格"`
-	CategoryID    *uint          `json:"category_id" gorm:"index;comment:分类ID"`
-	CookingTime   int            `json:"cooking_time" gorm:"comment:制作时间（分钟）"`
-	Difficulty    string         `json:"difficulty" gorm:"type:enum('easy','medium','hard');default:'easy';comment:制作难度"`
-	Servings      int            `json:"servings" gorm:"default:1;comment:份量（几人份）"`
+	Name          string         `json:"name" gorm:"size:64;not null;comment:菜名"`
+	Description   string         `json:"description" gorm:"size:255;comment:简介"`
+	CoverImage    string         `json:"cover_image" gorm:"size:512;comment:封面图"`
+	Images        JSON           `json:"images" gorm:"type:json;comment:图集"`
+	CategoryID    *uint          `json:"category_id" gorm:"index;comment:分类"`
+	CookingTime   int            `json:"cooking_time" gorm:"default:0;comment:制作时间 分钟"`
+	Difficulty    string         `json:"difficulty" gorm:"type:enum('easy','medium','hard');default:'easy';comment:难度"`
+	Servings      int            `json:"servings" gorm:"default:2;comment:几人份"`
 	Ingredients   JSON           `json:"ingredients" gorm:"type:json;comment:食材清单"`
-	Steps         JSON           `json:"steps" gorm:"type:json;comment:制作步骤"`
-	NutritionInfo JSON           `json:"nutrition_info" gorm:"type:json;comment:营养信息"`
-	Tags          string         `json:"tags" gorm:"size:500;comment:标签（逗号分隔）"`
-	FamilyID      uint           `json:"family_id" gorm:"not null;index;comment:家庭ID"`
-	CreatedBy     uint           `json:"created_by" gorm:"not null;index;comment:创建者ID"`
-	IsAvailable   bool           `json:"is_available" gorm:"default:true;index;comment:是否可点餐"`
-	IsFeatured    bool           `json:"is_featured" gorm:"default:false;index;comment:是否推荐"`
-	ViewCount     int            `json:"view_count" gorm:"default:0;comment:浏览次数"`
-	LikeCount     int            `json:"like_count" gorm:"default:0;comment:点赞数"`
-	OrderCount    int            `json:"order_count" gorm:"default:0;comment:被点餐次数"`
+	Steps         JSON           `json:"steps" gorm:"type:json;comment:做法步骤"`
+	Tips          string         `json:"tips" gorm:"type:text;comment:小贴士"`
+	Tags          JSON           `json:"tags" gorm:"type:json;comment:风味标签"`
+	MoodTags      JSON           `json:"mood_tags" gorm:"type:json;comment:适用心情 easy/normal/serious/change"`
+	SceneTags     JSON           `json:"scene_tags" gorm:"type:json;comment:适用场景标签"`
+	HouseholdID   uint           `json:"household_id" gorm:"not null;index;comment:所属一个家"`
+	CreatedBy     uint           `json:"created_by" gorm:"not null;index;comment:创建者"`
+	IsArchived    bool           `json:"is_archived" gorm:"default:false;index;comment:是否归档"`
+	ViewCount     int            `json:"view_count" gorm:"default:0;comment:查看次数"`
+	UseCount      int            `json:"use_count" gorm:"default:0;comment:加入一顿次数"`
+	LastUsedAt    *time.Time     `json:"last_used_at" gorm:"comment:最近一次被吃"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 	DeletedAt     gorm.DeletedAt `json:"-" gorm:"index"`
 
-	// 关联关系
-	Family     Family          `json:"family,omitempty" gorm:"foreignKey:FamilyID"`
-	Category   *RecipeCategory `json:"category,omitempty" gorm:"foreignKey:CategoryID"`
-	Creator    User            `json:"creator,omitempty" gorm:"foreignKey:CreatedBy"`
-	OrderItems []OrderItem     `json:"order_items,omitempty" gorm:"foreignKey:RecipeID"`
-	Favorites  []Favorite      `json:"favorites,omitempty" gorm:"foreignKey:RecipeID"`
-	Reviews    []RecipeReview  `json:"reviews,omitempty" gorm:"foreignKey:RecipeID"`
+	Category *RecipeCategory `json:"category,omitempty" gorm:"foreignKey:CategoryID"`
+	Creator  *User           `json:"creator,omitempty" gorm:"foreignKey:CreatedBy"`
 }
 
-// TableName 指定表名
+// TableName 菜谱表名
 func (Recipe) TableName() string {
 	return "recipes"
 }
 
-// GetImagesSlice 获取图片数组
-func (r *Recipe) GetImagesSlice() []string {
-	if len(r.Images) == 0 {
-		return []string{}
-	}
-	var images []string
-	json.Unmarshal(r.Images, &images)
-	return images
+// ImagesSlice 把 JSON 列转成字符串切片
+func (r *Recipe) ImagesSlice() []string {
+	return jsonToStringSlice(r.Images)
 }
 
-// SetImagesSlice 设置图片数组
-func (r *Recipe) SetImagesSlice(images []string) error {
-	data, err := json.Marshal(images)
+// SetImages 把字符串切片写回 JSON 列
+func (r *Recipe) SetImages(items []string) error {
+	data, err := json.Marshal(items)
 	if err != nil {
 		return err
 	}
@@ -121,19 +107,59 @@ func (r *Recipe) SetImagesSlice(images []string) error {
 	return nil
 }
 
-// GetIngredientsSlice 获取食材数组
-func (r *Recipe) GetIngredientsSlice() []map[string]interface{} {
-	if len(r.Ingredients) == 0 {
-		return []map[string]interface{}{}
-	}
-	var ingredients []map[string]interface{}
-	json.Unmarshal(r.Ingredients, &ingredients)
-	return ingredients
+// TagsSlice 取标签数组
+func (r *Recipe) TagsSlice() []string {
+	return jsonToStringSlice(r.Tags)
 }
 
-// SetIngredientsSlice 设置食材数组
-func (r *Recipe) SetIngredientsSlice(ingredients []map[string]interface{}) error {
-	data, err := json.Marshal(ingredients)
+// SetTags 写标签数组
+func (r *Recipe) SetTags(items []string) error {
+	data, err := json.Marshal(items)
+	if err != nil {
+		return err
+	}
+	r.Tags = JSON(data)
+	return nil
+}
+
+// MoodTagsSlice 取心情标签
+func (r *Recipe) MoodTagsSlice() []string {
+	return jsonToStringSlice(r.MoodTags)
+}
+
+// SetMoodTags 写心情标签
+func (r *Recipe) SetMoodTags(items []string) error {
+	data, err := json.Marshal(items)
+	if err != nil {
+		return err
+	}
+	r.MoodTags = JSON(data)
+	return nil
+}
+
+// SceneTagsSlice 取场景标签
+func (r *Recipe) SceneTagsSlice() []string {
+	return jsonToStringSlice(r.SceneTags)
+}
+
+// SetSceneTags 写场景标签
+func (r *Recipe) SetSceneTags(items []string) error {
+	data, err := json.Marshal(items)
+	if err != nil {
+		return err
+	}
+	r.SceneTags = JSON(data)
+	return nil
+}
+
+// IngredientsList 取食材结构
+func (r *Recipe) IngredientsList() []map[string]any {
+	return jsonToMapSlice(r.Ingredients)
+}
+
+// SetIngredients 写食材结构
+func (r *Recipe) SetIngredients(items []map[string]any) error {
+	data, err := json.Marshal(items)
 	if err != nil {
 		return err
 	}
@@ -141,19 +167,14 @@ func (r *Recipe) SetIngredientsSlice(ingredients []map[string]interface{}) error
 	return nil
 }
 
-// GetStepsSlice 获取步骤数组
-func (r *Recipe) GetStepsSlice() []map[string]interface{} {
-	if len(r.Steps) == 0 {
-		return []map[string]interface{}{}
-	}
-	var steps []map[string]interface{}
-	json.Unmarshal(r.Steps, &steps)
-	return steps
+// StepsList 取步骤结构
+func (r *Recipe) StepsList() []map[string]any {
+	return jsonToMapSlice(r.Steps)
 }
 
-// SetStepsSlice 设置步骤数组
-func (r *Recipe) SetStepsSlice(steps []map[string]interface{}) error {
-	data, err := json.Marshal(steps)
+// SetSteps 写步骤结构
+func (r *Recipe) SetSteps(items []map[string]any) error {
+	data, err := json.Marshal(items)
 	if err != nil {
 		return err
 	}
@@ -161,28 +182,34 @@ func (r *Recipe) SetStepsSlice(steps []map[string]interface{}) error {
 	return nil
 }
 
-// IncrementViewCount 增加浏览次数
-func (r *Recipe) IncrementViewCount() error {
+// IncrViewCount 浏览次数 +1
+func (r *Recipe) IncrViewCount() error {
 	return DB.Model(r).UpdateColumn("view_count", gorm.Expr("view_count + ?", 1)).Error
 }
 
-// IncrementOrderCount 增加点餐次数
-func (r *Recipe) IncrementOrderCount() error {
-	return DB.Model(r).UpdateColumn("order_count", gorm.Expr("order_count + ?", 1)).Error
+// MarkUsed 在一顿中被选用时调用
+func (r *Recipe) MarkUsed() error {
+	now := time.Now()
+	return DB.Model(r).Updates(map[string]any{
+		"use_count":    gorm.Expr("use_count + ?", 1),
+		"last_used_at": now,
+	}).Error
 }
 
-// GetAverageRating 获取平均评分
-func (r *Recipe) GetAverageRating() float64 {
-	var result struct {
-		AvgRating float64
+func jsonToStringSlice(j JSON) []string {
+	if len(j) == 0 {
+		return []string{}
 	}
-	DB.Model(&RecipeReview{}).Select("AVG(rating) as avg_rating").Where("recipe_id = ?", r.ID).Scan(&result)
-	return result.AvgRating
+	var items []string
+	_ = json.Unmarshal(j, &items)
+	return items
 }
 
-// GetReviewCount 获取评价数量
-func (r *Recipe) GetReviewCount() int64 {
-	var count int64
-	DB.Model(&RecipeReview{}).Where("recipe_id = ?", r.ID).Count(&count)
-	return count
+func jsonToMapSlice(j JSON) []map[string]any {
+	if len(j) == 0 {
+		return []map[string]any{}
+	}
+	var items []map[string]any
+	_ = json.Unmarshal(j, &items)
+	return items
 }

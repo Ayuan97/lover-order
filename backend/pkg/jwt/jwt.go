@@ -5,87 +5,76 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
-	"love-order-backend/internal/config"
+	"lover-order-backend/internal/config"
 )
 
-// Claims JWT声明结构
+// TokenType 区分访问令牌和刷新令牌
+type TokenType string
+
+const (
+	TokenTypeAccess  TokenType = "access"
+	TokenTypeRefresh TokenType = "refresh"
+)
+
+// Claims 业务 JWT 声明
 type Claims struct {
-	UserID   uint   `json:"user_id"`
-	OpenID   string `json:"openid"`
-	Role     string `json:"role"`
-	FamilyID *uint  `json:"family_id"`
+	UserID uint      `json:"user_id"`
+	Type   TokenType `json:"type"`
 	jwt.RegisteredClaims
 }
 
-// GenerateToken 生成JWT token
-func GenerateToken(userID uint, openID, role string, familyID *uint) (string, error) {
-	cfg := config.AppConfig
-	if cfg == nil {
-		return "", errors.New("config not initialized")
-	}
-
-	now := time.Now()
-	claims := Claims{
-		UserID:   userID,
-		OpenID:   openID,
-		Role:     role,
-		FamilyID: familyID,
-		RegisteredClaims: jwt.RegisteredClaims{
-			Issuer:    "love-order",
-			Subject:   openID,
-			Audience:  []string{"love-order-app"},
-			ExpiresAt: jwt.NewNumericDate(now.Add(cfg.GetJWTExpireDuration())),
-			NotBefore: jwt.NewNumericDate(now),
-			IssuedAt:  jwt.NewNumericDate(now),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(cfg.JWT.Secret))
+// IssueAccess 签发访问令牌
+func IssueAccess(userID uint) (string, error) {
+	return issue(userID, TokenTypeAccess, config.AppConfig.AccessTokenDuration())
 }
 
-// ParseToken 解析JWT token
-func ParseToken(tokenString string) (*Claims, error) {
+// IssueRefresh 签发刷新令牌
+func IssueRefresh(userID uint) (string, error) {
+	return issue(userID, TokenTypeRefresh, config.AppConfig.RefreshTokenDuration())
+}
+
+// Parse 解析并校验令牌
+func Parse(tokenString string) (*Claims, error) {
 	cfg := config.AppConfig
 	if cfg == nil {
-		return nil, errors.New("config not initialized")
+		return nil, errors.New("配置未初始化")
 	}
 
-	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, errors.New("invalid signing method")
+			return nil, errors.New("非法签名算法")
 		}
 		return []byte(cfg.JWT.Secret), nil
 	})
-
 	if err != nil {
 		return nil, err
 	}
 
-	if claims, ok := token.Claims.(*Claims); ok && token.Valid {
-		return claims, nil
+	claims, ok := token.Claims.(*Claims)
+	if !ok || !token.Valid {
+		return nil, errors.New("无效令牌")
 	}
-
-	return nil, errors.New("invalid token")
+	return claims, nil
 }
 
-// RefreshToken 刷新token
-func RefreshToken(tokenString string) (string, error) {
-	claims, err := ParseToken(tokenString)
-	if err != nil {
-		return "", err
+func issue(userID uint, typ TokenType, dur time.Duration) (string, error) {
+	cfg := config.AppConfig
+	if cfg == nil {
+		return "", errors.New("配置未初始化")
 	}
-
-	// 检查token是否即将过期（30分钟内）
-	if time.Until(claims.ExpiresAt.Time) > 30*time.Minute {
-		return "", errors.New("token not ready for refresh")
+	now := time.Now()
+	claims := Claims{
+		UserID: userID,
+		Type:   typ,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer:    "lover-order",
+			Subject:   "user",
+			Audience:  []string{"lover-order-app"},
+			ExpiresAt: jwt.NewNumericDate(now.Add(dur)),
+			NotBefore: jwt.NewNumericDate(now),
+			IssuedAt:  jwt.NewNumericDate(now),
+		},
 	}
-
-	return GenerateToken(claims.UserID, claims.OpenID, claims.Role, claims.FamilyID)
-}
-
-// ValidateToken 验证token有效性
-func ValidateToken(tokenString string) bool {
-	_, err := ParseToken(tokenString)
-	return err == nil
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString([]byte(cfg.JWT.Secret))
 }

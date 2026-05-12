@@ -1,421 +1,136 @@
 package api
 
 import (
-	"net/http"
 	"strconv"
 
-	"love-order-backend/internal/middleware"
-	"love-order-backend/internal/service"
-
 	"github.com/gin-gonic/gin"
+	"lover-order-backend/internal/middleware"
+	"lover-order-backend/internal/service"
 )
 
-// RecipeHandler 菜谱处理器
+// RecipeHandler 菜谱 HTTP 入口
 type RecipeHandler struct {
-	recipeService   *service.RecipeService
-	categoryService *service.CategoryService
+	svc *service.RecipeService
 }
 
-// NewRecipeHandler 创建菜谱处理器
+// NewRecipeHandler 构造
 func NewRecipeHandler() *RecipeHandler {
-	return &RecipeHandler{
-		recipeService:   service.NewRecipeService(),
-		categoryService: service.NewCategoryService(),
-	}
+	return &RecipeHandler{svc: service.NewRecipeService()}
 }
 
-// CreateRecipe 创建菜谱
-func (h *RecipeHandler) CreateRecipe(c *gin.Context) {
-	user, exists := middleware.GetCurrentUser(c)
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户信息不存在",
-		})
-		return
-	}
+// List 列表
+func (h *RecipeHandler) List(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
 
-	if user.FamilyID == nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "用户未加入任何家庭",
-		})
-		return
+	q := service.ListQuery{
+		Mood:    c.Query("mood"),
+		Scene:   c.Query("scene"),
+		Keyword: c.Query("keyword"),
+		UserID:  uid,
 	}
-
-	var req service.CreateRecipeRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "请求参数错误",
-			"error":   err.Error(),
-		})
-		return
+	if v := c.Query("category_id"); v != "" {
+		if id, err := strconv.ParseUint(v, 10, 64); err == nil {
+			cid := uint(id)
+			q.CategoryID = &cid
+		}
 	}
+	if c.Query("favorite") == "1" || c.Query("favorite") == "true" {
+		q.Favorite = true
+	}
+	q.Page, _ = strconv.Atoi(c.DefaultQuery("page", "1"))
+	q.PageSize, _ = strconv.Atoi(c.DefaultQuery("page_size", "20"))
 
-	recipe, err := h.recipeService.CreateRecipe(&req, user.ID, *user.FamilyID)
+	result, err := h.svc.List(hid, q)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "创建菜谱失败",
-			"error":   err.Error(),
-		})
+		Fail(c, CodeInternalError, err.Error())
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "创建成功",
-		"data":    recipe,
-	})
+	OK(c, result)
 }
 
-// GetRecipeList 获取菜谱列表
-func (h *RecipeHandler) GetRecipeList(c *gin.Context) {
-	user, exists := middleware.GetCurrentUser(c)
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户信息不存在",
-		})
-		return
-	}
-
-	if user.FamilyID == nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "用户未加入任何家庭",
-		})
-		return
-	}
-
-	var req service.RecipeListRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "请求参数错误",
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	// 设置默认值
-	if req.Page == 0 {
-		req.Page = 1
-	}
-	if req.Size == 0 {
-		req.Size = 20
-	}
-
-	resp, err := h.recipeService.GetRecipeList(&req, *user.FamilyID)
+// Detail 详情
+func (h *RecipeHandler) Detail(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "获取菜谱列表失败",
-			"error":   err.Error(),
-		})
+		Fail(c, CodeBadRequest, "id 不合法")
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "获取成功",
-		"data":    resp,
-	})
+	r, err := h.svc.Get(hid, uint(id))
+	if err != nil {
+		Fail(c, CodeNotFound, err.Error())
+		return
+	}
+	OK(c, r)
 }
 
-// GetRecipeDetail 获取菜谱详情
-func (h *RecipeHandler) GetRecipeDetail(c *gin.Context) {
-	user, exists := middleware.GetCurrentUser(c)
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户信息不存在",
-		})
+// Create 新建菜谱
+func (h *RecipeHandler) Create(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
+	var in service.RecipeInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		Fail(c, CodeBadRequest, "参数有误")
 		return
 	}
-
-	if user.FamilyID == nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "用户未加入任何家庭",
-		})
-		return
-	}
-
-	recipeIDStr := c.Param("id")
-	recipeID, err := strconv.ParseUint(recipeIDStr, 10, 32)
+	r, err := h.svc.Create(hid, uid, in)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "无效的菜谱ID",
-		})
+		Fail(c, CodeInternalError, err.Error())
 		return
 	}
-
-	recipe, err := h.recipeService.GetRecipeByID(uint(recipeID), *user.FamilyID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "获取菜谱详情失败",
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "获取成功",
-		"data":    recipe,
-	})
+	OK(c, r)
 }
 
-// UpdateRecipe 更新菜谱
-func (h *RecipeHandler) UpdateRecipe(c *gin.Context) {
-	user, exists := middleware.GetCurrentUser(c)
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户信息不存在",
-		})
-		return
-	}
-
-	if user.FamilyID == nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "用户未加入任何家庭",
-		})
-		return
-	}
-
-	recipeIDStr := c.Param("id")
-	recipeID, err := strconv.ParseUint(recipeIDStr, 10, 32)
+// Update 更新
+func (h *RecipeHandler) Update(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "无效的菜谱ID",
-		})
+		Fail(c, CodeBadRequest, "id 不合法")
 		return
 	}
-
-	var req service.UpdateRecipeRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "请求参数错误",
-			"error":   err.Error(),
-		})
+	var in service.RecipeInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		Fail(c, CodeBadRequest, "参数有误")
 		return
 	}
-
-	err = h.recipeService.UpdateRecipe(uint(recipeID), &req, user.ID, *user.FamilyID)
+	r, err := h.svc.Update(hid, uint(id), in)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "更新菜谱失败",
-			"error":   err.Error(),
-		})
+		Fail(c, CodeInternalError, err.Error())
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "更新成功",
-	})
+	OK(c, r)
 }
 
-// DeleteRecipe 删除菜谱
-func (h *RecipeHandler) DeleteRecipe(c *gin.Context) {
-	user, exists := middleware.GetCurrentUser(c)
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户信息不存在",
-		})
-		return
-	}
-
-	if user.FamilyID == nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "用户未加入任何家庭",
-		})
-		return
-	}
-
-	recipeIDStr := c.Param("id")
-	recipeID, err := strconv.ParseUint(recipeIDStr, 10, 32)
+// Delete 删除
+func (h *RecipeHandler) Delete(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "无效的菜谱ID",
-		})
+		Fail(c, CodeBadRequest, "id 不合法")
 		return
 	}
-
-	err = h.recipeService.DeleteRecipe(uint(recipeID), user.ID, *user.FamilyID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "删除菜谱失败",
-			"error":   err.Error(),
-		})
+	if err := h.svc.Delete(hid, uint(id)); err != nil {
+		Fail(c, CodeInternalError, err.Error())
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "删除成功",
-	})
+	OK(c, nil)
 }
 
-// ToggleFavorite 切换收藏状态
+// ToggleFavorite 切换收藏
 func (h *RecipeHandler) ToggleFavorite(c *gin.Context) {
-	userID, exists := middleware.GetCurrentUserID(c)
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户信息不存在",
-		})
-		return
-	}
-
-	recipeIDStr := c.Param("id")
-	recipeID, err := strconv.ParseUint(recipeIDStr, 10, 32)
+	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "无效的菜谱ID",
-		})
+		Fail(c, CodeBadRequest, "id 不合法")
 		return
 	}
-
-	isFavorited, err := h.recipeService.ToggleFavorite(uint(recipeID), userID)
+	favored, err := h.svc.ToggleFavorite(uid, hid, uint(id))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "操作失败",
-			"error":   err.Error(),
-		})
+		Fail(c, CodeBadRequest, err.Error())
 		return
 	}
-
-	message := "取消收藏成功"
-	if isFavorited {
-		message = "收藏成功"
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": message,
-		"data": gin.H{
-			"is_favorited": isFavorited,
-		},
-	})
-}
-
-// GetFavoriteRecipes 获取收藏的菜谱
-func (h *RecipeHandler) GetFavoriteRecipes(c *gin.Context) {
-	userID, exists := middleware.GetCurrentUserID(c)
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{
-			"code":    401,
-			"message": "用户信息不存在",
-		})
-		return
-	}
-
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("size", "20"))
-
-	resp, err := h.recipeService.GetFavoriteRecipes(userID, page, size)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "获取收藏菜谱失败",
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "获取成功",
-		"data":    resp,
-	})
-}
-
-// CreateRecipeDev 创建菜谱（开发测试用，无需认证）
-func (h *RecipeHandler) CreateRecipeDev(c *gin.Context) {
-	var req service.CreateRecipeRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "请求参数错误",
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	// 使用默认家庭ID和用户ID（开发测试用）
-	familyID := uint(1)
-	userID := uint(1)
-
-	recipe, err := h.recipeService.CreateRecipe(&req, familyID, userID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "创建菜谱失败",
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusCreated, gin.H{
-		"code":    201,
-		"message": "创建成功",
-		"data":    recipe,
-	})
-}
-
-// GetRecipeListDev 获取菜谱列表（开发测试用，无需认证）
-func (h *RecipeHandler) GetRecipeListDev(c *gin.Context) {
-	// 使用默认家庭ID（开发测试用）
-	familyID := uint(1)
-
-	// 解析查询参数
-	var req service.RecipeListRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "请求参数错误",
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	// 设置默认值
-	if req.Page <= 0 {
-		req.Page = 1
-	}
-	if req.Size <= 0 {
-		req.Size = 20
-	}
-
-	resp, err := h.recipeService.GetRecipeList(&req, familyID)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    400,
-			"message": "获取菜谱列表失败",
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    200,
-		"message": "获取成功",
-		"data":    resp,
-	})
+	OK(c, gin.H{"favored": favored})
 }

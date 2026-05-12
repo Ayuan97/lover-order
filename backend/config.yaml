@@ -1,45 +1,51 @@
-# Love Order Backend Configuration
+# lover-order 后端配置
 
 server:
   port: 8081
-  mode: debug # debug, release, test
+  mode: debug
 
 database:
   host: 127.0.0.1
   port: 3306
   username: root
   password: root
-  database: love_order
+  database: lover_order
   charset: utf8mb4
   parse_time: true
   loc: Local
   max_idle_conns: 10
   max_open_conns: 100
-  conn_max_lifetime: 3600 # seconds
+  conn_max_lifetime: 3600
 
 jwt:
-  secret: love-order-jwt-secret-key-2024
-  expire_hours: 24
+  secret: lover-order-jwt-secret-please-change-in-production
+  expire_hours: 168
+  refresh_expire_hours: 720
 
-wechat:
-  app_id: wxc844a0f93f489e6e
-  app_secret: f05dba288ef6c4c278697a4119f615f8
+apple:
+  team_id: ""
+  client_id: ""
+  key_id: ""
+  private_key_path: ""
+  jwks_url: https://appleid.apple.com/auth/keys
+  issuer: https://appleid.apple.com
 
 upload:
   path: ./uploads
-  max_size: 5242880 # 5MB
+  max_size: 10485760
   allowed_types:
     - jpg
     - jpeg
     - png
-    - gif
+    - webp
+    - heic
 
 log:
-  level: info # debug, info, warn, error
+  level: info
   file: ./logs/app.log
-  max_size: 100 # MB
+  max_size: 100
   max_backups: 3
-  max_age: 28 # days
+  max_age: 28
 
 cors:
   allow_origins:
@@ -47,9 +53,6 @@ cors:
   allow_methods:
     - GET
     - POST
-    - PUT
-    - DELETE
-    - OPTIONS
   allow_headers:
     - Origin
     - Content-Type

@@ -3,246 +3,107 @@ package middleware
 import (
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"love-order-backend/internal/model"
-	"love-order-backend/pkg/jwt"
+	"lover-order-backend/internal/model"
+	"lover-order-backend/pkg/jwt"
 )
 
-// AuthMiddleware JWT认证中间件
-func AuthMiddleware() gin.HandlerFunc {
+// 上下文键
+const (
+	ctxUser        = "user"
+	ctxUserID      = "user_id"
+	ctxHouseholdID = "household_id"
+)
+
+// AuthRequired 强制登录中间件
+func AuthRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := extractToken(c)
 		if token == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "未提供认证token",
-			})
-			c.Abort()
+			abort(c, http.StatusUnauthorized, "请先登录")
 			return
 		}
-
-		claims, err := jwt.ParseToken(token)
+		claims, err := jwt.Parse(token)
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "无效的token",
-				"error":   err.Error(),
-			})
-			c.Abort()
+			abort(c, http.StatusUnauthorized, "登录已失效")
+			return
+		}
+		if claims.Type != jwt.TokenTypeAccess {
+			abort(c, http.StatusUnauthorized, "令牌类型错误")
 			return
 		}
 
-		// 验证用户是否存在且激活
 		var user model.User
 		if err := model.DB.Where("id = ? AND is_active = ?", claims.UserID, true).First(&user).Error; err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "用户不存在或已被禁用",
-			})
-			c.Abort()
+			abort(c, http.StatusUnauthorized, "用户不存在或已停用")
 			return
 		}
 
-		// 检查访客是否过期
-		if user.IsGuest() && user.IsGuestExpired() {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "访客权限已过期",
-			})
-			c.Abort()
-			return
-		}
-
-		// 更新最后登录时间
-		now := time.Now()
-		model.DB.Model(&user).Update("last_login_at", now)
-
-		// 将用户信息存储到上下文中
-		c.Set("user", &user)
-		c.Set("user_id", user.ID)
-		c.Set("user_role", user.Role)
-		c.Set("family_id", user.FamilyID)
-
+		c.Set(ctxUser, &user)
+		c.Set(ctxUserID, user.ID)
+		c.Set(ctxHouseholdID, user.HouseholdID)
 		c.Next()
 	}
 }
 
-// AdminMiddleware 管理员权限中间件
-func AdminMiddleware() gin.HandlerFunc {
+// HouseholdRequired 要求用户已加入某个家
+func HouseholdRequired() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		user, exists := c.Get("user")
-		if !exists {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "用户信息不存在",
-			})
-			c.Abort()
+		u, ok := CurrentUser(c)
+		if !ok {
+			abort(c, http.StatusUnauthorized, "请先登录")
 			return
 		}
-
-		u := user.(*model.User)
-		if !u.IsAdmin() {
-			c.JSON(http.StatusForbidden, gin.H{
-				"code":    403,
-				"message": "需要管理员权限",
-			})
-			c.Abort()
+		if !u.InHousehold() {
+			abort(c, http.StatusForbidden, "请先创建或加入一个家")
 			return
 		}
-
 		c.Next()
 	}
 }
 
-// FamilyMemberMiddleware 家庭成员权限中间件
-func FamilyMemberMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		user, exists := c.Get("user")
-		if !exists {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "用户信息不存在",
-			})
-			c.Abort()
-			return
-		}
-
-		u := user.(*model.User)
-		if u.FamilyID == nil {
-			c.JSON(http.StatusForbidden, gin.H{
-				"code":    403,
-				"message": "用户未加入任何家庭",
-			})
-			c.Abort()
-			return
-		}
-
-		// 访客用户需要额外检查权限
-		if u.IsGuest() && u.IsGuestExpired() {
-			c.JSON(http.StatusForbidden, gin.H{
-				"code":    403,
-				"message": "访客权限已过期",
-			})
-			c.Abort()
-			return
-		}
-
-		c.Next()
+// CurrentUser 取当前登录用户
+func CurrentUser(c *gin.Context) (*model.User, bool) {
+	v, ok := c.Get(ctxUser)
+	if !ok {
+		return nil, false
 	}
+	u, ok := v.(*model.User)
+	return u, ok
 }
 
-// FamilyAccessMiddleware 家庭访问权限中间件
-func FamilyAccessMiddleware(familyIDParam string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		user, exists := c.Get("user")
-		if !exists {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"code":    401,
-				"message": "用户信息不存在",
-			})
-			c.Abort()
-			return
-		}
-
-		u := user.(*model.User)
-		
-		// 从URL参数或查询参数获取家庭ID
-		familyIDStr := c.Param(familyIDParam)
-		if familyIDStr == "" {
-			familyIDStr = c.Query(familyIDParam)
-		}
-
-		if familyIDStr != "" {
-			// 这里需要将字符串转换为uint并验证权限
-			// 简化处理，实际项目中需要更严格的验证
-			if u.FamilyID == nil {
-				c.JSON(http.StatusForbidden, gin.H{
-					"code":    403,
-					"message": "无权访问该家庭数据",
-				})
-				c.Abort()
-				return
-			}
-		}
-
-		c.Next()
+// CurrentUserID 取当前用户 ID
+func CurrentUserID(c *gin.Context) (uint, bool) {
+	v, ok := c.Get(ctxUserID)
+	if !ok {
+		return 0, false
 	}
+	id, ok := v.(uint)
+	return id, ok
 }
 
-// OptionalAuthMiddleware 可选认证中间件（用于公开接口）
-func OptionalAuthMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		token := extractToken(c)
-		if token == "" {
-			c.Next()
-			return
-		}
-
-		claims, err := jwt.ParseToken(token)
-		if err != nil {
-			c.Next()
-			return
-		}
-
-		// 验证用户是否存在且激活
-		var user model.User
-		if err := model.DB.Where("id = ? AND is_active = ?", claims.UserID, true).First(&user).Error; err != nil {
-			c.Next()
-			return
-		}
-
-		// 将用户信息存储到上下文中
-		c.Set("user", &user)
-		c.Set("user_id", user.ID)
-		c.Set("user_role", user.Role)
-		c.Set("family_id", user.FamilyID)
-
-		c.Next()
+// CurrentHouseholdID 取当前用户所在家的 ID
+func CurrentHouseholdID(c *gin.Context) (uint, bool) {
+	u, ok := CurrentUser(c)
+	if !ok || u.HouseholdID == nil {
+		return 0, false
 	}
+	return *u.HouseholdID, true
 }
 
-// extractToken 从请求中提取token
 func extractToken(c *gin.Context) string {
-	// 从Authorization header中提取
-	authHeader := c.GetHeader("Authorization")
-	if authHeader != "" {
-		parts := strings.SplitN(authHeader, " ", 2)
+	header := c.GetHeader("Authorization")
+	if header != "" {
+		parts := strings.SplitN(header, " ", 2)
 		if len(parts) == 2 && parts[0] == "Bearer" {
 			return parts[1]
 		}
 	}
-
-	// 从查询参数中提取
-	token := c.Query("token")
-	if token != "" {
-		return token
-	}
-
-	// 从表单中提取
-	token = c.PostForm("token")
-	if token != "" {
-		return token
-	}
-
 	return ""
 }
 
-// GetCurrentUser 获取当前用户
-func GetCurrentUser(c *gin.Context) (*model.User, bool) {
-	user, exists := c.Get("user")
-	if !exists {
-		return nil, false
-	}
-	return user.(*model.User), true
-}
-
-// GetCurrentUserID 获取当前用户ID
-func GetCurrentUserID(c *gin.Context) (uint, bool) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		return 0, false
-	}
-	return userID.(uint), true
+func abort(c *gin.Context, code int, msg string) {
+	c.JSON(code, gin.H{"code": code, "message": msg})
+	c.Abort()
 }

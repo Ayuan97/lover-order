@@ -7,11 +7,12 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Config 应用配置根结构
 type Config struct {
 	Server   ServerConfig   `mapstructure:"server"`
 	Database DatabaseConfig `mapstructure:"database"`
 	JWT      JWTConfig      `mapstructure:"jwt"`
-	Wechat   WechatConfig   `mapstructure:"wechat"`
+	Apple    AppleConfig    `mapstructure:"apple"`
 	Upload   UploadConfig   `mapstructure:"upload"`
 	Log      LogConfig      `mapstructure:"log"`
 	CORS     CORSConfig     `mapstructure:"cors"`
@@ -37,13 +38,19 @@ type DatabaseConfig struct {
 }
 
 type JWTConfig struct {
-	Secret      string `mapstructure:"secret"`
-	ExpireHours int    `mapstructure:"expire_hours"`
+	Secret             string `mapstructure:"secret"`
+	ExpireHours        int    `mapstructure:"expire_hours"`
+	RefreshExpireHours int    `mapstructure:"refresh_expire_hours"`
 }
 
-type WechatConfig struct {
-	AppID     string `mapstructure:"app_id"`
-	AppSecret string `mapstructure:"app_secret"`
+// AppleConfig Apple Sign In 配置
+type AppleConfig struct {
+	TeamID         string `mapstructure:"team_id"`
+	ClientID       string `mapstructure:"client_id"`
+	KeyID          string `mapstructure:"key_id"`
+	PrivateKeyPath string `mapstructure:"private_key_path"`
+	JWKSURL        string `mapstructure:"jwks_url"`
+	Issuer         string `mapstructure:"issuer"`
 }
 
 type UploadConfig struct {
@@ -66,6 +73,7 @@ type CORSConfig struct {
 	AllowHeaders []string `mapstructure:"allow_headers"`
 }
 
+// AppConfig 全局配置实例
 var AppConfig *Config
 
 // LoadConfig 加载配置文件
@@ -73,28 +81,27 @@ func LoadConfig(configPath string) *Config {
 	viper.SetConfigFile(configPath)
 	viper.SetConfigType("yaml")
 
-	// 设置默认值
 	setDefaults()
 
 	if err := viper.ReadInConfig(); err != nil {
-		log.Fatalf("Error reading config file: %v", err)
+		log.Fatalf("读取配置文件失败：%v", err)
 	}
 
-	var config Config
-	if err := viper.Unmarshal(&config); err != nil {
-		log.Fatalf("Error unmarshaling config: %v", err)
+	var cfg Config
+	if err := viper.Unmarshal(&cfg); err != nil {
+		log.Fatalf("解析配置失败：%v", err)
 	}
 
-	AppConfig = &config
-	return &config
+	AppConfig = &cfg
+	return &cfg
 }
 
-// setDefaults 设置默认配置值
+// setDefaults 设置默认值
 func setDefaults() {
-	viper.SetDefault("server.port", 8080)
+	viper.SetDefault("server.port", 8081)
 	viper.SetDefault("server.mode", "debug")
-	
-	viper.SetDefault("database.host", "localhost")
+
+	viper.SetDefault("database.host", "127.0.0.1")
 	viper.SetDefault("database.port", 3306)
 	viper.SetDefault("database.charset", "utf8mb4")
 	viper.SetDefault("database.parse_time", true)
@@ -102,21 +109,25 @@ func setDefaults() {
 	viper.SetDefault("database.max_idle_conns", 10)
 	viper.SetDefault("database.max_open_conns", 100)
 	viper.SetDefault("database.conn_max_lifetime", 3600)
-	
-	viper.SetDefault("jwt.expire_hours", 24)
-	
+
+	viper.SetDefault("jwt.expire_hours", 168)
+	viper.SetDefault("jwt.refresh_expire_hours", 720)
+
+	viper.SetDefault("apple.jwks_url", "https://appleid.apple.com/auth/keys")
+	viper.SetDefault("apple.issuer", "https://appleid.apple.com")
+
 	viper.SetDefault("upload.path", "./uploads")
-	viper.SetDefault("upload.max_size", 5242880)
-	viper.SetDefault("upload.allowed_types", []string{"jpg", "jpeg", "png", "gif"})
-	
+	viper.SetDefault("upload.max_size", 10485760)
+
 	viper.SetDefault("log.level", "info")
-	viper.SetDefault("log.file", "./logs/app.log")
-	viper.SetDefault("log.max_size", 100)
-	viper.SetDefault("log.max_backups", 3)
-	viper.SetDefault("log.max_age", 28)
 }
 
-// GetJWTExpireDuration 获取JWT过期时间
-func (c *Config) GetJWTExpireDuration() time.Duration {
+// AccessTokenDuration 访问令牌有效期
+func (c *Config) AccessTokenDuration() time.Duration {
 	return time.Duration(c.JWT.ExpireHours) * time.Hour
+}
+
+// RefreshTokenDuration 刷新令牌有效期
+func (c *Config) RefreshTokenDuration() time.Duration {
+	return time.Duration(c.JWT.RefreshExpireHours) * time.Hour
 }
