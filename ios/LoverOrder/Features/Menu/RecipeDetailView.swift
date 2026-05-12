@@ -14,6 +14,10 @@ struct RecipeDetailView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var showSteps: Bool = false
+    @State private var showEdit: Bool = false
+    @State private var confirmDelete: Bool = false
+    @State private var saveToFutureNote: String = ""
+    @State private var showSaveToFuture: Bool = false
 
     var body: some View {
         ScrollView {
@@ -46,13 +50,51 @@ struct RecipeDetailView: View {
         .navigationTitle(recipe?.name ?? "菜品")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    Task { await toggleFavor() }
-                } label: {
-                    Image(systemName: isFavored ? "heart.fill" : "heart")
-                        .foregroundStyle(isFavored ? Color.brandGreen : Color.inkSecondary)
+                HStack(spacing: AppSpacing.md) {
+                    Button {
+                        Task { await toggleFavor() }
+                    } label: {
+                        Image(systemName: isFavored ? "heart.fill" : "heart")
+                            .foregroundStyle(isFavored ? Color.brandGreen : Color.inkSecondary)
+                    }
+                    Menu {
+                        Button {
+                            showEdit = true
+                        } label: {
+                            Label("编辑菜谱", systemImage: "square.and.pencil")
+                        }
+                        Button(role: .destructive) {
+                            confirmDelete = true
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .foregroundStyle(Color.inkSecondary)
+                    }
                 }
             }
+        }
+        .sheet(isPresented: $showEdit) {
+            if let recipe {
+                RecipeEditView(mode: .edit(recipe)) { updated in
+                    self.recipe = updated
+                }
+                .environmentObject(appState)
+            }
+        }
+        .confirmationDialog("删除这道菜谱？", isPresented: $confirmDelete) {
+            Button("删除", role: .destructive) {
+                Task { await deleteRecipe() }
+            }
+            Button("再想想", role: .cancel) {}
+        } message: {
+            Text("删除后这道菜不会再出现在菜单里 但已经记下的历史不受影响")
+        }
+        .alert("已留到周末", isPresented: $showSaveToFuture) {
+            Button("好") {}
+        } message: {
+            Text("可以在'未来这顿'里找到它")
         }
     }
 
@@ -273,7 +315,7 @@ struct RecipeDetailView: View {
     private var bottomBar: some View {
         HStack(spacing: AppSpacing.md) {
             SecondaryButton(title: "留到周末", icon: "calendar") {
-                // 后续接入未来这顿
+                Task { await saveToFuture() }
             }
             PrimaryButton(title: alreadyAdded ? "已加入" : "加入这一顿", isLoading: isLoading) {
                 Task { await addToMeal() }
@@ -342,6 +384,27 @@ struct RecipeDetailView: View {
         do {
             _ = try await MealService.shared.addDish(mealId: meal.id, dish: DishInput(recipeId: recipe.id))
             self.meal = try await MealService.shared.detail(id: meal.id)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteRecipe() async {
+        guard let recipe else { return }
+        do {
+            try await RecipeService.shared.delete(id: recipe.id)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func saveToFuture() async {
+        guard let recipe else { return }
+        do {
+            let future = try await MealService.shared.current(scene: .future, mood: appState.currentMood)
+            _ = try await MealService.shared.addDish(mealId: future.id, dish: DishInput(recipeId: recipe.id))
+            showSaveToFuture = true
         } catch {
             errorMessage = error.localizedDescription
         }

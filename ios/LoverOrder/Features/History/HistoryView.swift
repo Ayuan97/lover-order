@@ -104,7 +104,12 @@ struct HistoryView: View {
         } else {
             VStack(spacing: AppSpacing.md) {
                 ForEach(vm.meals) { meal in
-                    HistoryCard(meal: meal)
+                    NavigationLink {
+                        HistoryDetailView(mealId: meal.id)
+                    } label: {
+                        HistoryCard(meal: meal)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }

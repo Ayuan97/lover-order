@@ -14,6 +14,9 @@ struct ProfileView: View {
     @AppStorage("profile.householdMode") private var householdMode: String = HouseholdMode.couple.rawValue
     @AppStorage("profile.showScene") private var showSceneInList: Bool = true
 
+    @State private var showCategoryManagement: Bool = false
+    @State private var confirmLeaveHousehold: Bool = false
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -25,6 +28,7 @@ struct ProfileView: View {
                     moodPicker
                     tastesCard
                     displayCard
+                    toolsCard
                     householdCard
                     actionsCard
                     Color.clear.frame(height: 40)
@@ -37,6 +41,38 @@ struct ProfileView: View {
                 selectedTastes = Set(appState.currentUser?.tastePrefs ?? [])
             }
             .navigationBarHidden(true)
+            .sheet(isPresented: $showCategoryManagement) {
+                CategoryManagementView()
+            }
+        }
+    }
+
+    private var toolsCard: some View {
+        SectionCard {
+            HStack(spacing: AppSpacing.sm) {
+                Image(systemName: "square.grid.2x2")
+                    .foregroundStyle(Color.brandGreen)
+                Text("整理一下")
+                    .font(AppFont.headline(16))
+                    .foregroundStyle(Color.inkPrimary)
+                Spacer()
+            }
+            Button {
+                showCategoryManagement = true
+            } label: {
+                HStack {
+                    Text("管理菜谱分类")
+                        .font(AppFont.body(15))
+                        .foregroundStyle(Color.inkPrimary)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(Color.inkMuted)
+                }
+                .padding(AppSpacing.md)
+                .background(Color.appBackground)
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -212,9 +248,28 @@ struct ProfileView: View {
                         UIPasteboard.general.string = inviteCode ?? h.inviteCode
                     }
                 }
+                Button {
+                    confirmLeaveHousehold = true
+                } label: {
+                    HStack {
+                        Image(systemName: "door.left.hand.open")
+                        Text("退出这个家")
+                    }
+                    .font(AppFont.caption(13))
+                    .foregroundStyle(Color.inkMuted)
+                    .padding(.top, AppSpacing.sm)
+                }
             } else {
                 Text("还没加入家").font(AppFont.caption()).foregroundStyle(Color.inkMuted)
             }
+        }
+        .confirmationDialog("退出当前的家？", isPresented: $confirmLeaveHousehold) {
+            Button("退出", role: .destructive) {
+                Task { await leaveHousehold() }
+            }
+            Button("再想想", role: .cancel) {}
+        } message: {
+            Text("退出后你将看不到这个家的菜单和记录 重新加入即可恢复")
         }
     }
 
@@ -265,6 +320,14 @@ struct ProfileView: View {
         do {
             let invite = try await HouseholdService.shared.createInvite(.init(expiresIn: 86400 * 7, maxUses: 5))
             inviteCode = invite.code
+        } catch {}
+    }
+
+    private func leaveHousehold() async {
+        do {
+            try await HouseholdService.shared.leave()
+            appState.household = nil
+            await appState.refreshProfile()
         } catch {}
     }
 }

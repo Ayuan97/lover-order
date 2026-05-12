@@ -5,6 +5,7 @@ struct MenuView: View {
     @EnvironmentObject private var appState: AppState
     @StateObject private var vm = MenuViewModel()
     @State private var searchActive: Bool = false
+    @State private var showCreateRecipe: Bool = false
 
     private let grid = [
         GridItem(.flexible(), spacing: AppSpacing.md),
@@ -34,6 +35,12 @@ struct MenuView: View {
                 await vm.bootstrap(scene: appState.currentScene, mood: appState.currentMood)
             }
             .navigationBarHidden(true)
+            .sheet(isPresented: $showCreateRecipe) {
+                RecipeEditView(mode: .create) { _ in
+                    Task { await vm.loadRecipes() }
+                }
+                .environmentObject(appState)
+            }
         }
     }
 
@@ -46,6 +53,16 @@ struct MenuView: View {
                 Image(systemName: "leaf.fill")
                     .foregroundStyle(Color.brandGreen)
                 Spacer()
+                Button {
+                    showCreateRecipe = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 14, weight: .semibold))
+                        .frame(width: 36, height: 36)
+                        .foregroundStyle(.white)
+                        .background(Color.brandGreen)
+                        .clipShape(Circle())
+                }
             }
             Text("把这一顿想选的菜放在这里")
                 .font(AppFont.body())

@@ -4,6 +4,9 @@ import SwiftUI
 struct MealNowView: View {
     @EnvironmentObject private var appState: AppState
     @StateObject private var vm = MealNowViewModel()
+    @State private var showAddDish: Bool = false
+    @State private var showReview: Bool = false
+    @State private var reviewMealId: UInt?
 
     var body: some View {
         NavigationStack {
@@ -29,6 +32,21 @@ struct MealNowView: View {
                 await vm.load(scene: appState.currentScene, mood: appState.currentMood)
             }
             .navigationBarHidden(true)
+            .sheet(isPresented: $showAddDish) {
+                if let meal = vm.meal {
+                    AddDishView(mealId: meal.id) {
+                        Task { await vm.load(scene: appState.currentScene, mood: appState.currentMood) }
+                    }
+                    .environmentObject(appState)
+                }
+            }
+            .sheet(isPresented: $showReview) {
+                if let mid = reviewMealId {
+                    MealReviewView(mealId: mid) {
+                        Task { await vm.load(scene: appState.currentScene, mood: appState.currentMood) }
+                    }
+                }
+            }
         }
     }
 
@@ -153,6 +171,16 @@ struct MealNowView: View {
     private var bottomBar: some View {
         HStack(spacing: AppSpacing.md) {
             Button {
+                showAddDish = true
+            } label: {
+                VStack(spacing: 2) {
+                    Image(systemName: "plus.circle")
+                    Text("加菜").font(AppFont.caption())
+                }
+                .frame(width: 60, height: 52)
+                .foregroundStyle(Color.brandGreen)
+            }
+            Button {
                 Task { await randomPick() }
             } label: {
                 VStack(spacing: 2) {
@@ -203,6 +231,10 @@ struct MealNowView: View {
             await vm.confirm()
         case .confirmed:
             await vm.complete()
+            if let completedId = vm.meal?.id {
+                reviewMealId = completedId
+                showReview = true
+            }
         case .completed, .cancelled:
             await vm.load(scene: appState.currentScene, mood: appState.currentMood)
         }
