@@ -117,30 +117,24 @@ struct RecipeDetailView: View {
         }
     }
 
-    // metrics 改成 2 列网格 每个一行 icon+文字 上下分组
+    // metrics 4 个气质标签 横向排开 描述这道菜的气质
     private func metricsGrid(_ r: Recipe) -> some View {
         let items = buildMetrics(r)
-        let columns = Array(repeating: GridItem(.flexible(), spacing: AppSpacing.md), count: 2)
-        return LazyVGrid(columns: columns, alignment: .leading, spacing: AppSpacing.sm) {
+        return HStack(alignment: .top, spacing: AppSpacing.sm) {
             ForEach(items, id: \.label) { item in
-                HStack(spacing: AppSpacing.sm) {
+                VStack(spacing: AppSpacing.xs) {
                     Image(systemName: item.icon)
-                        .font(.system(size: 16))
+                        .font(.system(size: 18, weight: .light))
                         .foregroundStyle(Color.brandGreen)
-                        .frame(width: 22)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.label)
-                            .font(AppFont.caption(11))
-                            .foregroundStyle(Color.inkMuted)
-                        Text(item.value)
-                            .font(AppFont.body(14))
-                            .foregroundStyle(Color.inkPrimary)
-                    }
+                    Text(item.label)
+                        .font(AppFont.caption(11))
+                        .foregroundStyle(Color.inkMuted)
+                    Text(item.value)
+                        .font(AppFont.body(13))
+                        .foregroundStyle(Color.inkPrimary)
+                        .multilineTextAlignment(.center)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(AppSpacing.md)
-                .background(Color.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+                .frame(maxWidth: .infinity)
             }
         }
     }
@@ -152,22 +146,58 @@ struct RecipeDetailView: View {
     }
 
     private func buildMetrics(_ r: Recipe) -> [MetricItem] {
-        var items: [MetricItem] = []
-        if let t = r.cookingTime, t > 0 {
-            items.append(.init(icon: "clock", label: "用时", value: "\(t) 分钟"))
+        [
+            .init(icon: "heart", label: "什么口味", value: flavorPhrase(r)),
+            .init(icon: "leaf", label: "适合一顿", value: feelPhrase(r)),
+            .init(icon: "person.2", label: "适合多人", value: peoplePhrase(r)),
+            .init(icon: "calendar", label: "工作日做饭", value: timePhrase(r)),
+        ]
+    }
+
+    // 风味短语：优先取标签首项 否则按难度推断
+    private func flavorPhrase(_ r: Recipe) -> String {
+        if let tags = r.tags, let first = tags.first { return first }
+        switch r.difficulty {
+        case .easy: return "简单家常"
+        case .medium: return "有点讲究"
+        case .hard: return "下点功夫"
+        case nil: return "随心而做"
         }
-        if let s = r.servings, s > 0 {
-            items.append(.init(icon: "person.2", label: "适合", value: "\(s) 人份"))
+    }
+
+    // 情绪短语：按 moodTags 推断
+    private func feelPhrase(_ r: Recipe) -> String {
+        guard let moods = r.moodTags, let m = moods.first else {
+            return "怎么吃都好"
         }
-        if let d = r.difficulty {
-            items.append(.init(icon: "flame", label: "难度", value: d.label))
+        switch m {
+        case .easy: return "不想费脑筋"
+        case .normal: return "正常吃一顿"
+        case .serious: return "想吃得好一些"
+        case .change: return "想换换口味"
         }
-        if let used = r.useCount, used > 0 {
-            items.append(.init(icon: "fork.knife", label: "吃过", value: "\(used) 次"))
-        } else if let scenes = r.sceneTags, !scenes.isEmpty {
-            items.append(.init(icon: "sun.max", label: "场合", value: scenes.first?.label ?? ""))
+    }
+
+    // 适合人份
+    private func peoplePhrase(_ r: Recipe) -> String {
+        switch r.servings ?? 0 {
+        case 0: return "几个人都行"
+        case 1: return "一个人吃"
+        case 2: return "两个人一起吃"
+        case 3...4: return "三四个人合适"
+        default: return "招呼客人也够"
         }
-        return items
+    }
+
+    // 是否适合工作日
+    private func timePhrase(_ r: Recipe) -> String {
+        switch r.cookingTime ?? 0 {
+        case 0: return "看心情"
+        case 1...15: return "15 分钟搞定"
+        case 16...30: return "半小时左右"
+        case 31...60: return "正经做一顿"
+        default: return "周末慢慢做"
+        }
     }
 
     private func tagsRow(_ r: Recipe) -> some View {
@@ -237,51 +267,37 @@ struct RecipeDetailView: View {
         }
     }
 
+    // 做法 NavigationLink 进入独立步骤页
     private func stepsToggle(_ r: Recipe) -> some View {
-        VStack(alignment: .leading, spacing: AppSpacing.md) {
-            HStack {
-                Text("做法")
-                    .font(AppFont.headline(15))
-                    .foregroundStyle(Color.inkPrimary)
+        NavigationLink {
+            RecipeStepsView(recipe: r)
+        } label: {
+            HStack(spacing: AppSpacing.md) {
+                ZStack {
+                    Color.brandGreen.opacity(0.12)
+                    Image(systemName: "list.number")
+                        .foregroundStyle(Color.brandGreen)
+                }
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("做法")
+                        .font(AppFont.headline(15))
+                        .foregroundStyle(Color.inkPrimary)
+                    Text("查看怎么做 \(r.steps?.count ?? 0) 步")
+                        .font(AppFont.caption(11))
+                        .foregroundStyle(Color.inkMuted)
+                }
                 Spacer()
-                Button {
-                    withAnimation { showSteps.toggle() }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(showSteps ? "收起" : "查看怎么做")
-                        Image(systemName: showSteps ? "chevron.up" : "chevron.down")
-                    }
-                    .font(AppFont.caption(13))
-                    .foregroundStyle(Color.brandGreen)
-                }
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(Color.inkMuted)
             }
-            if showSteps {
-                let steps = r.steps ?? []
-                if steps.isEmpty {
-                    Text("还没补充做法步骤").font(AppFont.caption()).foregroundStyle(Color.inkMuted)
-                } else {
-                    VStack(alignment: .leading, spacing: AppSpacing.sm) {
-                        ForEach(steps) { step in
-                            HStack(alignment: .top, spacing: AppSpacing.sm) {
-                                Text("\(step.index)")
-                                    .font(AppFont.headline(14))
-                                    .frame(width: 26, height: 26)
-                                    .foregroundStyle(.white)
-                                    .background(Color.brandGreen)
-                                    .clipShape(Circle())
-                                Text(step.text)
-                                    .font(AppFont.body(14))
-                                    .foregroundStyle(Color.inkPrimary)
-                            }
-                            .padding(.vertical, 6)
-                        }
-                    }
-                }
-            }
+            .padding(AppSpacing.lg)
+            .background(Color.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
         }
-        .padding(AppSpacing.lg)
-        .background(Color.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
+        .buttonStyle(.plain)
     }
 
     private func tipsSection(_ tips: String) -> some View {

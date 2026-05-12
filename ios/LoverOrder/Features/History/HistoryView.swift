@@ -116,70 +116,115 @@ struct HistoryView: View {
     }
 }
 
-// 历史卡片：左侧场景图标 + 右侧菜品快照
+// 历史卡片：水平长条 左侧场景小徽章 + 中间文字 + 右侧菜品图横向
 private struct HistoryCard: View {
     let meal: MealSession
 
+    private let thumbSize: CGFloat = 56
+
     var body: some View {
         SectionCard {
-            HStack(alignment: .top, spacing: AppSpacing.md) {
-                VStack(spacing: AppSpacing.xs) {
-                    Image(systemName: meal.scene.icon)
-                        .font(.system(size: 16))
-                        .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
-                        .background(Color.brandGreen)
-                        .clipShape(Circle())
-                    Text(meal.scene.label)
+            VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                HStack(spacing: AppSpacing.sm) {
+                    sceneBadge
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Text(meal.scene.label)
+                                .font(AppFont.headline(15))
+                                .foregroundStyle(Color.inkPrimary)
+                            Text("·")
+                                .foregroundStyle(Color.inkMuted)
+                            Text(formatDate(meal.completedAt ?? meal.confirmedAt ?? meal.createdAt))
+                                .font(AppFont.caption(12))
+                                .foregroundStyle(Color.inkMuted)
+                        }
+                        HStack(spacing: 4) {
+                            Image(systemName: "person.2")
+                                .font(.system(size: 10))
+                            Text(peopleHint)
+                            Text("·")
+                            Text(meal.mood.label)
+                        }
                         .font(AppFont.caption(11))
+                        .foregroundStyle(Color.inkMuted)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
                         .foregroundStyle(Color.inkMuted)
                 }
 
-                VStack(alignment: .leading, spacing: AppSpacing.xs) {
-                    HStack {
-                        Text(meal.title?.isEmpty == false ? meal.title! : "这一顿")
-                            .font(AppFont.headline(15))
-                            .foregroundStyle(Color.inkPrimary)
-                        Spacer()
-                        Text(formatDate(meal.completedAt ?? meal.confirmedAt ?? meal.createdAt))
-                            .font(AppFont.caption(12))
-                            .foregroundStyle(Color.inkMuted)
-                    }
-                    HStack(spacing: AppSpacing.sm) {
-                        Image(systemName: "fork.knife")
-                            .font(.system(size: 11))
-                        Text("\((meal.dishes ?? []).count) 道菜")
-                        Text("·")
-                        Text(meal.mood.label)
-                    }
-                    .font(AppFont.caption(12))
-                    .foregroundStyle(Color.inkMuted)
+                if let comment = meal.reviews?.first?.comment, !comment.isEmpty {
+                    Text("\u{201C}\(comment)\u{201D}")
+                        .font(AppFont.caption(12))
+                        .foregroundStyle(Color.inkSecondary)
+                }
 
-                    if let dishes = meal.dishes, !dishes.isEmpty {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: AppSpacing.sm) {
-                                ForEach(dishes.prefix(4)) { dish in
-                                    DishThumb(name: dish.recipeName, image: dish.recipeImage)
-                                }
-                                if dishes.count > 4 {
-                                    Text("+\(dishes.count - 4)")
-                                        .font(AppFont.caption(12))
-                                        .frame(width: 48, height: 48)
-                                        .background(Color.appBackground)
-                                        .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous))
-                                        .foregroundStyle(Color.inkMuted)
-                                }
+                if let dishes = meal.dishes, !dishes.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: AppSpacing.sm) {
+                            ForEach(dishes.prefix(4)) { dish in
+                                dishThumb(name: dish.recipeName, image: dish.recipeImage)
+                            }
+                            if dishes.count > 4 {
+                                Text("+\(dishes.count - 4)")
+                                    .font(AppFont.caption(12))
+                                    .frame(width: thumbSize, height: thumbSize)
+                                    .background(Color.appBackground)
+                                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+                                    .foregroundStyle(Color.inkMuted)
                             }
                         }
                     }
-
-                    if let comment = meal.reviews?.first?.comment, !comment.isEmpty {
-                        Text("\u{201C}\(comment)\u{201D}")
-                            .font(AppFont.caption(12))
-                            .foregroundStyle(Color.inkSecondary)
-                    }
                 }
             }
+        }
+    }
+
+    // 场景徽章 区分三种场景配色
+    private var sceneBadge: some View {
+        ZStack {
+            Color.brandGreen.opacity(0.12)
+            Image(systemName: meal.scene.icon)
+                .font(.system(size: 14))
+                .foregroundStyle(Color.brandGreen)
+        }
+        .frame(width: 36, height: 36)
+        .clipShape(Circle())
+    }
+
+    private var peopleHint: String {
+        switch meal.scene {
+        case .pair: return "两个人"
+        case .family: return "一家人"
+        case .future: return "未来计划"
+        }
+    }
+
+    private func dishThumb(name: String, image: String?) -> some View {
+        Group {
+            if let urlString = image, !urlString.isEmpty, let url = URL(string: urlString) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let img):
+                        img.resizable().scaledToFill()
+                    default:
+                        placeholder(name: name)
+                    }
+                }
+            } else {
+                placeholder(name: name)
+            }
+        }
+        .frame(width: thumbSize, height: thumbSize)
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+    }
+
+    private func placeholder(name: String) -> some View {
+        ZStack {
+            Color.appBackground
+            Text(String(name.prefix(1)))
+                .font(AppFont.headline(16))
+                .foregroundStyle(Color.brandGreen)
         }
     }
 

@@ -287,17 +287,17 @@ struct MealNowView: View {
     }
 }
 
-// 圆形小图 用于首页"可能喜欢" 3 列推荐
+// 圆角方形小图 用于首页"可能喜欢" 3 列推荐
 struct RecipeCircleCard: View {
     let recipe: Recipe
     let onAdd: () -> Void
 
     var body: some View {
-        VStack(spacing: AppSpacing.sm) {
+        VStack(alignment: .leading, spacing: AppSpacing.sm) {
             ZStack(alignment: .bottomTrailing) {
                 AsyncImageView(url: recipe.coverImage, name: recipe.name)
                     .aspectRatio(1, contentMode: .fill)
-                    .clipShape(Circle())
+                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
                 Button(action: onAdd) {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .bold))
@@ -306,6 +306,7 @@ struct RecipeCircleCard: View {
                         .background(Color.brandGreen)
                         .clipShape(Circle())
                 }
+                .padding(6)
             }
             Text(recipe.name)
                 .font(AppFont.body(13))
