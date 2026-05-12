@@ -1,0 +1,296 @@
+import SwiftUI
+
+// 菜品详情：大图 + 简介 + 标签 + 食材 + 做法步骤 + 底部加入按钮
+struct RecipeDetailView: View {
+    let recipeId: UInt
+
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var recipe: Recipe?
+    @State private var meal: MealSession?
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+    @State private var showSteps: Bool = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: AppSpacing.lg) {
+                heroImage
+                if let recipe {
+                    titleSection(recipe)
+                    tagsRow(recipe)
+                    ingredientsSection(recipe)
+                    stepsToggle(recipe)
+                    if let tips = recipe.tips, !tips.isEmpty {
+                        tipsSection(tips)
+                    }
+                }
+                Color.clear.frame(height: 80)
+            }
+            .padding(.horizontal, AppSpacing.lg)
+            .padding(.top, AppSpacing.sm)
+        }
+        .background(Color.appBackground.ignoresSafeArea())
+        .safeAreaInset(edge: .bottom) {
+            bottomBar
+        }
+        .task {
+            await load()
+        }
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationTitle(recipe?.name ?? "菜品")
+    }
+
+    private var heroImage: some View {
+        AsyncImageView(url: recipe?.coverImage, name: recipe?.name ?? "")
+            .frame(height: 220)
+            .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
+    }
+
+    private func titleSection(_ r: Recipe) -> some View {
+        VStack(alignment: .leading, spacing: AppSpacing.sm) {
+            Text(r.name)
+                .font(AppFont.title(26))
+                .foregroundStyle(Color.inkPrimary)
+            if let desc = r.description, !desc.isEmpty {
+                Text(desc)
+                    .font(AppFont.body())
+                    .foregroundStyle(Color.inkSecondary)
+            }
+            HStack(spacing: AppSpacing.md) {
+                if let t = r.cookingTime, t > 0 {
+                    metric(icon: "clock", value: "\(t) 分钟")
+                }
+                if let s = r.servings, s > 0 {
+                    metric(icon: "person.2", value: "\(s) 人份")
+                }
+                if let d = r.difficulty {
+                    metric(icon: "flame", value: d.label)
+                }
+            }
+        }
+    }
+
+    private func metric(icon: String, value: String) -> some View {
+        HStack(spacing: AppSpacing.xs) {
+            Image(systemName: icon)
+            Text(value)
+        }
+        .font(AppFont.caption())
+        .foregroundStyle(Color.inkMuted)
+    }
+
+    private func tagsRow(_ r: Recipe) -> some View {
+        VStack(alignment: .leading, spacing: AppSpacing.sm) {
+            if let moods = r.moodTags, !moods.isEmpty {
+                tagGroup(label: "适合心情", tags: moods.map { $0.label })
+            }
+            if let scenes = r.sceneTags, !scenes.isEmpty {
+                tagGroup(label: "适合场景", tags: scenes.map { $0.label })
+            }
+            if let flavors = r.tags, !flavors.isEmpty {
+                tagGroup(label: "风味", tags: flavors)
+            }
+        }
+    }
+
+    private func tagGroup(label: String, tags: [String]) -> some View {
+        VStack(alignment: .leading, spacing: AppSpacing.xs) {
+            Text(label)
+                .font(AppFont.caption())
+                .foregroundStyle(Color.inkMuted)
+            FlowLayout(spacing: AppSpacing.sm) {
+                ForEach(tags, id: \.self) { t in
+                    Text(t)
+                        .font(AppFont.caption(12))
+                        .padding(.horizontal, AppSpacing.md)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(Color.brandGreen)
+                        .background(Color.brandGreen.opacity(0.1))
+                        .clipShape(Capsule())
+                }
+            }
+        }
+    }
+
+    private func ingredientsSection(_ r: Recipe) -> some View {
+        SectionCard {
+            HStack {
+                Text("准备食材")
+                    .font(AppFont.headline(15))
+                    .foregroundStyle(Color.inkPrimary)
+                Spacer()
+                if let count = r.ingredients?.count {
+                    Text("\(count) 项")
+                        .font(AppFont.caption())
+                        .foregroundStyle(Color.inkMuted)
+                }
+            }
+            if let items = r.ingredients, !items.isEmpty {
+                ForEach(items) { ing in
+                    HStack {
+                        Image(systemName: "leaf.circle")
+                            .foregroundStyle(Color.brandGreen)
+                        Text(ing.name)
+                            .font(AppFont.body(14))
+                            .foregroundStyle(Color.inkPrimary)
+                        Spacer()
+                        Text(ing.amount)
+                            .font(AppFont.body(14))
+                            .foregroundStyle(Color.inkMuted)
+                    }
+                    Divider().background(Color.dividerLine.opacity(0.5))
+                }
+            } else {
+                Text("还没列出食材").font(AppFont.caption()).foregroundStyle(Color.inkMuted)
+            }
+        }
+    }
+
+    private func stepsToggle(_ r: Recipe) -> some View {
+        VStack(alignment: .leading, spacing: AppSpacing.md) {
+            HStack {
+                Text("做法")
+                    .font(AppFont.headline(15))
+                    .foregroundStyle(Color.inkPrimary)
+                Spacer()
+                Button {
+                    withAnimation { showSteps.toggle() }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(showSteps ? "收起" : "查看怎么做")
+                        Image(systemName: showSteps ? "chevron.up" : "chevron.down")
+                    }
+                    .font(AppFont.caption(13))
+                    .foregroundStyle(Color.brandGreen)
+                }
+            }
+            if showSteps {
+                let steps = r.steps ?? []
+                if steps.isEmpty {
+                    Text("还没补充做法步骤").font(AppFont.caption()).foregroundStyle(Color.inkMuted)
+                } else {
+                    VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                        ForEach(steps) { step in
+                            HStack(alignment: .top, spacing: AppSpacing.sm) {
+                                Text("\(step.index)")
+                                    .font(AppFont.headline(14))
+                                    .frame(width: 26, height: 26)
+                                    .foregroundStyle(.white)
+                                    .background(Color.brandGreen)
+                                    .clipShape(Circle())
+                                Text(step.text)
+                                    .font(AppFont.body(14))
+                                    .foregroundStyle(Color.inkPrimary)
+                            }
+                            .padding(.vertical, 6)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(AppSpacing.lg)
+        .background(Color.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
+    }
+
+    private func tipsSection(_ tips: String) -> some View {
+        SectionCard {
+            Text("小贴士")
+                .font(AppFont.headline(15))
+                .foregroundStyle(Color.inkPrimary)
+            Text(tips)
+                .font(AppFont.body(14))
+                .foregroundStyle(Color.inkSecondary)
+        }
+    }
+
+    private var bottomBar: some View {
+        HStack(spacing: AppSpacing.md) {
+            SecondaryButton(title: "留到周末", icon: "calendar") {
+                // 后续接入未来这顿
+            }
+            PrimaryButton(title: alreadyAdded ? "已加入" : "加入这一顿", isLoading: isLoading) {
+                Task { await addToMeal() }
+            }
+        }
+        .padding(.horizontal, AppSpacing.lg)
+        .padding(.vertical, AppSpacing.sm)
+        .background(Color.appBackground)
+    }
+
+    private var alreadyAdded: Bool {
+        guard let meal, let recipe else { return false }
+        return (meal.dishes ?? []).contains { $0.recipeId == recipe.id }
+    }
+
+    private func load() async {
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            async let detail = RecipeService.shared.detail(id: recipeId)
+            async let current = MealService.shared.current(scene: appState.currentScene, mood: appState.currentMood)
+            let (r, m) = try await (detail, current)
+            self.recipe = r
+            self.meal = m
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func addToMeal() async {
+        guard let recipe, let meal else { return }
+        if alreadyAdded { return }
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            _ = try await MealService.shared.addDish(mealId: meal.id, dish: DishInput(recipeId: recipe.id))
+            self.meal = try await MealService.shared.detail(id: meal.id)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+// 简易流式布局
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = arrange(proposal: proposal, subviews: subviews)
+        for (idx, sub) in subviews.enumerated() {
+            sub.place(at: CGPoint(x: bounds.minX + result.points[idx].x, y: bounds.minY + result.points[idx].y), proposal: ProposedViewSize(result.sizes[idx]))
+        }
+    }
+
+    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, points: [CGPoint], sizes: [CGSize]) {
+        let maxWidth = proposal.width ?? .infinity
+        var points: [CGPoint] = []
+        var sizes: [CGSize] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var maxX: CGFloat = 0
+        for sub in subviews {
+            let size = sub.sizeThatFits(.unspecified)
+            if x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            points.append(CGPoint(x: x, y: y))
+            sizes.append(size)
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            maxX = max(maxX, x)
+        }
+        let totalHeight = y + rowHeight
+        return (CGSize(width: maxX, height: totalHeight), points, sizes)
+    }
+}
