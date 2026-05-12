@@ -395,6 +395,7 @@ struct RecipeDetailView: View {
         guard let recipe else { return }
         do {
             try await RecipeService.shared.delete(id: recipe.id)
+            AppNotifications.recipesChanged()
             dismiss()
         } catch {
             errorMessage = error.localizedDescription

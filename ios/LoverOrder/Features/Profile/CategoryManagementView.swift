@@ -171,6 +171,7 @@ struct CategoryManagementView: View {
             _ = try await CategoryService.shared.create(
                 CategoryInput(name: trimmed, icon: newIcon.isEmpty ? nil : newIcon, color: nil, sortOrder: categories.count)
             )
+            AppNotifications.categoriesChanged()
             newName = ""
             newIcon = ""
             await load()
@@ -199,6 +200,7 @@ struct CategoryManagementView: View {
                 id: c.id,
                 req: CategoryInput(name: trimmed, icon: editingIcon.isEmpty ? nil : editingIcon, color: c.color, sortOrder: c.sortOrder)
             )
+            AppNotifications.categoriesChanged()
             cancelEdit()
             await load()
         } catch {
@@ -209,6 +211,7 @@ struct CategoryManagementView: View {
     private func deleteCategory(_ c: RecipeCategory) async {
         do {
             try await CategoryService.shared.delete(id: c.id)
+            AppNotifications.categoriesChanged()
             await load()
         } catch {
             errorMessage = error.localizedDescription

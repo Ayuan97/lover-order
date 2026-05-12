@@ -34,6 +34,15 @@ struct MenuView: View {
             .task {
                 await vm.bootstrap(scene: appState.currentScene, mood: appState.currentMood)
             }
+            .onChange(of: appState.currentScene) { _, _ in
+                Task { await vm.loadCurrentMeal(scene: appState.currentScene, mood: appState.currentMood) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
+                Task { await vm.loadRecipes() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .categoriesChanged)) { _ in
+                Task { await vm.loadCategories() }
+            }
             .navigationBarHidden(true)
             .sheet(isPresented: $showCreateRecipe) {
                 RecipeEditView(mode: .create) { _ in

@@ -11,6 +11,7 @@ struct HistoryDetailView: View {
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
     @State private var showReview: Bool = false
+    @State private var showShoppingList: Bool = false
     @State private var isRepeating: Bool = false
     @State private var repeatedToast: String?
 
@@ -48,6 +49,21 @@ struct HistoryDetailView: View {
             if let mid = meal?.id {
                 MealReviewView(mealId: mid) {
                     Task { await load() }
+                }
+            }
+        }
+        .sheet(isPresented: $showShoppingList) {
+            if let mid = meal?.id {
+                ShoppingListView(mealId: mid)
+            }
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    showShoppingList = true
+                } label: {
+                    Image(systemName: "cart")
+                        .foregroundStyle(Color.brandGreen)
                 }
             }
         }

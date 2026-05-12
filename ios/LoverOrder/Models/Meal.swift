@@ -108,6 +108,24 @@ struct MealListResult: Codable {
     let items: [MealSession]
 }
 
+// 购物清单
+struct ShoppingList: Codable {
+    let mealId: UInt
+    let items: [ShoppingItem]
+
+    enum CodingKeys: String, CodingKey {
+        case mealId = "meal_id"
+        case items
+    }
+}
+
+struct ShoppingItem: Codable, Identifiable, Hashable {
+    var id: String { name }
+    let name: String
+    let amounts: [String]?
+    let from: [String]?
+}
+
 // 一个家的累积统计
 struct HouseholdStats: Codable {
     let totalMeals: Int

@@ -138,6 +138,7 @@ func registerRoutes(r *gin.Engine) {
 					meals.POST("/:id/review", mealH.Review)
 					meals.POST("/:id/dishes/add", mealH.AddDish)
 					meals.POST("/:id/dishes/:dish_id/remove", mealH.RemoveDish)
+					meals.GET("/:id/shopping-list", mealH.ShoppingList)
 				}
 			}
 		}

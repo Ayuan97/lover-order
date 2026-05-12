@@ -29,6 +29,10 @@ struct RecipeEditView: View {
 
     @State private var categories: [RecipeCategory] = []
     @State private var categoryId: UInt?
+    @State private var showNewCategory: Bool = false
+    @State private var newCategoryName: String = ""
+    @State private var newCategoryIcon: String = ""
+    @State private var isCreatingCategory: Bool = false
 
     @State private var isSaving: Bool = false
     @State private var errorMessage: String?
@@ -155,19 +159,67 @@ struct RecipeEditView: View {
         }
     }
 
-    @ViewBuilder
     private var categorySection: some View {
-        if !categories.isEmpty {
-            SectionCard {
+        SectionCard {
+            HStack {
                 FieldLabel("分类", required: false)
-                FlowLayout(spacing: AppSpacing.sm) {
-                    chipButton(title: "未分类", isSelected: categoryId == nil) {
-                        categoryId = nil
+                Spacer()
+                Button {
+                    showNewCategory = true
+                } label: {
+                    Label("新建", systemImage: "plus.circle")
+                        .font(AppFont.caption(13))
+                        .foregroundStyle(Color.brandGreen)
+                }
+            }
+            FlowLayout(spacing: AppSpacing.sm) {
+                chipButton(title: "未分类", isSelected: categoryId == nil) {
+                    categoryId = nil
+                }
+                ForEach(categories) { c in
+                    let title = (c.icon?.isEmpty == false ? "\(c.icon!) " : "") + c.name
+                    chipButton(title: title, isSelected: categoryId == c.id) {
+                        categoryId = c.id
                     }
-                    ForEach(categories) { c in
-                        chipButton(title: c.name, isSelected: categoryId == c.id) {
-                            categoryId = c.id
+                }
+            }
+            if showNewCategory {
+                Divider().background(Color.dividerLine)
+                HStack(spacing: AppSpacing.sm) {
+                    TextField("图标", text: $newCategoryIcon)
+                        .frame(width: 56)
+                        .padding(AppSpacing.sm)
+                        .background(Color.appBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous))
+                    TextField("分类名 比如 早餐", text: $newCategoryName)
+                        .padding(AppSpacing.sm)
+                        .background(Color.appBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous))
+                    Button {
+                        Task { await addNewCategory() }
+                    } label: {
+                        if isCreatingCategory {
+                            ProgressView().tint(.white)
+                                .frame(width: 36, height: 36)
+                                .background(Color.brandGreen)
+                                .clipShape(Circle())
+                        } else {
+                            Image(systemName: "checkmark")
+                                .font(.system(size: 14, weight: .bold))
+                                .frame(width: 36, height: 36)
+                                .foregroundStyle(.white)
+                                .background(Color.brandGreen)
+                                .clipShape(Circle())
                         }
+                    }
+                    Button {
+                        showNewCategory = false
+                        newCategoryName = ""
+                        newCategoryIcon = ""
+                    } label: {
+                        Image(systemName: "xmark")
+                            .frame(width: 36, height: 36)
+                            .foregroundStyle(Color.inkMuted)
                     }
                 }
             }
@@ -357,6 +409,26 @@ struct RecipeEditView: View {
         } catch {}
     }
 
+    private func addNewCategory() async {
+        let name = newCategoryName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.isEmpty { return }
+        isCreatingCategory = true
+        defer { isCreatingCategory = false }
+        do {
+            let created = try await CategoryService.shared.create(
+                CategoryInput(name: name, icon: newCategoryIcon.isEmpty ? nil : newCategoryIcon, color: nil, sortOrder: categories.count)
+            )
+            AppNotifications.categoriesChanged()
+            await loadCategories()
+            categoryId = created.id
+            newCategoryName = ""
+            newCategoryIcon = ""
+            showNewCategory = false
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func primeFromMode() {
         guard case let .edit(r) = mode else { return }
         name = r.name
@@ -405,6 +477,7 @@ struct RecipeEditView: View {
             case .edit(let original):
                 saved = try await RecipeService.shared.update(id: original.id, req: input)
             }
+            AppNotifications.recipesChanged()
             onSaved(saved)
             dismiss()
         } catch {

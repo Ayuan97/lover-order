@@ -320,6 +320,65 @@ func (s *MealService) List(householdID uint, q MealListQuery) (*MealList, error)
 	return &MealList{Total: total, Items: items}, nil
 }
 
+// ShoppingItem 购物清单项 同名食材聚合一行
+type ShoppingItem struct {
+	Name    string   `json:"name"`
+	Amounts []string `json:"amounts"`
+	From    []string `json:"from"`
+}
+
+// ShoppingList 一顿的食材清单
+type ShoppingList struct {
+	MealID uint           `json:"meal_id"`
+	Items  []ShoppingItem `json:"items"`
+}
+
+// ShoppingList 聚合一顿里所有菜的食材
+func (s *MealService) ShoppingList(householdID, mealID uint) (*ShoppingList, error) {
+	m, err := s.load(householdID, mealID)
+	if err != nil {
+		return nil, err
+	}
+
+	indexByName := map[string]int{}
+	var items []ShoppingItem
+
+	for _, dish := range m.Dishes {
+		if dish.RecipeID == nil {
+			continue
+		}
+		var r model.Recipe
+		if err := model.DB.First(&r, *dish.RecipeID).Error; err != nil {
+			continue
+		}
+		for _, ing := range r.IngredientsList() {
+			name, _ := ing["name"].(string)
+			amount, _ := ing["amount"].(string)
+			if name == "" {
+				continue
+			}
+			if idx, ok := indexByName[name]; ok {
+				if amount != "" {
+					items[idx].Amounts = append(items[idx].Amounts, amount)
+				}
+				items[idx].From = append(items[idx].From, r.Name)
+			} else {
+				indexByName[name] = len(items)
+				it := ShoppingItem{
+					Name: name,
+					From: []string{r.Name},
+				}
+				if amount != "" {
+					it.Amounts = []string{amount}
+				}
+				items = append(items, it)
+			}
+		}
+	}
+
+	return &ShoppingList{MealID: mealID, Items: items}, nil
+}
+
 // HouseholdStats 一个家的累积统计
 type HouseholdStats struct {
 	TotalMeals      int64           `json:"total_meals"`

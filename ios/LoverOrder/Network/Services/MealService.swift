@@ -69,6 +69,10 @@ final class MealService {
         try await api.get("meals/stats")
     }
 
+    func shoppingList(mealId: UInt) async throws -> ShoppingList {
+        try await api.get("meals/\(mealId)/shopping-list")
+    }
+
     func detail(id: UInt) async throws -> MealSession {
         try await api.get("meals/\(id)")
     }

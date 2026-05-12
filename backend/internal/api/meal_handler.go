@@ -189,6 +189,22 @@ func (h *MealHandler) Cancel(c *gin.Context) {
 	OK(c, nil)
 }
 
+// ShoppingList 当前一顿的食材清单
+func (h *MealHandler) ShoppingList(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		Fail(c, CodeBadRequest, "id 不合法")
+		return
+	}
+	list, err := h.svc.ShoppingList(hid, uint(id))
+	if err != nil {
+		Fail(c, CodeBadRequest, err.Error())
+		return
+	}
+	OK(c, list)
+}
+
 // Stats 一个家的累积统计
 func (h *MealHandler) Stats(c *gin.Context) {
 	hid, _ := middleware.CurrentHouseholdID(c)

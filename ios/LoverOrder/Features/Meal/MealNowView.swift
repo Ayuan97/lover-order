@@ -9,6 +9,7 @@ struct MealNowView: View {
     @State private var showReview: Bool = false
     @State private var reviewMealId: UInt?
     @State private var showCreateRecipe: Bool = false
+    @State private var showShoppingList: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -40,6 +41,12 @@ struct MealNowView: View {
             .task {
                 await vm.load(scene: appState.currentScene, mood: appState.currentMood)
             }
+            .onChange(of: appState.currentScene) { _, _ in
+                Task { await vm.load(scene: appState.currentScene, mood: appState.currentMood) }
+            }
+            .onChange(of: appState.currentMood) { _, _ in
+                Task { await vm.load(scene: appState.currentScene, mood: appState.currentMood) }
+            }
             .navigationBarHidden(true)
             .sheet(isPresented: $showAddDish) {
                 if let meal = vm.meal {
@@ -61,6 +68,11 @@ struct MealNowView: View {
                     Task { await vm.load(scene: appState.currentScene, mood: appState.currentMood) }
                 }
                 .environmentObject(appState)
+            }
+            .sheet(isPresented: $showShoppingList) {
+                if let mid = vm.meal?.id {
+                    ShoppingListView(mealId: mid)
+                }
             }
         }
     }
@@ -116,6 +128,16 @@ struct MealNowView: View {
                     .font(AppFont.headline(15))
                     .foregroundStyle(Color.inkPrimary)
                 Spacer()
+                Button {
+                    showShoppingList = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "cart")
+                        Text("买买买")
+                    }
+                    .font(AppFont.caption(12))
+                    .foregroundStyle(Color.brandGreen)
+                }
                 Text("\(vm.dishCount) 道")
                     .font(AppFont.caption())
                     .foregroundStyle(Color.inkMuted)
