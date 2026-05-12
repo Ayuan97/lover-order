@@ -30,7 +30,7 @@ enum MealStatus: String, Codable {
 struct MealSession: Codable, Identifiable, Hashable {
     let id: UInt
     var title: String?
-    var scene: Scene
+    var scene: MealScene
     var mood: Mood
     var plannedAt: Date?
     var confirmedAt: Date?

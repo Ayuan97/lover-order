@@ -79,7 +79,7 @@ struct Recipe: Codable, Identifiable, Hashable {
     var tips: String?
     var tags: [String]?
     var moodTags: [Mood]?
-    var sceneTags: [Scene]?
+    var sceneTags: [MealScene]?
     var viewCount: Int?
     var useCount: Int?
     var lastUsedAt: Date?

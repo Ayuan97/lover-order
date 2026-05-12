@@ -3,7 +3,7 @@ import Foundation
 struct RecipeListQuery {
     var categoryId: UInt?
     var mood: Mood?
-    var scene: Scene?
+    var scene: MealScene?
     var keyword: String?
     var favorite: Bool = false
     var page: Int = 1
@@ -34,7 +34,7 @@ struct RecipeInput: Encodable {
     var tips: String?
     var tags: [String]?
     var moodTags: [Mood]?
-    var sceneTags: [Scene]?
+    var sceneTags: [MealScene]?
 
     enum CodingKeys: String, CodingKey {
         case name

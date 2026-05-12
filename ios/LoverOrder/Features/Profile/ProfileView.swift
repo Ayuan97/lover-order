@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // "我的"页：用户卡 + 场景切换 + 偏好 + 退出登录
 struct ProfileView: View {
@@ -70,7 +71,7 @@ struct ProfileView: View {
         SectionCard {
             NumberedSectionTitle(index: 1, title: "当前场景")
             VStack(spacing: AppSpacing.sm) {
-                ForEach(Scene.allCases) { scene in
+                ForEach(MealScene.allCases) { scene in
                     Button {
                         Task { await updateScene(scene) }
                     } label: {
@@ -167,7 +168,7 @@ struct ProfileView: View {
         }
     }
 
-    private func updateScene(_ scene: Scene) async {
+    private func updateScene(_ scene: MealScene) async {
         appState.currentScene = scene
         do {
             let user = try await AuthService.shared.updateProfile(UpdateProfileRequest(defaultScene: scene))

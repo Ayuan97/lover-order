@@ -19,7 +19,7 @@ final class MealNowViewModel: ObservableObject {
         dishes.count
     }
 
-    func load(scene: Scene, mood: Mood) async {
+    func load(scene: MealScene, mood: Mood) async {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }

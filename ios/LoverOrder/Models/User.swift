@@ -8,7 +8,7 @@ struct AppUser: Codable, Identifiable, Hashable {
     var email: String?
     var gender: Int8?
     var householdId: UInt?
-    var defaultScene: Scene?
+    var defaultScene: MealScene?
     var defaultMood: Mood?
     var tastePrefs: [String]?
     var isActive: Bool?

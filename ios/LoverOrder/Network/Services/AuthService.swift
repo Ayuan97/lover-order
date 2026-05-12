@@ -39,7 +39,7 @@ struct UpdateProfileRequest: Encodable {
     var nickname: String?
     var avatar: String?
     var gender: Int8?
-    var defaultScene: Scene?
+    var defaultScene: MealScene?
     var defaultMood: Mood?
     var tastePrefs: [String]?
 

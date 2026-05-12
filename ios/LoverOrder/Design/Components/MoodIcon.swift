@@ -55,7 +55,8 @@ enum Mood: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-enum Scene: String, CaseIterable, Identifiable, Codable {
+// 与 SwiftUI.Scene 协议同名会冲突 用 MealScene 区分
+enum MealScene: String, CaseIterable, Identifiable, Codable {
     case pair
     case family
     case future

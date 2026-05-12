@@ -15,7 +15,7 @@ final class MenuViewModel: ObservableObject {
     private let categoryService = CategoryService.shared
     private let mealService = MealService.shared
 
-    func bootstrap(scene: Scene, mood: Mood) async {
+    func bootstrap(scene: MealScene, mood: Mood) async {
         await loadCategories()
         await loadCurrentMeal(scene: scene, mood: mood)
         await loadRecipes()
@@ -29,7 +29,7 @@ final class MenuViewModel: ObservableObject {
         }
     }
 
-    func loadCurrentMeal(scene: Scene, mood: Mood) async {
+    func loadCurrentMeal(scene: MealScene, mood: Mood) async {
         do {
             let m = try await mealService.current(scene: scene, mood: mood)
             meal = m

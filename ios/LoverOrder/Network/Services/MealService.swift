@@ -2,7 +2,7 @@ import Foundation
 
 struct MealInput: Encodable {
     var title: String?
-    var scene: Scene?
+    var scene: MealScene?
     var mood: Mood?
     var plannedAt: Date?
     var note: String?
@@ -37,7 +37,7 @@ struct ReviewInput: Encodable {
 }
 
 struct MealListQuery {
-    var scene: Scene?
+    var scene: MealScene?
     var status: MealStatus?
     var page: Int = 1
     var pageSize: Int = 20
@@ -54,7 +54,7 @@ final class MealService {
     static let shared = MealService()
     private let api = APIClient.shared
 
-    func current(scene: Scene? = nil, mood: Mood? = nil) async throws -> MealSession {
+    func current(scene: MealScene? = nil, mood: Mood? = nil) async throws -> MealSession {
         var q: [String: String] = [:]
         if let s = scene { q["scene"] = s.rawValue }
         if let m = mood { q["mood"] = m.rawValue }

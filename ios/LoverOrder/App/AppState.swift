@@ -6,7 +6,7 @@ import SwiftUI
 final class AppState: ObservableObject {
     @Published var currentUser: AppUser?
     @Published var household: Household?
-    @Published var currentScene: Scene = .pair
+    @Published var currentScene: MealScene = .pair
     @Published var currentMood: Mood = .easy
     @Published var isBootstrapping: Bool = true
     @Published var loginError: String?
