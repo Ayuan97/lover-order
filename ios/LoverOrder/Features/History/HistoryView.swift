@@ -23,6 +23,8 @@ struct HistoryView: View {
         }
     }
 
+    @EnvironmentObject private var appState: AppState
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -58,6 +60,8 @@ struct HistoryView: View {
             Text("把每一顿吃过的留下来")
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
+            CurrentSceneBadge(scene: appState.currentScene)
+                .padding(.top, AppSpacing.xs)
         }
         .padding(.vertical, AppSpacing.sm)
     }
@@ -176,10 +180,37 @@ private struct HistoryCard: View {
 
     private func formatDate(_ date: Date?) -> String {
         guard let date else { return "" }
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "zh_CN")
-        f.dateFormat = "M月d日 HH:mm"
-        return f.string(from: date)
+        return RelativeDateFormatter.format(date)
+    }
+}
+
+// 相对时间格式化 今天/昨天 HH:mm 其他显示 M月d日 HH:mm
+enum RelativeDateFormatter {
+    static func format(_ date: Date) -> String {
+        let cal = Calendar.current
+        let now = Date()
+        let timeFormatter = DateFormatter()
+        timeFormatter.locale = Locale(identifier: "zh_CN")
+        timeFormatter.dateFormat = "HH:mm"
+        let time = timeFormatter.string(from: date)
+
+        if cal.isDateInToday(date) {
+            return "今天 \(time)"
+        }
+        if cal.isDateInYesterday(date) {
+            return "昨天 \(time)"
+        }
+        let dayDiff = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: now)).day ?? 0
+        if dayDiff > 0 && dayDiff <= 6 {
+            let weekday = DateFormatter()
+            weekday.locale = Locale(identifier: "zh_CN")
+            weekday.dateFormat = "EEEE"
+            return "\(weekday.string(from: date)) \(time)"
+        }
+        let absolute = DateFormatter()
+        absolute.locale = Locale(identifier: "zh_CN")
+        absolute.dateFormat = "M月d日 HH:mm"
+        return absolute.string(from: date)
     }
 }
 

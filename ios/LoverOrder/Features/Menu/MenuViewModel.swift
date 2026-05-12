@@ -1,10 +1,30 @@
 import Foundation
 
+// 菜单页虚拟筛选 与设计稿四档对齐
+enum MenuFilter: String, CaseIterable, Identifiable {
+    case all
+    case loved
+    case recent
+    case filling
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: return "全部"
+        case .loved: return "我们都爱吃"
+        case .recent: return "最近常吃"
+        case .filling: return "管饱推荐"
+        }
+    }
+}
+
 @MainActor
 final class MenuViewModel: ObservableObject {
     @Published var categories: [RecipeCategory] = []
     @Published var recipes: [Recipe] = []
     @Published var selectedCategoryId: UInt?
+    @Published var quickFilter: MenuFilter = .all
     @Published var keyword: String = ""
     @Published var pinnedDishes: [MealDish] = []
     @Published var meal: MealSession?
@@ -43,22 +63,49 @@ final class MenuViewModel: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         do {
-            let result = try await recipeService.list(
-                .init(
-                    categoryId: selectedCategoryId,
-                    keyword: keyword.isEmpty ? nil : keyword,
-                    page: 1,
-                    pageSize: 50
-                )
+            var query = RecipeListQuery(
+                categoryId: selectedCategoryId,
+                keyword: keyword.isEmpty ? nil : keyword,
+                page: 1,
+                pageSize: 50
             )
-            recipes = result.items
+            switch quickFilter {
+            case .all:
+                break
+            case .loved:
+                query.favorite = true
+            case .recent, .filling:
+                break
+            }
+            let result = try await recipeService.list(query)
+            recipes = sortByFilter(result.items)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
+    private func sortByFilter(_ items: [Recipe]) -> [Recipe] {
+        switch quickFilter {
+        case .recent:
+            return items.sorted { lhs, rhs in
+                (lhs.lastUsedAt ?? .distantPast) > (rhs.lastUsedAt ?? .distantPast)
+            }
+        case .filling:
+            return items.sorted { lhs, rhs in
+                (lhs.servings ?? 0) > (rhs.servings ?? 0)
+            }
+        default:
+            return items
+        }
+    }
+
     func selectCategory(_ id: UInt?) async {
         selectedCategoryId = id
+        await loadRecipes()
+    }
+
+    func selectFilter(_ f: MenuFilter) async {
+        quickFilter = f
         await loadRecipes()
     }
 

@@ -1,12 +1,18 @@
 import SwiftUI
 import UIKit
 
-// "我的"页：用户卡 + 场景切换 + 偏好 + 退出登录
+// "我的"页：用户卡 + 5 个偏好分组 + 家的设置 + 退出
 struct ProfileView: View {
     @EnvironmentObject private var appState: AppState
-    @State private var tastes: String = ""
+
+    // 后端持久化字段
+    @State private var selectedTastes: Set<String> = []
     @State private var isSavingTastes = false
     @State private var inviteCode: String?
+
+    // 本地持久化字段
+    @AppStorage("profile.householdMode") private var householdMode: String = HouseholdMode.couple.rawValue
+    @AppStorage("profile.showScene") private var showSceneInList: Bool = true
 
     var body: some View {
         NavigationStack {
@@ -15,8 +21,10 @@ struct ProfileView: View {
                     header
                     userCard
                     scenePicker
+                    householdModeCard
                     moodPicker
                     tastesCard
+                    displayCard
                     householdCard
                     actionsCard
                     Color.clear.frame(height: 40)
@@ -26,7 +34,7 @@ struct ProfileView: View {
             }
             .background(Color.appBackground.ignoresSafeArea())
             .task {
-                tastes = (appState.currentUser?.tastePrefs ?? []).joined(separator: " ")
+                selectedTastes = Set(appState.currentUser?.tastePrefs ?? [])
             }
             .navigationBarHidden(true)
         }
@@ -61,34 +69,49 @@ struct ProfileView: View {
                         .foregroundStyle(Color.inkMuted)
                 }
                 Spacer()
-                Image(systemName: "chevron.right")
-                    .foregroundStyle(Color.inkMuted)
+                Button {
+                    // 编辑昵称头像入口 后续扩展
+                } label: {
+                    Text("编辑")
+                        .font(AppFont.caption(13))
+                        .padding(.horizontal, AppSpacing.md)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(Color.brandGreen)
+                        .background(Color.brandGreen.opacity(0.1))
+                        .clipShape(Capsule())
+                }
             }
         }
     }
 
     private var scenePicker: some View {
         SectionCard {
-            NumberedSectionTitle(index: 1, title: "当前场景")
+            NumberedSectionTitle(index: 1, title: "当前场景", hint: "决定你打开 App 看到哪一顿")
             VStack(spacing: AppSpacing.sm) {
                 ForEach(MealScene.allCases) { scene in
-                    Button {
+                    SceneRow(scene: scene, selected: appState.currentScene == scene) {
                         Task { await updateScene(scene) }
+                    }
+                }
+            }
+        }
+    }
+
+    private var householdModeCard: some View {
+        SectionCard {
+            NumberedSectionTitle(index: 2, title: "家庭目前状态", hint: "告诉 App 你家几口人")
+            FlowLayout(spacing: AppSpacing.sm) {
+                ForEach(HouseholdMode.allCases) { mode in
+                    Button {
+                        householdMode = mode.rawValue
                     } label: {
-                        HStack {
-                            Image(systemName: scene.icon)
-                                .foregroundStyle(appState.currentScene == scene ? Color.brandGreen : Color.inkMuted)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(scene.label).font(AppFont.body(15)).foregroundStyle(Color.inkPrimary)
-                                Text(scene.hint).font(AppFont.caption(11)).foregroundStyle(Color.inkMuted)
-                            }
-                            Spacer()
-                            Image(systemName: appState.currentScene == scene ? "largecircle.fill.circle" : "circle")
-                                .foregroundStyle(appState.currentScene == scene ? Color.brandGreen : Color.inkMuted)
-                        }
-                        .padding(AppSpacing.md)
-                        .background(appState.currentScene == scene ? Color.brandGreen.opacity(0.06) : Color.appBackground)
-                        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+                        Text(mode.label)
+                            .font(AppFont.body(13))
+                            .padding(.horizontal, AppSpacing.md)
+                            .padding(.vertical, 8)
+                            .foregroundStyle(householdMode == mode.rawValue ? .white : Color.inkPrimary)
+                            .background(householdMode == mode.rawValue ? Color.brandGreen : Color.appBackground)
+                            .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
                 }
@@ -98,7 +121,7 @@ struct ProfileView: View {
 
     private var moodPicker: some View {
         SectionCard {
-            NumberedSectionTitle(index: 2, title: "默认心情")
+            NumberedSectionTitle(index: 3, title: "默认心情", hint: "首页默认打开哪一档")
             HStack(spacing: AppSpacing.sm) {
                 ForEach(Mood.allCases) { mood in
                     MoodChip(mood: mood, isSelected: appState.currentMood == mood) {
@@ -111,12 +134,23 @@ struct ProfileView: View {
 
     private var tastesCard: some View {
         SectionCard {
-            NumberedSectionTitle(index: 3, title: "口味偏好", hint: "空格分隔")
-            TextField("比如 清淡 少辣 爱海鲜", text: $tastes, axis: .vertical)
-                .lineLimit(2...4)
-                .padding(AppSpacing.md)
-                .background(Color.appBackground)
-                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+            NumberedSectionTitle(index: 4, title: "口味偏好", hint: "多选 推荐时会偏向这些口味")
+            FlowLayout(spacing: AppSpacing.sm) {
+                ForEach(TastePresets.all, id: \.self) { taste in
+                    Button {
+                        toggleTaste(taste)
+                    } label: {
+                        Text(taste)
+                            .font(AppFont.body(13))
+                            .padding(.horizontal, AppSpacing.md)
+                            .padding(.vertical, 8)
+                            .foregroundStyle(selectedTastes.contains(taste) ? .white : Color.inkPrimary)
+                            .background(selectedTastes.contains(taste) ? Color.brandGreen : Color.appBackground)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
             HStack {
                 Spacer()
                 Button {
@@ -130,9 +164,33 @@ struct ProfileView: View {
         }
     }
 
+    private var displayCard: some View {
+        SectionCard {
+            NumberedSectionTitle(index: 5, title: "显示方式")
+            Toggle(isOn: $showSceneInList) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("在列表里显示场景标签")
+                        .font(AppFont.body(15))
+                        .foregroundStyle(Color.inkPrimary)
+                    Text("方便区分这是哪一顿")
+                        .font(AppFont.caption(11))
+                        .foregroundStyle(Color.inkMuted)
+                }
+            }
+            .tint(Color.brandGreen)
+        }
+    }
+
     private var householdCard: some View {
         SectionCard {
-            NumberedSectionTitle(index: 4, title: "家的设置")
+            HStack(spacing: AppSpacing.sm) {
+                Image(systemName: "house.fill")
+                    .foregroundStyle(Color.brandGreen)
+                Text("家的设置")
+                    .font(AppFont.headline(16))
+                    .foregroundStyle(Color.inkPrimary)
+                Spacer()
+            }
             if let h = appState.household {
                 HStack {
                     Text("名字").font(AppFont.body(14)).foregroundStyle(Color.inkSecondary)
@@ -173,9 +231,7 @@ struct ProfileView: View {
         do {
             let user = try await AuthService.shared.updateProfile(UpdateProfileRequest(defaultScene: scene))
             appState.currentUser = user
-        } catch {
-            // 静默 用户不需要被打扰
-        }
+        } catch {}
     }
 
     private func updateMood(_ mood: Mood) async {
@@ -186,12 +242,21 @@ struct ProfileView: View {
         } catch {}
     }
 
+    private func toggleTaste(_ taste: String) {
+        if selectedTastes.contains(taste) {
+            selectedTastes.remove(taste)
+        } else {
+            selectedTastes.insert(taste)
+        }
+    }
+
     private func saveTastes() async {
         isSavingTastes = true
         defer { isSavingTastes = false }
-        let items = tastes.split(whereSeparator: { $0.isWhitespace }).map(String.init).filter { !$0.isEmpty }
         do {
-            let user = try await AuthService.shared.updateProfile(UpdateProfileRequest(tastePrefs: items))
+            let user = try await AuthService.shared.updateProfile(
+                UpdateProfileRequest(tastePrefs: Array(selectedTastes))
+            )
             appState.currentUser = user
         } catch {}
     }
@@ -204,7 +269,56 @@ struct ProfileView: View {
     }
 }
 
-// 头像组件 用户没头像则显示首字
+// 家庭组成模式 仅本地存
+enum HouseholdMode: String, CaseIterable, Identifiable {
+    case couple
+    case family3
+    case friends
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .couple: return "两个人"
+        case .family3: return "三口之家"
+        case .friends: return "朋友亲戚一起聚聚"
+        }
+    }
+}
+
+// 常见口味预设
+enum TastePresets {
+    static let all = ["麻辣", "清淡", "酸甜", "咸鲜", "海鲜", "烧烤", "凉拌", "蒸煮", "炖煮", "面食", "米饭", "汤水"]
+}
+
+// 单条场景选项行
+private struct SceneRow: View {
+    let scene: MealScene
+    let selected: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack {
+                Image(systemName: scene.icon)
+                    .foregroundStyle(selected ? Color.brandGreen : Color.inkMuted)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(scene.label).font(AppFont.body(15)).foregroundStyle(Color.inkPrimary)
+                    Text(scene.hint).font(AppFont.caption(11)).foregroundStyle(Color.inkMuted)
+                }
+                Spacer()
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(selected ? Color.brandGreen : Color.inkMuted)
+            }
+            .padding(AppSpacing.md)
+            .background(selected ? Color.brandGreen.opacity(0.06) : Color.appBackground)
+            .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// 头像组件
 private struct Avatar: View {
     let user: AppUser?
 

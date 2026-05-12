@@ -46,16 +46,8 @@ struct MealNowView: View {
             Text(appState.currentScene.hint)
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
-            if let user = appState.currentUser {
-                HStack(spacing: AppSpacing.xs) {
-                    Image(systemName: "person.2.fill")
-                        .font(.system(size: 12))
-                    Text("当前场景：\(user.displayName) 的 \(appState.currentScene.label)")
-                        .font(AppFont.caption())
-                }
-                .foregroundStyle(Color.inkMuted)
+            CurrentSceneBadge(scene: appState.currentScene)
                 .padding(.top, AppSpacing.xs)
-            }
         }
         .padding(.vertical, AppSpacing.sm)
     }
@@ -127,9 +119,10 @@ struct MealNowView: View {
             if vm.suggestions.isEmpty && !vm.isLoading {
                 emptyHint("先去菜单里收一些菜谱，这里会推荐")
             } else {
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: AppSpacing.md), GridItem(.flexible())], spacing: AppSpacing.md) {
-                    ForEach(vm.suggestions) { recipe in
-                        RecipeSquareCard(recipe: recipe) {
+                let columns = Array(repeating: GridItem(.flexible(), spacing: AppSpacing.md), count: 3)
+                LazyVGrid(columns: columns, spacing: AppSpacing.md) {
+                    ForEach(vm.suggestions.prefix(3)) { recipe in
+                        RecipeCircleCard(recipe: recipe) {
                             Task { await vm.addDish(recipe) }
                         }
                     }
@@ -146,9 +139,9 @@ struct MealNowView: View {
             if vm.frequents.isEmpty && !vm.isLoading {
                 emptyHint("还没吃过几顿 慢慢攒")
             } else {
-                VStack(spacing: AppSpacing.sm) {
+                FlowLayout(spacing: AppSpacing.sm) {
                     ForEach(vm.frequents) { recipe in
-                        FrequentRow(recipe: recipe) {
+                        FrequentPill(recipe: recipe) {
                             Task { await vm.addDish(recipe) }
                         }
                     }
@@ -216,34 +209,33 @@ struct MealNowView: View {
     }
 }
 
-// 小尺寸正方形菜品卡
-private struct RecipeSquareCard: View {
+// 圆形小图 用于首页"可能喜欢" 3 列推荐
+struct RecipeCircleCard: View {
     let recipe: Recipe
     let onAdd: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.sm) {
+        VStack(spacing: AppSpacing.sm) {
             ZStack(alignment: .bottomTrailing) {
                 AsyncImageView(url: recipe.coverImage, name: recipe.name)
-                    .frame(height: 140)
-                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+                    .aspectRatio(1, contentMode: .fill)
+                    .clipShape(Circle())
                 Button(action: onAdd) {
                     Image(systemName: "plus")
-                        .font(.system(size: 14, weight: .bold))
+                        .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 22, height: 22)
                         .background(Color.brandGreen)
                         .clipShape(Circle())
                 }
-                .padding(AppSpacing.sm)
             }
             Text(recipe.name)
-                .font(AppFont.body(15))
+                .font(AppFont.body(13))
                 .foregroundStyle(Color.inkPrimary)
                 .lineLimit(1)
             if let desc = recipe.description, !desc.isEmpty {
                 Text(desc)
-                    .font(AppFont.caption())
+                    .font(AppFont.caption(11))
                     .foregroundStyle(Color.inkMuted)
                     .lineLimit(1)
             }
@@ -251,39 +243,29 @@ private struct RecipeSquareCard: View {
     }
 }
 
-// 常吃菜的横向 row
-private struct FrequentRow: View {
+// 常吃菜的小药丸 横向多个 单击直接加入
+struct FrequentPill: View {
     let recipe: Recipe
     let onAdd: () -> Void
 
     var body: some View {
-        HStack(spacing: AppSpacing.md) {
-            DishThumb(name: recipe.name, image: recipe.coverImage)
-            VStack(alignment: .leading, spacing: 2) {
+        Button(action: onAdd) {
+            HStack(spacing: 6) {
                 Text(recipe.name)
-                    .font(AppFont.body(15))
-                    .foregroundStyle(Color.inkPrimary)
-                if let count = recipe.useCount, count > 0 {
-                    Text("吃过 \(count) 次")
-                        .font(AppFont.caption())
-                        .foregroundStyle(Color.inkMuted)
-                } else if let desc = recipe.description {
-                    Text(desc)
-                        .font(AppFont.caption())
-                        .foregroundStyle(Color.inkMuted)
-                        .lineLimit(1)
-                }
+                    .font(AppFont.body(13))
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .bold))
             }
-            Spacer()
-            Button(action: onAdd) {
-                Image(systemName: "plus.circle")
-                    .font(.system(size: 20))
-                    .foregroundStyle(Color.brandGreen)
-            }
+            .padding(.horizontal, AppSpacing.md)
+            .padding(.vertical, 8)
+            .foregroundStyle(Color.inkPrimary)
+            .background(Color.cardBackground)
+            .overlay(
+                Capsule().stroke(Color.brandGreen.opacity(0.18), lineWidth: 1)
+            )
+            .clipShape(Capsule())
         }
-        .padding(AppSpacing.md)
-        .background(Color.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+        .buttonStyle(.plain)
     }
 }
 

@@ -9,6 +9,8 @@ struct RecipeDetailView: View {
 
     @State private var recipe: Recipe?
     @State private var meal: MealSession?
+    @State private var isFavored: Bool = false
+    @State private var related: [Recipe] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var showSteps: Bool = false
@@ -19,12 +21,14 @@ struct RecipeDetailView: View {
                 heroImage
                 if let recipe {
                     titleSection(recipe)
+                    metricsGrid(recipe)
                     tagsRow(recipe)
                     ingredientsSection(recipe)
                     stepsToggle(recipe)
                     if let tips = recipe.tips, !tips.isEmpty {
                         tipsSection(tips)
                     }
+                    relatedSection
                 }
                 Color.clear.frame(height: 80)
             }
@@ -40,6 +44,16 @@ struct RecipeDetailView: View {
         }
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle(recipe?.name ?? "菜品")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    Task { await toggleFavor() }
+                } label: {
+                    Image(systemName: isFavored ? "heart.fill" : "heart")
+                        .foregroundStyle(isFavored ? Color.brandGreen : Color.inkSecondary)
+                }
+            }
+        }
     }
 
     private var heroImage: some View {
@@ -58,27 +72,58 @@ struct RecipeDetailView: View {
                     .font(AppFont.body())
                     .foregroundStyle(Color.inkSecondary)
             }
-            HStack(spacing: AppSpacing.md) {
-                if let t = r.cookingTime, t > 0 {
-                    metric(icon: "clock", value: "\(t) 分钟")
+        }
+    }
+
+    // metrics 改成 2 列网格 每个一行 icon+文字 上下分组
+    private func metricsGrid(_ r: Recipe) -> some View {
+        let items = buildMetrics(r)
+        let columns = Array(repeating: GridItem(.flexible(), spacing: AppSpacing.md), count: 2)
+        return LazyVGrid(columns: columns, alignment: .leading, spacing: AppSpacing.sm) {
+            ForEach(items, id: \.label) { item in
+                HStack(spacing: AppSpacing.sm) {
+                    Image(systemName: item.icon)
+                        .font(.system(size: 16))
+                        .foregroundStyle(Color.brandGreen)
+                        .frame(width: 22)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.label)
+                            .font(AppFont.caption(11))
+                            .foregroundStyle(Color.inkMuted)
+                        Text(item.value)
+                            .font(AppFont.body(14))
+                            .foregroundStyle(Color.inkPrimary)
+                    }
                 }
-                if let s = r.servings, s > 0 {
-                    metric(icon: "person.2", value: "\(s) 人份")
-                }
-                if let d = r.difficulty {
-                    metric(icon: "flame", value: d.label)
-                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(AppSpacing.md)
+                .background(Color.cardBackground)
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
             }
         }
     }
 
-    private func metric(icon: String, value: String) -> some View {
-        HStack(spacing: AppSpacing.xs) {
-            Image(systemName: icon)
-            Text(value)
+    private struct MetricItem {
+        let icon: String
+        let label: String
+        let value: String
+    }
+
+    private func buildMetrics(_ r: Recipe) -> [MetricItem] {
+        var items: [MetricItem] = []
+        if let t = r.cookingTime, t > 0 {
+            items.append(.init(icon: "clock", label: "用时", value: "\(t) 分钟"))
         }
-        .font(AppFont.caption())
-        .foregroundStyle(Color.inkMuted)
+        if let s = r.servings, s > 0 {
+            items.append(.init(icon: "person.2", label: "适合", value: "\(s) 人份"))
+        }
+        if let d = r.difficulty {
+            items.append(.init(icon: "flame", label: "难度", value: d.label))
+        }
+        if let scenes = r.sceneTags, !scenes.isEmpty {
+            items.append(.init(icon: "sun.max", label: "场合", value: scenes.first?.label ?? ""))
+        }
+        return items
     }
 
     private func tagsRow(_ r: Recipe) -> some View {
@@ -206,6 +251,25 @@ struct RecipeDetailView: View {
         }
     }
 
+    @ViewBuilder
+    private var relatedSection: some View {
+        if !related.isEmpty {
+            VStack(alignment: .leading, spacing: AppSpacing.md) {
+                Text("可以怎么吃")
+                    .font(AppFont.headline(15))
+                    .foregroundStyle(Color.inkPrimary)
+                let columns = Array(repeating: GridItem(.flexible(), spacing: AppSpacing.md), count: 3)
+                LazyVGrid(columns: columns, spacing: AppSpacing.md) {
+                    ForEach(related.prefix(3)) { r in
+                        RecipeCircleCard(recipe: r) {
+                            Task { await quickAdd(r) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private var bottomBar: some View {
         HStack(spacing: AppSpacing.md) {
             SecondaryButton(title: "留到周末", icon: "calendar") {
@@ -234,6 +298,37 @@ struct RecipeDetailView: View {
             let (r, m) = try await (detail, current)
             self.recipe = r
             self.meal = m
+            await loadRelated(r)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func loadRelated(_ r: Recipe) async {
+        var query = RecipeListQuery(page: 1, pageSize: 6)
+        if let cid = r.categoryId {
+            query.categoryId = cid
+        }
+        do {
+            let result = try await RecipeService.shared.list(query)
+            related = result.items.filter { $0.id != r.id }
+        } catch {}
+    }
+
+    private func toggleFavor() async {
+        guard let recipe else { return }
+        do {
+            isFavored = try await RecipeService.shared.toggleFavorite(id: recipe.id)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func quickAdd(_ r: Recipe) async {
+        guard let meal else { return }
+        do {
+            _ = try await MealService.shared.addDish(mealId: meal.id, dish: DishInput(recipeId: r.id))
+            self.meal = try await MealService.shared.detail(id: meal.id)
         } catch {
             errorMessage = error.localizedDescription
         }

@@ -17,6 +17,7 @@ struct MenuView: View {
                 VStack(spacing: AppSpacing.lg) {
                     header
                     searchBar
+                    quickFilterChips
                     categoryChips
                     grid_section
                     pinnedSection
@@ -49,8 +50,22 @@ struct MenuView: View {
             Text("把这一顿想选的菜放在这里")
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
+            CurrentSceneBadge(scene: appState.currentScene)
+                .padding(.top, AppSpacing.xs)
         }
         .padding(.vertical, AppSpacing.sm)
+    }
+
+    private var quickFilterChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: AppSpacing.sm) {
+                ForEach(MenuFilter.allCases) { f in
+                    CategoryChip(title: f.label, isSelected: vm.quickFilter == f) {
+                        Task { await vm.selectFilter(f) }
+                    }
+                }
+            }
+        }
     }
 
     private var searchBar: some View {
