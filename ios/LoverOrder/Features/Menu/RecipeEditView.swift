@@ -108,19 +108,8 @@ struct RecipeEditView: View {
 
     private var coverSection: some View {
         SectionCard {
-            FieldLabel("封面图链接", required: false)
-            TextField("https://...（可留空）", text: $coverImage)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
-                .padding(AppSpacing.md)
-                .background(Color.appBackground)
-                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
-            if !coverImage.isEmpty {
-                AsyncImageView(url: coverImage, name: name)
-                    .frame(height: 140)
-                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
-            }
+            FieldLabel("封面图", required: false)
+            PhotoPickerField(imageURL: $coverImage, label: "选张这道菜的照片")
         }
     }
 

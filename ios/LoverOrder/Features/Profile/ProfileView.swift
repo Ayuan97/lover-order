@@ -16,6 +16,7 @@ struct ProfileView: View {
 
     @State private var showCategoryManagement: Bool = false
     @State private var confirmLeaveHousehold: Bool = false
+    @State private var showEditProfile: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -43,6 +44,10 @@ struct ProfileView: View {
             .navigationBarHidden(true)
             .sheet(isPresented: $showCategoryManagement) {
                 CategoryManagementView()
+            }
+            .sheet(isPresented: $showEditProfile) {
+                EditProfileSheet()
+                    .environmentObject(appState)
             }
         }
     }
@@ -106,7 +111,7 @@ struct ProfileView: View {
                 }
                 Spacer()
                 Button {
-                    // 编辑昵称头像入口 后续扩展
+                    showEditProfile = true
                 } label: {
                     Text("编辑")
                         .font(AppFont.caption(13))

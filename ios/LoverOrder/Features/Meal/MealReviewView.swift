@@ -10,7 +10,6 @@ struct MealReviewView: View {
     @State private var rating: Int = 5
     @State private var comment: String = ""
     @State private var photoLinks: [String] = []
-    @State private var newPhotoLink: String = ""
     @State private var isSubmitting: Bool = false
     @State private var errorMessage: String?
 
@@ -127,50 +126,11 @@ struct MealReviewView: View {
             HStack {
                 FieldLabel("配图")
                 Spacer()
-                Text("可选 链接")
+                Text("最多 9 张")
                     .font(AppFont.caption(11))
                     .foregroundStyle(Color.inkMuted)
             }
-            HStack(spacing: AppSpacing.sm) {
-                TextField("贴一张照片的链接", text: $newPhotoLink)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                    .padding(AppSpacing.md)
-                    .background(Color.appBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
-                Button {
-                    addPhoto()
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 14, weight: .bold))
-                        .frame(width: 36, height: 36)
-                        .foregroundStyle(.white)
-                        .background(Color.brandGreen)
-                        .clipShape(Circle())
-                }
-            }
-            if !photoLinks.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: AppSpacing.sm) {
-                        ForEach(photoLinks, id: \.self) { link in
-                            ZStack(alignment: .topTrailing) {
-                                AsyncImageView(url: link, name: "")
-                                    .frame(width: 96, height: 96)
-                                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
-                                Button {
-                                    photoLinks.removeAll { $0 == link }
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundStyle(.white)
-                                        .background(Circle().fill(Color.black.opacity(0.5)))
-                                }
-                                .padding(4)
-                            }
-                        }
-                    }
-                }
-            }
+            MultiPhotoPicker(urls: $photoLinks, maxCount: 9)
         }
     }
 
@@ -181,13 +141,6 @@ struct MealReviewView: View {
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, AppSpacing.sm)
         .background(Color.appBackground)
-    }
-
-    private func addPhoto() {
-        let trimmed = newPhotoLink.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        photoLinks.append(trimmed)
-        newPhotoLink = ""
     }
 
     private func submit() async {

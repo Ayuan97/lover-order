@@ -37,6 +37,8 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
+	r.Static("/static/uploads", cfg.Upload.Path)
+
 	registerRoutes(r)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
@@ -66,6 +68,7 @@ func registerRoutes(r *gin.Engine) {
 	categoryH := api.NewCategoryHandler()
 	recipeH := api.NewRecipeHandler()
 	mealH := api.NewMealHandler()
+	uploadH := api.NewUploadHandler()
 
 	v1 := r.Group("/api/v1")
 	{
@@ -93,6 +96,11 @@ func registerRoutes(r *gin.Engine) {
 				household.GET("/info", middleware.HouseholdRequired(), householdH.Info)
 				household.POST("/invite", middleware.HouseholdRequired(), householdH.Invite)
 				household.GET("/invitations", middleware.HouseholdRequired(), householdH.Invitations)
+			}
+
+			upload := secured.Group("/upload")
+			{
+				upload.POST("/image", uploadH.Image)
 			}
 
 			inHousehold := secured.Group("")
