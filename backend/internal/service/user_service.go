@@ -33,6 +33,51 @@ type LoginResult struct {
 	RefreshToken string      `json:"refresh_token"`
 }
 
+// DevLoginInput 开发期登录入参 通过昵称识别同一个用户
+type DevLoginInput struct {
+	Nickname string `json:"nickname" binding:"required"`
+}
+
+// LoginDev 开发期登录 仅在 server.mode != release 时启用
+// 用昵称作为唯一标识 不验证密码 不连 Apple
+func (s *UserService) LoginDev(in DevLoginInput) (*LoginResult, error) {
+	name := in.Nickname
+	if name == "" {
+		return nil, errors.New("请填昵称")
+	}
+
+	pseudoAppleID := "dev:" + name
+
+	var user model.User
+	err := model.DB.Where("apple_user_id = ?", pseudoAppleID).First(&user).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		now := time.Now()
+		user = model.User{
+			AppleUserID: pseudoAppleID,
+			Nickname:    name,
+			IsActive:    true,
+			LastLoginAt: &now,
+		}
+		if err := model.DB.Create(&user).Error; err != nil {
+			return nil, fmt.Errorf("创建开发用户失败：%w", err)
+		}
+	} else if err != nil {
+		return nil, fmt.Errorf("查询用户失败：%w", err)
+	} else {
+		_ = model.DB.Model(&user).Update("last_login_at", time.Now()).Error
+	}
+
+	access, err := jwt.IssueAccess(user.ID)
+	if err != nil {
+		return nil, err
+	}
+	refresh, err := jwt.IssueRefresh(user.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &LoginResult{User: &user, AccessToken: access, RefreshToken: refresh}, nil
+}
+
 // LoginWithApple Apple 登录或注册
 func (s *UserService) LoginWithApple(in AppleLoginInput) (*LoginResult, error) {
 	claims, err := apple.Verify(in.IdentityToken)

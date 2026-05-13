@@ -1,11 +1,13 @@
 import AuthenticationServices
 import SwiftUI
 
-// 登录页 仅 Apple Sign In
+// 登录页 Apple Sign In + DEBUG 时支持开发登录
 struct LoginView: View {
     @EnvironmentObject private var appState: AppState
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var showDevLogin: Bool = false
+    @State private var devNickname: String = ""
 
     var body: some View {
         VStack(spacing: AppSpacing.xxl) {
@@ -33,6 +35,20 @@ struct LoginView: View {
                     .frame(height: 52)
                     .clipShape(RoundedRectangle(cornerRadius: AppRadius.pill, style: .continuous))
 
+                #if DEBUG
+                Button {
+                    showDevLogin = true
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "hammer")
+                        Text("开发模式登录")
+                    }
+                    .font(AppFont.caption(13))
+                    .foregroundStyle(Color.inkSecondary)
+                    .padding(.vertical, 6)
+                }
+                #endif
+
                 if let errorMessage {
                     Text(errorMessage)
                         .font(AppFont.caption())
@@ -56,6 +72,29 @@ struct LoginView: View {
                     ProgressView().tint(Color.brandGreen)
                 }
             }
+        }
+        .alert("开发模式登录", isPresented: $showDevLogin) {
+            TextField("起个昵称", text: $devNickname)
+            Button("登录") {
+                let name = devNickname.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { return }
+                Task { await handleDev(nickname: name) }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("跳过 Apple Sign In 用昵称作为身份，仅用于本地调试")
+        }
+    }
+
+    private func handleDev(nickname: String) async {
+        errorMessage = nil
+        isLoading = true
+        defer { isLoading = false }
+        do {
+            let res = try await AuthService.shared.loginDev(nickname: nickname)
+            await appState.didLogin(res)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 

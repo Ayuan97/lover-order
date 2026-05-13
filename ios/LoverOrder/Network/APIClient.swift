@@ -1,12 +1,21 @@
 import Foundation
 
-// 后端基础地址 调试时指向本机后端
+// 后端基础地址
+// 模拟器走 localhost；真机用 Info.plist 里的 API_BASE_URL（或下面的 fallback LAN IP）
+// 修改方式：
+//   方式 A 改 Info.plist 加 API_BASE_URL 字符串 比如 "http://192.168.1.162:8081"
+//   方式 B 直接改下面的 fallbackDeviceBaseURL（更快）
 enum APIConfig {
+    private static let fallbackDeviceBaseURL = "http://192.168.1.162:8081"
+
     static let baseURL: URL = {
         #if targetEnvironment(simulator)
         return URL(string: "http://localhost:8081/api/v1")!
         #else
-        return URL(string: "http://127.0.0.1:8081/api/v1")!
+        let base = (Bundle.main.object(forInfoDictionaryKey: "API_BASE_URL") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let host = (base?.isEmpty == false ? base! : fallbackDeviceBaseURL)
+        return URL(string: host + "/api/v1") ?? URL(string: fallbackDeviceBaseURL + "/api/v1")!
         #endif
     }()
 }

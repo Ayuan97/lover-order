@@ -31,5 +31,16 @@
     </array>
     <key>UIRequiresFullScreen</key>
     <true/>
+    <key>API_BASE_URL</key>
+    <string>http://192.168.1.162:8081</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+    <key>NSPhotoLibraryUsageDescription</key>
+    <string>选择菜品照片和评价配图</string>
+    <key>NSCameraUsageDescription</key>
+    <string>拍摄菜品照片</string>
 </dict>
 </plist>

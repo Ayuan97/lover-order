@@ -16,6 +16,21 @@ func NewAuthHandler() *AuthHandler {
 	return &AuthHandler{svc: service.NewUserService()}
 }
 
+// DevLogin 开发模式登录 通过昵称生成令牌
+func (h *AuthHandler) DevLogin(c *gin.Context) {
+	var in service.DevLoginInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		Fail(c, CodeBadRequest, "参数有误")
+		return
+	}
+	result, err := h.svc.LoginDev(in)
+	if err != nil {
+		Fail(c, CodeBadRequest, err.Error())
+		return
+	}
+	OK(c, result)
+}
+
 // AppleLogin Apple Sign In 登录
 func (h *AuthHandler) AppleLogin(c *gin.Context) {
 	var in service.AppleLoginInput

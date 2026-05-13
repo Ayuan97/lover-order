@@ -13,6 +13,11 @@ struct AppleLoginRequest: Encodable {
     }
 }
 
+// 开发登录入参
+struct DevLoginRequest: Encodable {
+    let nickname: String
+}
+
 // 登录返回
 struct LoginResult: Decodable {
     let user: AppUser
@@ -61,6 +66,10 @@ final class AuthService {
     func loginWithApple(identityToken: String, nickname: String?, avatar: String? = nil) async throws -> LoginResult {
         let body = AppleLoginRequest(identityToken: identityToken, nickname: nickname, avatar: avatar)
         return try await api.post("auth/apple", body: body)
+    }
+
+    func loginDev(nickname: String) async throws -> LoginResult {
+        try await api.post("auth/dev", body: DevLoginRequest(nickname: nickname))
     }
 
     func refresh(refreshToken: String) async throws -> String {

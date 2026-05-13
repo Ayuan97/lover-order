@@ -77,6 +77,10 @@ func registerRoutes(r *gin.Engine) {
 			auth.POST("/apple", authH.AppleLogin)
 			auth.POST("/refresh", authH.Refresh)
 			auth.POST("/logout", authH.Logout)
+			// 非 release 模式启用开发登录 真机/模拟器没配 Apple 时用
+			if gin.Mode() != gin.ReleaseMode {
+				auth.POST("/dev", authH.DevLogin)
+			}
 		}
 
 		secured := v1.Group("")
