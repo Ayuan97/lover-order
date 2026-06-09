@@ -10,24 +10,41 @@ struct MealNowView: View {
     @State private var reviewMealId: UInt?
     @State private var showCreateRecipe: Bool = false
     @State private var showShoppingList: Bool = false
+    @State private var showDiningHost: Bool = false
+    @State private var showDiningJoin: Bool = false
+    @State private var ongoingDining: MealSession?
+    @State private var resumeDining: MealSession?
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: AppSpacing.lg) {
+                VStack(alignment: .leading, spacing: AppSpacing.lg) {
                     header
-                    moodPicker
-                    if !vm.dishes.isEmpty {
+                    if vm.meal?.status != .confirmed {
+                        moodPicker
+                    }
+                    if showFriendOrderingCard {
+                        friendOrderingCard
+                    }
+                    if vm.meal?.status == .confirmed {
+                        confirmedMealCard
+                    } else if !vm.dishes.isEmpty {
                         currentMealCard
                     }
-                    if showEmptyHint {
-                        EmptyMealHint(
-                            onCreateRecipe: { showCreateRecipe = true },
-                            onInvite: { copyInviteCode() }
-                        )
-                    } else {
-                        suggestionsSection
-                        frequentsSection
+                    if vm.meal?.status != .confirmed {
+                        if showEmptyHint {
+                            if vm.loadFailed {
+                                LoadFailedView { await vm.load(scene: appState.currentScene, mood: appState.currentMood) }
+                            } else {
+                                EmptyMealHint(
+                                    onCreateRecipe: { showCreateRecipe = true },
+                                    onInvite: { copyInviteCode() }
+                                )
+                            }
+                        } else {
+                            suggestionsSection
+                            frequentsSection
+                        }
                     }
                     Color.clear.frame(height: 80)
                 }
@@ -40,6 +57,9 @@ struct MealNowView: View {
             }
             .task {
                 await vm.load(scene: appState.currentScene, mood: appState.currentMood)
+            }
+            .task {
+                await checkDining()
             }
             .onChange(of: appState.currentScene) { _, _ in
                 Task { await vm.load(scene: appState.currentScene, mood: appState.currentMood) }
@@ -56,10 +76,14 @@ struct MealNowView: View {
                     .environmentObject(appState)
                 }
             }
-            .sheet(isPresented: $showReview) {
+            .sheet(isPresented: $showReview, onDismiss: {
+                reviewMealId = nil
+                clearFinishedMeal()
+                Task { await reloadCurrentMeal() }
+            }) {
                 if let mid = reviewMealId {
                     MealReviewView(mealId: mid) {
-                        Task { await vm.load(scene: appState.currentScene, mood: appState.currentMood) }
+                        Task { await reloadCurrentMeal() }
                     }
                 }
             }
@@ -74,11 +98,75 @@ struct MealNowView: View {
                     ShoppingListView(mealId: mid)
                 }
             }
+            .toast($vm.errorMessage)
+            .sheet(isPresented: $showDiningHost) {
+                if let mid = vm.meal?.id {
+                    DiningHostView(mealId: mid)
+                }
+            }
+            .sheet(isPresented: $showDiningJoin) {
+                DiningJoinView()
+                    .environmentObject(appState)
+            }
+            .fullScreenCover(item: $resumeDining, onDismiss: {
+                Task { await checkDining() }
+            }) { m in
+                DiningGuestView(meal: m)
+                    .environmentObject(appState)
+            }
+            .overlay(alignment: .topTrailing) {
+                diningJoinEntry
+            }
         }
+    }
+
+    // 右上角常驻:没聚餐时是"扫码加入" 检测到正在参与的聚餐就变成"聚餐中·一键返回"
+    private var diningJoinEntry: some View {
+        Button {
+            if let d = ongoingDining {
+                resumeDining = d
+            } else {
+                showDiningJoin = true
+            }
+        } label: {
+            if ongoingDining != nil {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(Color.brandGreen)
+                        .frame(width: 7, height: 7)
+                    Text("聚餐中")
+                        .font(AppFont.caption(12))
+                        .foregroundStyle(Color.brandGreen)
+                }
+                .padding(.horizontal, AppSpacing.md)
+                .frame(height: 36)
+                .background(Color.cardBackground)
+                .clipShape(Capsule())
+                .appCardShadow()
+            } else {
+                Image(systemName: "qrcode.viewfinder")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(Color.brandGreen)
+                    .frame(width: 40, height: 40)
+                    .background(Color.cardBackground)
+                    .clipShape(Circle())
+                    .appCardShadow()
+            }
+        }
+        .padding(.trailing, AppSpacing.lg)
+        .padding(.top, AppSpacing.sm)
+    }
+
+    private func checkDining() async {
+        ongoingDining = try? await DiningService.shared.current()
     }
 
     private var showEmptyHint: Bool {
         !vm.isLoading && vm.suggestions.isEmpty && vm.frequents.isEmpty && vm.dishes.isEmpty
+    }
+
+    private var showFriendOrderingCard: Bool {
+        appState.currentScene == .family && vm.meal?.status != .confirmed && !vm.loadFailed
     }
 
     private func copyInviteCode() {
@@ -87,15 +175,14 @@ struct MealNowView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.xs) {
-            HStack {
+        VStack(spacing: AppSpacing.xs) {
+            HStack(spacing: 6) {
                 Text("我们这顿")
                     .font(AppFont.title(30))
                     .foregroundStyle(Color.inkPrimary)
-                Image(systemName: "leaf.fill")
+                Image(systemName: "heart.fill")
                     .foregroundStyle(Color.brandGreen)
-                    .font(.system(size: 18))
-                Spacer()
+                    .font(.system(size: 14))
             }
             Text(appState.currentScene.hint)
                 .font(AppFont.body())
@@ -103,6 +190,7 @@ struct MealNowView: View {
             CurrentSceneBadge(scene: appState.currentScene)
                 .padding(.top, AppSpacing.xs)
         }
+        .frame(maxWidth: .infinity)
         .padding(.vertical, AppSpacing.sm)
     }
 
@@ -117,6 +205,139 @@ struct MealNowView: View {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    private var confirmedMealCard: some View {
+        SectionCard {
+            HStack(alignment: .top, spacing: AppSpacing.md) {
+                ZStack {
+                    Color.brandGreen.opacity(0.12)
+                    Image(systemName: appState.currentScene == .family ? "house.fill" : "fork.knife")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.brandGreen)
+                }
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+
+                VStack(alignment: .leading, spacing: AppSpacing.xs) {
+                    Text(confirmedTitle)
+                        .font(AppFont.headline(17))
+                        .foregroundStyle(Color.inkPrimary)
+                    Text(confirmedSubtitle)
+                        .font(AppFont.body(13))
+                        .foregroundStyle(Color.inkMuted)
+                }
+                Spacer()
+                Text("\(vm.dishCount) 道")
+                    .font(AppFont.caption())
+                    .foregroundStyle(Color.inkMuted)
+            }
+
+            CookingProgressView()
+
+            VStack(spacing: AppSpacing.sm) {
+                ForEach(vm.dishes) { dish in
+                    confirmedDishRow(dish)
+                }
+            }
+
+            HStack(spacing: AppSpacing.sm) {
+                SecondaryButton(title: "继续加菜", icon: "plus") {
+                    showAddDish = true
+                }
+                SecondaryButton(title: "购物清单", icon: "cart") {
+                    showShoppingList = true
+                }
+            }
+        }
+    }
+
+    private var confirmedTitle: String {
+        appState.currentScene == .family ? "家里这顿定好了" : "今天就吃这些"
+    }
+
+    private var confirmedSubtitle: String {
+        appState.currentScene == .family ? "先照着这份菜单准备 临时想起还能加菜" : "菜单已经定下 现在可以照着做了"
+    }
+
+    private func confirmedDishRow(_ dish: MealDish) -> some View {
+        HStack(spacing: AppSpacing.md) {
+            DishThumb(name: dish.recipeName, image: dish.recipeImage)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(dish.recipeName)
+                    .font(AppFont.body(15))
+                    .foregroundStyle(Color.inkPrimary)
+                if let note = dish.note, !note.isEmpty {
+                    Text(note)
+                        .font(AppFont.caption())
+                        .foregroundStyle(Color.inkMuted)
+                }
+            }
+            Spacer()
+            if let recipeId = dish.recipeId {
+                NavigationLink {
+                    RecipeDetailView(recipeId: recipeId)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "list.number")
+                        Text("做法")
+                    }
+                    .font(AppFont.caption(12))
+                    .foregroundStyle(Color.brandGreen)
+                    .padding(.horizontal, AppSpacing.sm)
+                    .padding(.vertical, 6)
+                    .background(Color.brandGreen.opacity(0.08))
+                    .clipShape(Capsule())
+                }
+            }
+            Button {
+                Task { await vm.removeDish(dish) }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(Color.inkMuted)
+            }
+        }
+    }
+
+    private var friendOrderingCard: some View {
+        SectionCard {
+            HStack(alignment: .top, spacing: AppSpacing.md) {
+                ZStack {
+                    Color.brandGreen.opacity(0.1)
+                    Image(systemName: "list.bullet.rectangle")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.brandGreen)
+                }
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+
+                VStack(alignment: .leading, spacing: AppSpacing.xs) {
+                    Text("朋友点菜")
+                        .font(AppFont.headline(17))
+                        .foregroundStyle(Color.inkPrimary)
+                    Text("把手机递给朋友 从你家的菜单里直接挑想吃的")
+                        .font(AppFont.body(13))
+                        .foregroundStyle(Color.inkMuted)
+                }
+                Spacer()
+                if vm.dishCount > 0 {
+                    Text("\(vm.dishCount) 道")
+                        .font(AppFont.caption(12))
+                        .foregroundStyle(Color.brandGreen)
+                        .padding(.horizontal, AppSpacing.sm)
+                        .padding(.vertical, 6)
+                        .background(Color.brandGreen.opacity(0.08))
+                        .clipShape(Capsule())
+                }
+            }
+
+            PrimaryButton(title: "打开家里菜单", icon: "fork.knife") {
+                showAddDish = true
+            }
+            SecondaryButton(title: "开聚餐 · 让大家扫码", icon: "qrcode") {
+                showDiningHost = true
             }
         }
     }
@@ -157,6 +378,9 @@ struct MealNowView: View {
                             }
                         }
                         Spacer()
+                        if let adder = dish.adder {
+                            AvatarView(user: adder, size: 22)
+                        }
                         Button {
                             Task { await vm.removeDish(dish) }
                         } label: {
@@ -165,6 +389,9 @@ struct MealNowView: View {
                         }
                     }
                 }
+            }
+            if participants.count > 1 {
+                participantsRow
             }
         }
     }
@@ -186,7 +413,7 @@ struct MealNowView: View {
                 let columns = Array(repeating: GridItem(.flexible(), spacing: AppSpacing.md), count: 3)
                 LazyVGrid(columns: columns, spacing: AppSpacing.md) {
                     ForEach(vm.suggestions.prefix(3)) { recipe in
-                        RecipeCircleCard(recipe: recipe) {
+                        RecipeCircleCard(recipe: recipe, alreadyAdded: alreadyAdded(recipe)) {
                             Task { await vm.addDish(recipe) }
                         }
                     }
@@ -205,7 +432,7 @@ struct MealNowView: View {
             } else {
                 FlowLayout(spacing: AppSpacing.sm) {
                     ForEach(vm.frequents) { recipe in
-                        FrequentPill(recipe: recipe) {
+                        FrequentPill(recipe: recipe, alreadyAdded: alreadyAdded(recipe)) {
                             Task { await vm.addDish(recipe) }
                         }
                     }
@@ -227,11 +454,15 @@ struct MealNowView: View {
                 .foregroundStyle(Color.brandGreen)
             }
             Button {
-                Task { await randomPick() }
+                if vm.meal?.status == .confirmed {
+                    showShoppingList = true
+                } else {
+                    Task { await randomPick() }
+                }
             } label: {
                 VStack(spacing: 2) {
-                    Image(systemName: "shuffle")
-                    Text("随便").font(AppFont.caption())
+                    Image(systemName: vm.meal?.status == .confirmed ? "cart" : "shuffle")
+                    Text(vm.meal?.status == .confirmed ? "清单" : "随便").font(AppFont.caption())
                 }
                 .frame(width: 60, height: 52)
                 .foregroundStyle(Color.brandGreen)
@@ -249,8 +480,8 @@ struct MealNowView: View {
         guard let meal = vm.meal else { return "一起选好了" }
         switch meal.status {
         case .planning: return "一起选好了"
-        case .confirmed: return "做好啦"
-        case .completed: return "再来一顿"
+        case .confirmed: return "做好了"
+        case .completed: return "再开一顿"
         case .cancelled: return "重新开始"
         }
     }
@@ -270,26 +501,75 @@ struct MealNowView: View {
         await vm.addDish(any)
     }
 
+    private func reloadCurrentMeal() async {
+        await vm.load(scene: appState.currentScene, mood: appState.currentMood)
+    }
+
+    private func clearFinishedMeal() {
+        if vm.meal?.status == .completed || vm.meal?.status == .cancelled {
+            vm.meal = nil
+        }
+    }
+
     private func confirmAction() async {
         guard let meal = vm.meal else { return }
         switch meal.status {
         case .planning:
+            if vm.dishes.isEmpty {
+                vm.errorMessage = "先选一道菜再定下"
+                return
+            }
             await vm.confirm()
         case .confirmed:
             await vm.complete()
-            if let completedId = vm.meal?.id {
+            if vm.meal?.status == .completed, let completedId = vm.meal?.id {
                 reviewMealId = completedId
+                clearFinishedMeal()
                 showReview = true
             }
         case .completed, .cancelled:
             await vm.load(scene: appState.currentScene, mood: appState.currentMood)
         }
     }
+
+    private func alreadyAdded(_ recipe: Recipe) -> Bool {
+        vm.dishes.contains { $0.recipeId == recipe.id }
+    }
+
+    // 这一顿的参与者 按加菜人去重
+    private var participants: [AppUser] {
+        var seen = Set<UInt>()
+        var result: [AppUser] = []
+        for d in vm.dishes {
+            if let a = d.adder, !seen.contains(a.id) {
+                seen.insert(a.id)
+                result.append(a)
+            }
+        }
+        return result
+    }
+
+    private var participantsRow: some View {
+        HStack(spacing: AppSpacing.sm) {
+            HStack(spacing: -8) {
+                ForEach(participants.prefix(5)) { u in
+                    AvatarView(user: u, size: 24)
+                        .overlay(Circle().strokeBorder(Color.cardBackground, lineWidth: 2))
+                }
+            }
+            Text("\(participants.count) 人一起选了 \(vm.dishCount) 道")
+                .font(AppFont.caption(12))
+                .foregroundStyle(Color.inkSecondary)
+            Spacer()
+        }
+        .padding(.top, AppSpacing.xs)
+    }
 }
 
 // 圆角方形小图 用于首页"可能喜欢" 3 列推荐
 struct RecipeCircleCard: View {
     let recipe: Recipe
+    var alreadyAdded: Bool = false
     let onAdd: () -> Void
 
     var body: some View {
@@ -299,11 +579,11 @@ struct RecipeCircleCard: View {
                     .aspectRatio(1, contentMode: .fill)
                     .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
                 Button(action: onAdd) {
-                    Image(systemName: "plus")
+                    Image(systemName: alreadyAdded ? "checkmark" : "plus")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 22, height: 22)
-                        .background(Color.brandGreen)
+                        .background(alreadyAdded ? Color.inkMuted : Color.brandGreen)
                         .clipShape(Circle())
                 }
                 .padding(6)
@@ -325,6 +605,7 @@ struct RecipeCircleCard: View {
 // 常吃菜的小药丸 横向多个 单击直接加入
 struct FrequentPill: View {
     let recipe: Recipe
+    var alreadyAdded: Bool = false
     let onAdd: () -> Void
 
     var body: some View {
@@ -332,15 +613,15 @@ struct FrequentPill: View {
             HStack(spacing: 6) {
                 Text(recipe.name)
                     .font(AppFont.body(13))
-                Image(systemName: "plus")
+                Image(systemName: alreadyAdded ? "checkmark" : "plus")
                     .font(.system(size: 10, weight: .bold))
             }
             .padding(.horizontal, AppSpacing.md)
             .padding(.vertical, 8)
-            .foregroundStyle(Color.inkPrimary)
-            .background(Color.cardBackground)
+            .foregroundStyle(alreadyAdded ? Color.inkMuted : Color.inkPrimary)
+            .background(alreadyAdded ? Color.brandGreen.opacity(0.08) : Color.cardBackground)
             .overlay(
-                Capsule().stroke(Color.brandGreen.opacity(0.18), lineWidth: 1)
+                Capsule().stroke(Color.brandGreen.opacity(alreadyAdded ? 0.35 : 0.18), lineWidth: 1)
             )
             .clipShape(Capsule())
         }
@@ -348,10 +629,51 @@ struct FrequentPill: View {
     }
 }
 
+private struct CookingProgressView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isAnimating = false
+
+    var body: some View {
+        HStack(spacing: AppSpacing.sm) {
+            HStack(spacing: 3) {
+                ForEach(0..<3, id: \.self) { index in
+                    Capsule()
+                        .fill(Color.brandGreen.opacity(0.75))
+                        .frame(width: 5, height: 14)
+                        .scaleEffect(y: isAnimating ? 1.35 : 0.7, anchor: .center)
+                        .animation(
+                            reduceMotion ? nil : .easeInOut(duration: 0.7)
+                                .repeatForever(autoreverses: true)
+                                .delay(Double(index) * 0.12),
+                            value: isAnimating
+                        )
+                }
+            }
+            Text("做饭中")
+                .font(AppFont.headline(14))
+                .foregroundStyle(Color.inkPrimary)
+            Spacer()
+            Text("做好后再评价")
+                .font(AppFont.caption(12))
+                .foregroundStyle(Color.inkMuted)
+        }
+        .padding(.horizontal, AppSpacing.md)
+        .padding(.vertical, 10)
+        .background(Color.brandGreen.opacity(0.07))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+        .onAppear {
+            guard !reduceMotion else { return }
+            isAnimating = true
+        }
+    }
+}
+
 // 小缩略图 没有图时显示菜名首字
 struct DishThumb: View {
     let name: String
     let image: String?
+    var size: CGFloat = 48
+    var radius: CGFloat = AppRadius.sm
 
     var body: some View {
         Group {
@@ -368,15 +690,15 @@ struct DishThumb: View {
                 placeholder
             }
         }
-        .frame(width: 48, height: 48)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous))
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
     }
 
     private var placeholder: some View {
         ZStack {
             Color.appBackground
             Text(String(name.prefix(1)))
-                .font(AppFont.headline(18))
+                .font(AppFont.headline(size * 0.36))
                 .foregroundStyle(Color.brandGreen)
         }
     }

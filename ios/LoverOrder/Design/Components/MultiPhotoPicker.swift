@@ -64,7 +64,7 @@ struct MultiPhotoPicker: View {
             if let errorMessage {
                 Text(errorMessage)
                     .font(AppFont.caption(11))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.errorInk)
             }
         }
         .onChange(of: pickerItems) { _, items in

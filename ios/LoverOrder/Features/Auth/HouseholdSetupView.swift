@@ -8,6 +8,7 @@ struct HouseholdSetupView: View {
     @State private var inviteCode: String = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var showScanner = false
 
     enum Mode: Hashable { case create, join }
 
@@ -35,7 +36,7 @@ struct HouseholdSetupView: View {
             if let errorMessage {
                 Text(errorMessage)
                     .font(AppFont.caption())
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.errorInk)
             }
 
             Spacer()
@@ -46,6 +47,12 @@ struct HouseholdSetupView: View {
         }
         .padding(.top, AppSpacing.xxl)
         .background(Color.appBackground.ignoresSafeArea())
+        .fullScreenCover(isPresented: $showScanner) {
+            QRScannerScreen { code in
+                inviteCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
+                submit()
+            }
+        }
     }
 
     private var header: some View {
@@ -77,10 +84,24 @@ struct HouseholdSetupView: View {
 
     private var joinSection: some View {
         VStack(alignment: .leading, spacing: AppSpacing.md) {
-            Text("邀请码")
+            Button {
+                showScanner = true
+            } label: {
+                HStack(spacing: AppSpacing.sm) {
+                    Image(systemName: "qrcode.viewfinder")
+                    Text("扫一扫 · 对方的餐券")
+                }
                 .font(AppFont.headline(15))
-                .foregroundStyle(Color.inkPrimary)
-            TextField("输入对方分享的 8 位邀请码", text: $inviteCode)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, AppSpacing.md)
+                .background(Color.brandGreen)
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+            }
+            Text("或手输邀请码")
+                .font(AppFont.caption())
+                .foregroundStyle(Color.inkMuted)
+            TextField("对方分享的邀请码", text: $inviteCode)
                 .textInputAutocapitalization(.characters)
                 .autocorrectionDisabled()
                 .padding(AppSpacing.md)

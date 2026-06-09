@@ -8,7 +8,7 @@ struct CurrentSceneBadge: View {
         HStack(spacing: 6) {
             Image(systemName: "info.circle")
                 .font(.system(size: 11))
-            Text("当前场景：\(scene.label)")
+            Text("相处模式：\(scene.modeLabel)")
                 .font(AppFont.caption(11))
             Text("·")
             Text("可在'我的'里切换")
@@ -19,5 +19,6 @@ struct CurrentSceneBadge: View {
         .foregroundStyle(Color.inkMuted)
         .background(Color.cardBackground)
         .clipShape(Capsule(style: .continuous))
+        .capsuleHairline()
     }
 }

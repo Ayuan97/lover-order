@@ -12,7 +12,7 @@ final class AppState: ObservableObject {
     @Published var loginError: String?
 
     var isLoggedIn: Bool {
-        TokenStorage.shared.isLoggedIn && currentUser != nil
+        currentUser != nil
     }
 
     // 启动时拉一次资料 据此决定走登录页还是主界面

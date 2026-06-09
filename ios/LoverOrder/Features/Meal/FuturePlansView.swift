@@ -37,6 +37,7 @@ struct FuturePlansView: View {
                 .environmentObject(appState)
             }
         }
+        .toast($errorMessage)
     }
 
     private var header: some View {
@@ -177,6 +178,7 @@ struct FuturePlansView: View {
                 }
             }
             try await MealService.shared.cancel(id: future.id)
+            Haptics.success()
             await load()
         } catch {
             errorMessage = error.localizedDescription

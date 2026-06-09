@@ -34,6 +34,26 @@ struct ReviewInput: Encodable {
     var rating: Int
     var comment: String?
     var photos: [String]?
+    var dishReviews: [DishReviewInput]? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case rating
+        case comment
+        case photos
+        case dishReviews = "dish_reviews"
+    }
+}
+
+struct DishReviewInput: Encodable {
+    var mealDishId: UInt
+    var rating: Int
+    var comment: String?
+
+    enum CodingKeys: String, CodingKey {
+        case mealDishId = "meal_dish_id"
+        case rating
+        case comment
+    }
 }
 
 struct MealListQuery {

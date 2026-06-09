@@ -39,7 +39,10 @@ struct MealSession: Codable, Identifiable, Hashable {
     var note: String?
     var dishes: [MealDish]?
     var reviews: [MealReview]?
+    var participants: [MealParticipant]?
     var creator: AppUser?
+    var roomCode: String?
+    var roomExpiresAt: Date?
     var createdAt: Date?
 
     enum CodingKeys: String, CodingKey {
@@ -54,8 +57,26 @@ struct MealSession: Codable, Identifiable, Hashable {
         case note
         case dishes
         case reviews
+        case participants
         case creator
+        case roomCode = "room_code"
+        case roomExpiresAt = "room_expires_at"
         case createdAt = "created_at"
+    }
+}
+
+// 聚餐临时参与者
+struct MealParticipant: Codable, Identifiable, Hashable {
+    let id: UInt
+    var userId: UInt
+    var joinedAt: Date?
+    var user: AppUser?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case userId = "user_id"
+        case joinedAt = "joined_at"
+        case user
     }
 }
 
@@ -68,6 +89,8 @@ struct MealDish: Codable, Identifiable, Hashable {
     var recipeImage: String?
     var note: String?
     var sortOrder: Int
+    var addedBy: UInt?
+    var adder: AppUser?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -77,6 +100,8 @@ struct MealDish: Codable, Identifiable, Hashable {
         case recipeImage = "recipe_image"
         case note
         case sortOrder = "sort_order"
+        case addedBy = "added_by"
+        case adder
     }
 }
 
@@ -88,6 +113,7 @@ struct MealReview: Codable, Identifiable, Hashable {
     var rating: Int
     var comment: String?
     var photos: [String]?
+    var dishReviews: [MealDishReview]?
     var user: AppUser?
     var createdAt: Date?
 
@@ -98,7 +124,31 @@ struct MealReview: Codable, Identifiable, Hashable {
         case rating
         case comment
         case photos
+        case dishReviews = "dish_reviews"
         case user
+        case createdAt = "created_at"
+    }
+}
+
+// 单道菜的评价
+struct MealDishReview: Codable, Identifiable, Hashable {
+    let id: UInt
+    var mealReviewId: UInt
+    var mealSessionId: UInt
+    var mealDishId: UInt
+    var userId: UInt
+    var rating: Int
+    var comment: String?
+    var createdAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case mealReviewId = "meal_review_id"
+        case mealSessionId = "meal_session_id"
+        case mealDishId = "meal_dish_id"
+        case userId = "user_id"
+        case rating
+        case comment
         case createdAt = "created_at"
     }
 }

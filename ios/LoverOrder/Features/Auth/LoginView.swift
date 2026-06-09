@@ -52,7 +52,7 @@ struct LoginView: View {
                 if let errorMessage {
                     Text(errorMessage)
                         .font(AppFont.caption())
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Color.errorInk)
                         .multilineTextAlignment(.center)
                 }
 

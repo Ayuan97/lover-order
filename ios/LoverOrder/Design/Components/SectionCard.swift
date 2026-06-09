@@ -12,8 +12,12 @@ struct SectionCard<Content: View>: View {
         }
         .padding(padding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(Color.cardBackground)
+        )
+        .hairline(radius)
+        .appCardShadow()
     }
 }
 

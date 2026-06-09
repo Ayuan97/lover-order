@@ -50,34 +50,38 @@ struct MenuView: View {
                 }
                 .environmentObject(appState)
             }
+            .toast($vm.errorMessage)
         }
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.xs) {
-            HStack {
+        VStack(spacing: AppSpacing.xs) {
+            HStack(spacing: 6) {
                 Text("菜单")
                     .font(AppFont.title(30))
                     .foregroundStyle(Color.inkPrimary)
-                Image(systemName: "leaf.fill")
+                Image(systemName: "heart.fill")
                     .foregroundStyle(Color.brandGreen)
-                Spacer()
-                Button {
-                    showCreateRecipe = true
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 36, height: 36)
-                        .foregroundStyle(.white)
-                        .background(Color.brandGreen)
-                        .clipShape(Circle())
-                }
+                    .font(.system(size: 14))
             }
             Text("把这一顿想选的菜放在这里")
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
             CurrentSceneBadge(scene: appState.currentScene)
                 .padding(.top, AppSpacing.xs)
+        }
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .topTrailing) {
+            Button {
+                showCreateRecipe = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 36, height: 36)
+                    .foregroundStyle(.white)
+                    .background(Color.brandGreen)
+                    .clipShape(Circle())
+            }
         }
         .padding(.vertical, AppSpacing.sm)
     }
@@ -117,6 +121,7 @@ struct MenuView: View {
         .padding(.vertical, AppSpacing.sm)
         .background(Color.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: AppRadius.pill, style: .continuous))
+        .capsuleHairline()
     }
 
     private var categoryChips: some View {
@@ -139,7 +144,11 @@ struct MenuView: View {
             if vm.isLoading && vm.recipes.isEmpty {
                 ProgressView().tint(Color.brandGreen).padding(.top, 60)
             } else if vm.recipes.isEmpty {
-                emptyHint
+                if vm.loadFailed {
+                    LoadFailedView { await vm.loadRecipes() }
+                } else {
+                    emptyHint
+                }
             } else {
                 LazyVGrid(columns: grid, spacing: AppSpacing.md) {
                     ForEach(vm.recipes) { recipe in
@@ -218,7 +227,7 @@ struct MenuView: View {
                         .foregroundStyle(Color.inkMuted)
                 }
                 Spacer()
-                PrimaryButton(title: "定下这一顿") {
+                PrimaryButton(title: confirmTitle) {
                     Task { await vm.confirmMeal() }
                 }
                 .frame(width: 180)
@@ -231,6 +240,16 @@ struct MenuView: View {
 
     private func alreadyAdded(_ recipe: Recipe) -> Bool {
         vm.pinnedDishes.contains { $0.recipeId == recipe.id }
+    }
+
+    private var confirmTitle: String {
+        guard let meal = vm.meal else { return "定下这一顿" }
+        switch meal.status {
+        case .planning: return "定下这一顿"
+        case .confirmed: return "已定下"
+        case .completed: return "已完成"
+        case .cancelled: return "已取消"
+        }
     }
 }
 
@@ -246,9 +265,10 @@ private struct CategoryChip: View {
                 .font(AppFont.body(14))
                 .padding(.horizontal, AppSpacing.lg)
                 .padding(.vertical, 10)
-                .foregroundStyle(isSelected ? .white : Color.inkPrimary)
+                .foregroundStyle(isSelected ? .white : Color.inkSecondary)
                 .background(isSelected ? Color.brandGreen : Color.cardBackground)
                 .clipShape(Capsule(style: .continuous))
+                .capsuleHairline(color: isSelected ? .clear : Color.dividerLine.opacity(0.7))
         }
     }
 }
@@ -260,24 +280,26 @@ private struct MenuRecipeCard: View {
     let onAdd: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.sm) {
-            ZStack(alignment: .topTrailing) {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .bottomTrailing) {
                 AsyncImageView(url: recipe.coverImage, name: recipe.name)
-                    .frame(height: 150)
-                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
-
-                if let time = recipe.cookingTime, time > 0 {
-                    HStack(spacing: 2) {
-                        Image(systemName: "clock").font(.system(size: 10))
-                        Text("\(time)分钟").font(AppFont.caption(11))
+                    .frame(height: 132)
+                    .frame(maxWidth: .infinity)
+                    .clipped()
+                    .overlay(alignment: .topLeading) {
+                        if let time = recipe.cookingTime, time > 0 {
+                            HStack(spacing: 2) {
+                                Image(systemName: "clock").font(.system(size: 10))
+                                Text("\(time)分钟").font(AppFont.caption(11))
+                            }
+                            .padding(.horizontal, AppSpacing.sm)
+                            .padding(.vertical, 4)
+                            .background(.ultraThinMaterial)
+                            .clipShape(Capsule())
+                            .foregroundStyle(Color.inkPrimary)
+                            .padding(AppSpacing.sm)
+                        }
                     }
-                    .padding(.horizontal, AppSpacing.sm)
-                    .padding(.vertical, 4)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Capsule())
-                    .padding(AppSpacing.sm)
-                    .foregroundStyle(Color.inkPrimary)
-                }
 
                 Button(action: onAdd) {
                     Image(systemName: alreadyAdded ? "checkmark" : "plus")
@@ -288,9 +310,8 @@ private struct MenuRecipeCard: View {
                         .clipShape(Circle())
                 }
                 .padding(AppSpacing.sm)
-                .offset(y: 110)
             }
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(recipe.name)
                     .font(AppFont.body(15))
                     .foregroundStyle(Color.inkPrimary)
@@ -301,16 +322,33 @@ private struct MenuRecipeCard: View {
                         .foregroundStyle(Color.inkMuted)
                         .lineLimit(1)
                 }
-                if let used = recipe.useCount, used > 0 {
-                    HStack(spacing: 4) {
-                        Image(systemName: "fork.knife")
-                            .font(.system(size: 9))
-                        Text("吃过 \(used) 次")
+                HStack(spacing: 4) {
+                    if let creator = recipe.creator {
+                        AvatarView(user: creator, size: 16)
+                        Text(creator.displayName)
                             .font(AppFont.caption(11))
+                            .foregroundStyle(Color.inkMuted)
+                            .lineLimit(1)
                     }
-                    .foregroundStyle(Color.brandGreen)
+                    Spacer(minLength: 0)
+                    if let used = recipe.useCount, used > 0 {
+                        HStack(spacing: 2) {
+                            Image(systemName: "fork.knife").font(.system(size: 9))
+                            Text("\(used)").font(AppFont.caption(11))
+                        }
+                        .foregroundStyle(Color.brandGreen)
+                    }
                 }
+                .padding(.top, 1)
             }
+            .padding(.horizontal, AppSpacing.md)
+            .padding(.top, AppSpacing.sm)
+            .padding(.bottom, AppSpacing.md)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .background(Color.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
+        .hairline(AppRadius.lg)
+        .appCardShadow()
     }
 }

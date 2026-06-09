@@ -121,9 +121,42 @@ func (s *HouseholdService) Join(userID uint, in JoinInput) (*model.Household, er
 	return &household, nil
 }
 
-// Leave 退出当前家
+// Leave 退出当前家 创建者退出时转移家长或解散
 func (s *HouseholdService) Leave(userID uint) error {
-	return model.DB.Model(&model.User{}).Where("id = ?", userID).Update("household_id", nil).Error
+	var user model.User
+	if err := model.DB.First(&user, userID).Error; err != nil {
+		return err
+	}
+	if user.HouseholdID == nil {
+		return nil
+	}
+	householdID := *user.HouseholdID
+
+	var household model.Household
+	if err := model.DB.First(&household, householdID).Error; err != nil {
+		return err
+	}
+
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.User{}).Where("id = ?", userID).Update("household_id", nil).Error; err != nil {
+			return err
+		}
+		if household.CreatedBy != userID {
+			return nil
+		}
+		// 离开的是创建者 看还有没有别人
+		var others []model.User
+		if err := tx.Where("household_id = ?", householdID).Order("id ASC").Find(&others).Error; err != nil {
+			return err
+		}
+		if len(others) == 0 {
+			// 只剩创建者一人 解散这个家
+			return tx.Delete(&model.Household{}, householdID).Error
+		}
+		// 还有别人 家长转给最早加入的成员
+		return tx.Model(&model.Household{}).Where("id = ?", householdID).
+			Update("created_by", others[0].ID).Error
+	})
 }
 
 // InviteInput 生成邀请入参

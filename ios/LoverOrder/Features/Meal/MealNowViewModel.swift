@@ -6,6 +6,7 @@ final class MealNowViewModel: ObservableObject {
     @Published var suggestions: [Recipe] = []
     @Published var frequents: [Recipe] = []
     @Published var isLoading: Bool = false
+    @Published var loadFailed: Bool = false
     @Published var errorMessage: String?
 
     private let mealService = MealService.shared
@@ -22,6 +23,7 @@ final class MealNowViewModel: ObservableObject {
     func load(scene: MealScene, mood: Mood) async {
         isLoading = true
         errorMessage = nil
+        loadFailed = false
         defer { isLoading = false }
         do {
             async let current = mealService.current(scene: scene, mood: mood)
@@ -32,6 +34,7 @@ final class MealNowViewModel: ObservableObject {
             self.suggestions = s.items
             self.frequents = f.items
         } catch {
+            loadFailed = true
             errorMessage = error.localizedDescription
         }
     }
@@ -50,6 +53,7 @@ final class MealNowViewModel: ObservableObject {
         do {
             _ = try await mealService.addDish(mealId: meal.id, dish: DishInput(recipeId: recipe.id))
             self.meal = try await mealService.detail(id: meal.id)
+            Haptics.light()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -69,6 +73,7 @@ final class MealNowViewModel: ObservableObject {
         guard let meal else { return }
         do {
             self.meal = try await mealService.confirm(id: meal.id)
+            Haptics.success()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -78,6 +83,7 @@ final class MealNowViewModel: ObservableObject {
         guard let meal else { return }
         do {
             self.meal = try await mealService.complete(id: meal.id)
+            Haptics.success()
         } catch {
             errorMessage = error.localizedDescription
         }

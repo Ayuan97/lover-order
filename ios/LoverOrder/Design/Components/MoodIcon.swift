@@ -13,6 +13,12 @@ struct MoodChip: View {
                 ZStack {
                     Circle()
                         .fill(isSelected ? Color.brandGreen.opacity(0.12) : Color.appBackground)
+                        .overlay(
+                            Circle().strokeBorder(
+                                isSelected ? Color.brandGreen.opacity(0.35) : Color.dividerLine.opacity(0.7),
+                                lineWidth: 1
+                            )
+                        )
                         .frame(width: 56, height: 56)
                     Image(systemName: mood.icon)
                         .font(.system(size: 22, weight: .light))
@@ -67,6 +73,15 @@ enum MealScene: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .pair: return "我们这顿"
         case .family: return "家里这顿"
+        case .future: return "未来这顿"
+        }
+    }
+
+    // 在"相处模式"语境下的叫法
+    var modeLabel: String {
+        switch self {
+        case .pair: return "俩人世界"
+        case .family: return "家庭聚餐"
         case .future: return "未来这顿"
         }
     }

@@ -87,7 +87,7 @@ func (s *RecipeService) List(householdID uint, q ListQuery) (*ListResult, error)
 	}
 
 	var items []model.Recipe
-	if err := tx.Preload("Category").
+	if err := tx.Preload("Category").Preload("Creator").
 		Order("last_used_at DESC, id DESC").
 		Offset((q.Page - 1) * q.PageSize).Limit(q.PageSize).
 		Find(&items).Error; err != nil {

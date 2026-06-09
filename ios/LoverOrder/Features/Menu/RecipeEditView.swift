@@ -58,7 +58,7 @@ struct RecipeEditView: View {
                     if let errorMessage {
                         Text(errorMessage)
                             .font(AppFont.caption())
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Color.errorInk)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     Color.clear.frame(height: 80)
@@ -504,7 +504,7 @@ struct FieldLabel: View {
             if required {
                 Text("*")
                     .font(AppFont.caption())
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.errorInk)
             }
             Spacer()
         }

@@ -8,7 +8,6 @@ struct HistoryView: View {
     enum Filter: String, CaseIterable, Identifiable {
         case recent
         case completed
-        case favorite
         case thisMonth
 
         var id: String { rawValue }
@@ -17,7 +16,6 @@ struct HistoryView: View {
             switch self {
             case .recent: return "最近"
             case .completed: return "已尝过"
-            case .favorite: return "收藏"
             case .thisMonth: return "本月"
             }
         }
@@ -44,18 +42,19 @@ struct HistoryView: View {
                 Task { await vm.load(filter: newValue) }
             }
             .navigationBarHidden(true)
+            .toast($vm.errorMessage)
         }
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.xs) {
-            HStack {
+        VStack(spacing: AppSpacing.xs) {
+            HStack(spacing: 6) {
                 Text("记录")
                     .font(AppFont.title(30))
                     .foregroundStyle(Color.inkPrimary)
-                Image(systemName: "leaf.fill")
+                Image(systemName: "heart.fill")
                     .foregroundStyle(Color.brandGreen)
-                Spacer()
+                    .font(.system(size: 14))
             }
             Text("把每一顿吃过的留下来")
                 .font(AppFont.body())
@@ -63,6 +62,7 @@ struct HistoryView: View {
             CurrentSceneBadge(scene: appState.currentScene)
                 .padding(.top, AppSpacing.xs)
         }
+        .frame(maxWidth: .infinity)
         .padding(.vertical, AppSpacing.sm)
     }
 
@@ -77,9 +77,10 @@ struct HistoryView: View {
                             .font(AppFont.body(14))
                             .padding(.horizontal, AppSpacing.lg)
                             .padding(.vertical, 10)
-                            .foregroundStyle(filter == f ? .white : Color.inkPrimary)
+                            .foregroundStyle(filter == f ? .white : Color.inkSecondary)
                             .background(filter == f ? Color.brandGreen : Color.cardBackground)
                             .clipShape(Capsule(style: .continuous))
+                            .capsuleHairline(color: filter == f ? .clear : Color.dividerLine.opacity(0.7))
                     }
                 }
             }
@@ -91,16 +92,20 @@ struct HistoryView: View {
         if vm.isLoading && vm.meals.isEmpty {
             ProgressView().tint(Color.brandGreen).padding(.top, 60)
         } else if vm.meals.isEmpty {
-            VStack(spacing: AppSpacing.md) {
-                Image(systemName: "tray")
-                    .font(.system(size: 36))
-                    .foregroundStyle(Color.inkMuted)
-                Text("还没有记录")
-                    .font(AppFont.body())
-                    .foregroundStyle(Color.inkMuted)
+            if vm.loadFailed {
+                LoadFailedView { await vm.load(filter: filter) }
+            } else {
+                VStack(spacing: AppSpacing.md) {
+                    Image(systemName: "tray")
+                        .font(.system(size: 36))
+                        .foregroundStyle(Color.inkMuted)
+                    Text("还没有记录")
+                        .font(AppFont.body())
+                        .foregroundStyle(Color.inkMuted)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, AppSpacing.xxxl)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, AppSpacing.xxxl)
         } else {
             VStack(spacing: AppSpacing.md) {
                 ForEach(vm.meals) { meal in
@@ -163,7 +168,7 @@ private struct HistoryCard: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: AppSpacing.sm) {
                             ForEach(dishes.prefix(4)) { dish in
-                                dishThumb(name: dish.recipeName, image: dish.recipeImage)
+                                DishThumb(name: dish.recipeName, image: dish.recipeImage, size: thumbSize, radius: AppRadius.md)
                             }
                             if dishes.count > 4 {
                                 Text("+\(dishes.count - 4)")
@@ -197,34 +202,6 @@ private struct HistoryCard: View {
         case .pair: return "两个人"
         case .family: return "一家人"
         case .future: return "未来计划"
-        }
-    }
-
-    private func dishThumb(name: String, image: String?) -> some View {
-        Group {
-            if let urlString = image, !urlString.isEmpty, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFill()
-                    default:
-                        placeholder(name: name)
-                    }
-                }
-            } else {
-                placeholder(name: name)
-            }
-        }
-        .frame(width: thumbSize, height: thumbSize)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
-    }
-
-    private func placeholder(name: String) -> some View {
-        ZStack {
-            Color.appBackground
-            Text(String(name.prefix(1)))
-                .font(AppFont.headline(16))
-                .foregroundStyle(Color.brandGreen)
         }
     }
 
@@ -268,10 +245,12 @@ enum RelativeDateFormatter {
 final class HistoryViewModel: ObservableObject {
     @Published var meals: [MealSession] = []
     @Published var isLoading: Bool = false
+    @Published var loadFailed: Bool = false
     @Published var errorMessage: String?
 
     func load(filter: HistoryView.Filter) async {
         isLoading = true
+        loadFailed = false
         defer { isLoading = false }
         do {
             var q = MealListQuery()
@@ -281,14 +260,13 @@ final class HistoryViewModel: ObservableObject {
                 break
             case .completed:
                 q.status = .completed
-            case .favorite:
-                q.status = .completed
             case .thisMonth:
                 q.status = .completed
             }
             let result = try await MealService.shared.list(q)
             meals = filterMeals(result.items, by: filter)
         } catch {
+            loadFailed = true
             errorMessage = error.localizedDescription
         }
     }

@@ -13,8 +13,8 @@ enum MenuFilter: String, CaseIterable, Identifiable {
         switch self {
         case .all: return "全部"
         case .loved: return "我们都爱吃"
-        case .recent: return "最近常吃"
-        case .filling: return "管饱推荐"
+        case .recent: return "最近做过"
+        case .filling: return "人多管饱"
         }
     }
 }
@@ -29,6 +29,7 @@ final class MenuViewModel: ObservableObject {
     @Published var pinnedDishes: [MealDish] = []
     @Published var meal: MealSession?
     @Published var isLoading: Bool = false
+    @Published var loadFailed: Bool = false
     @Published var errorMessage: String?
 
     private let recipeService = RecipeService.shared
@@ -61,6 +62,7 @@ final class MenuViewModel: ObservableObject {
 
     func loadRecipes() async {
         isLoading = true
+        loadFailed = false
         defer { isLoading = false }
         do {
             var query = RecipeListQuery(
@@ -80,6 +82,7 @@ final class MenuViewModel: ObservableObject {
             let result = try await recipeService.list(query)
             recipes = sortByFilter(result.items)
         } catch {
+            loadFailed = true
             errorMessage = error.localizedDescription
         }
     }
@@ -120,6 +123,7 @@ final class MenuViewModel: ObservableObject {
             let updated = try await mealService.detail(id: meal.id)
             self.meal = updated
             self.pinnedDishes = updated.dishes ?? []
+            Haptics.light()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -139,8 +143,20 @@ final class MenuViewModel: ObservableObject {
 
     func confirmMeal() async {
         guard let meal else { return }
+        if pinnedDishes.isEmpty {
+            errorMessage = "先选一道菜再定下"
+            return
+        }
         do {
-            self.meal = try await mealService.confirm(id: meal.id)
+            switch meal.status {
+            case .planning:
+                self.meal = try await mealService.confirm(id: meal.id)
+                Haptics.success()
+            case .confirmed:
+                errorMessage = "这一顿已经定下了"
+            case .completed, .cancelled:
+                errorMessage = "这一顿已经结束了"
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

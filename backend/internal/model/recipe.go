@@ -30,10 +30,28 @@ func (j *JSON) Scan(value interface{}) error {
 	case string:
 		*j = []byte(s)
 	case []byte:
-		*j = s
+		// 必须复制 驱动会复用底层缓冲 批量查询(Find)时同一缓冲被后续行覆盖 导致 JSON 字段错乱
+		*j = append([]byte(nil), s...)
 	default:
 		return fmt.Errorf("cannot scan %T into JSON", value)
 	}
+	return nil
+}
+
+// MarshalJSON 直接输出原始字节 列里存的就是合法 JSON 不能让默认逻辑把 []byte 当 base64
+func (j JSON) MarshalJSON() ([]byte, error) {
+	if len(j) == 0 {
+		return []byte("null"), nil
+	}
+	return j, nil
+}
+
+// UnmarshalJSON 原样保存字节 写库时由 Value 落成 JSON 列
+func (j *JSON) UnmarshalJSON(data []byte) error {
+	if j == nil {
+		return fmt.Errorf("JSON: UnmarshalJSON on nil pointer")
+	}
+	*j = append((*j)[0:0], data...)
 	return nil
 }
 

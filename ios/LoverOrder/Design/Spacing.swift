@@ -20,11 +20,12 @@ enum AppRadius {
 }
 
 enum AppShadow {
+    // 极轻投影 让白卡片在暖纸背景上浮起一点 不抢戏
     static let card = ShadowStyle(
-        color: Color.black.opacity(0.06),
-        radius: 16,
+        color: Color(red: 0.34, green: 0.30, blue: 0.22).opacity(0.05),
+        radius: 10,
         x: 0,
-        y: 8
+        y: 4
     )
 }
 
@@ -38,5 +39,17 @@ struct ShadowStyle {
 extension View {
     func appCardShadow() -> some View {
         shadow(color: AppShadow.card.color, radius: AppShadow.card.radius, x: AppShadow.card.x, y: AppShadow.card.y)
+    }
+
+    // 暖灰细描边 在近白背景上勾出卡片/药丸/输入框的边缘
+    func hairline(_ radius: CGFloat, color: Color = Color.dividerLine.opacity(0.7)) -> some View {
+        overlay(
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .strokeBorder(color, lineWidth: 1)
+        )
+    }
+
+    func capsuleHairline(color: Color = Color.dividerLine.opacity(0.7)) -> some View {
+        overlay(Capsule(style: .continuous).strokeBorder(color, lineWidth: 1))
     }
 }

@@ -28,7 +28,7 @@ struct HistoryDetailView: View {
                 } else if let errorMessage {
                     Text(errorMessage)
                         .font(AppFont.body())
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Color.errorInk)
                 }
             }
             .padding(.horizontal, AppSpacing.lg)
@@ -110,16 +110,7 @@ struct HistoryDetailView: View {
     }
 
     private func infoChip(icon: String, text: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon).font(.system(size: 11))
-            Text(text)
-        }
-        .font(AppFont.caption(12))
-        .padding(.horizontal, AppSpacing.sm)
-        .padding(.vertical, 4)
-        .foregroundStyle(Color.brandGreen)
-        .background(Color.brandGreen.opacity(0.1))
-        .clipShape(Capsule())
+        TagChip(text: text, icon: icon, compact: true)
     }
 
     private func dishesCard(_ meal: MealSession) -> some View {

@@ -9,7 +9,7 @@ struct AddDishView: View {
     var onChanged: () -> Void = {}
 
     @State private var customName: String = ""
-    @State private var quickSource: QuickSource = .recommend
+    @State private var quickSource: QuickSource = .all
     @State private var recipes: [Recipe] = []
     @State private var pinnedDishes: [MealDish] = []
     @State private var isLoading: Bool = false
@@ -54,11 +54,6 @@ struct AddDishView: View {
                     quickEntries
                     recommendSection
                     alsoSection
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .font(AppFont.caption())
-                            .foregroundStyle(.red)
-                    }
                     Color.clear.frame(height: 80)
                 }
                 .padding(.horizontal, AppSpacing.lg)
@@ -79,25 +74,27 @@ struct AddDishView: View {
                 }
                 .environmentObject(appState)
             }
+            .toast($errorMessage)
         }
     }
 
     // 头部
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: AppSpacing.xs) {
-                HStack {
-                    Text("添加菜品")
-                        .font(AppFont.title(26))
-                        .foregroundStyle(Color.inkPrimary)
-                    Image(systemName: "leaf.fill")
-                        .foregroundStyle(Color.brandGreen)
-                }
-                Text("把想吃的菜加入这一顿")
-                    .font(AppFont.body())
-                    .foregroundStyle(Color.inkMuted)
+        VStack(spacing: AppSpacing.xs) {
+            HStack(spacing: 6) {
+                Text("添加菜品")
+                    .font(AppFont.title(26))
+                    .foregroundStyle(Color.inkPrimary)
+                Image(systemName: "heart.fill")
+                    .foregroundStyle(Color.brandGreen)
+                    .font(.system(size: 13))
             }
-            Spacer()
+            Text("把想吃的菜加入这一顿")
+                .font(AppFont.body())
+                .foregroundStyle(Color.inkMuted)
+        }
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .topTrailing) {
             Button {
                 dismiss()
             } label: {
@@ -107,6 +104,7 @@ struct AddDishView: View {
                     .foregroundStyle(Color.inkSecondary)
                     .background(Color.cardBackground)
                     .clipShape(Circle())
+                    .capsuleHairline()
             }
         }
         .padding(.vertical, AppSpacing.sm)
@@ -173,6 +171,7 @@ struct AddDishView: View {
             .padding(.vertical, AppSpacing.sm)
             .background(Color.cardBackground)
             .clipShape(Capsule())
+            .capsuleHairline()
 
             Button {
                 Task { await addCustom() }
@@ -207,6 +206,7 @@ struct AddDishView: View {
                                 .frame(width: 44, height: 44)
                                 .background(quickSource == source ? Color.brandGreen : Color.cardBackground)
                                 .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+                                .hairline(AppRadius.md, color: quickSource == source ? .clear : Color.dividerLine.opacity(0.7))
                             Text(source.label)
                                 .font(AppFont.caption(11))
                                 .foregroundStyle(Color.inkPrimary)
@@ -263,7 +263,6 @@ struct AddDishView: View {
                 alsoButton(icon: "heart", title: "加入收藏") {
                     Task { await batchFavorite() }
                 }
-                alsoButton(icon: "camera", title: "拍照识别", enabled: false) {}
                 alsoButton(icon: "square.and.pencil", title: "手动新建") {
                     showCreateRecipe = true
                 }
@@ -280,6 +279,7 @@ struct AddDishView: View {
                     .frame(width: 44, height: 44)
                     .background(Color.cardBackground)
                     .clipShape(Circle())
+                    .capsuleHairline()
                 Text(title)
                     .font(AppFont.caption(11))
                     .foregroundStyle(enabled ? Color.inkPrimary : Color.inkMuted)
@@ -291,14 +291,9 @@ struct AddDishView: View {
     }
 
     private var bottomBar: some View {
-        HStack(spacing: AppSpacing.md) {
-            SecondaryButton(title: "取消") {
-                dismiss()
-            }
-            PrimaryButton(title: "加入这一顿", icon: "checkmark") {
-                onChanged()
-                dismiss()
-            }
+        PrimaryButton(title: "挑好了", icon: "checkmark") {
+            onChanged()
+            dismiss()
         }
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, AppSpacing.sm)

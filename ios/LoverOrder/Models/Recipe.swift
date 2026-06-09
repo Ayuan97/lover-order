@@ -84,6 +84,7 @@ struct Recipe: Codable, Identifiable, Hashable {
     var useCount: Int?
     var lastUsedAt: Date?
     var createdAt: Date?
+    var creator: AppUser?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -106,6 +107,7 @@ struct Recipe: Codable, Identifiable, Hashable {
         case useCount = "use_count"
         case lastUsedAt = "last_used_at"
         case createdAt = "created_at"
+        case creator
     }
 }
 

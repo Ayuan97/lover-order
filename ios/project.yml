@@ -9,7 +9,7 @@ settings:
     SWIFT_VERSION: "5.10"
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
-    DEVELOPMENT_TEAM: ""
+    DEVELOPMENT_TEAM: "7QFF99S2V4"
     CODE_SIGN_STYLE: Automatic
 targets:
   LoverOrder:
@@ -28,20 +28,21 @@ targets:
         ENABLE_PREVIEWS: "YES"
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
         TARGETED_DEVICE_FAMILY: "1"
-    entitlements:
-      path: LoverOrder/Resources/LoverOrder.entitlements
-      properties:
-        com.apple.developer.applesignin:
-          - Default
     info:
       path: LoverOrder/Resources/Info.plist
       properties:
+        CFBundleDevelopmentRegion: zh_CN
         CFBundleDisplayName: 我们这顿
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSRequiresIPhoneOS: true
+        UIRequiresFullScreen: true
         UILaunchScreen:
           UIColorName: AppBackground
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+        API_BASE_URL: http://192.168.1.162:8081
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
+        NSPhotoLibraryUsageDescription: 选择菜品照片和评价配图
+        NSCameraUsageDescription: 拍摄菜品照片、扫码加入家庭

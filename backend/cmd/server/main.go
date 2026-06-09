@@ -69,6 +69,7 @@ func registerRoutes(r *gin.Engine) {
 	recipeH := api.NewRecipeHandler()
 	mealH := api.NewMealHandler()
 	uploadH := api.NewUploadHandler()
+	diningH := api.NewDiningHandler()
 
 	v1 := r.Group("/api/v1")
 	{
@@ -107,6 +108,16 @@ func registerRoutes(r *gin.Engine) {
 				upload.POST("/image", uploadH.Image)
 			}
 
+			dining := secured.Group("/dining")
+			{
+				dining.GET("/current", diningH.Current)
+				dining.POST("/join", diningH.Join)
+				dining.POST("/:id/leave", diningH.Leave)
+				dining.POST("/:id/dishes/add", diningH.AddDish)
+				dining.POST("/:id/dishes/:dish_id/remove", diningH.RemoveDish)
+				dining.GET("/:id/recipes", diningH.Recipes)
+			}
+
 			inHousehold := secured.Group("")
 			inHousehold.Use(middleware.HouseholdRequired())
 			{
@@ -143,6 +154,8 @@ func registerRoutes(r *gin.Engine) {
 					meals.POST("/:id/dishes/add", mealH.AddDish)
 					meals.POST("/:id/dishes/:dish_id/remove", mealH.RemoveDish)
 					meals.GET("/:id/shopping-list", mealH.ShoppingList)
+					meals.POST("/:id/dining/open", diningH.Open)
+					meals.POST("/:id/dining/close", diningH.Close)
 				}
 			}
 		}

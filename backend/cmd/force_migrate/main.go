@@ -16,6 +16,8 @@ func main() {
 	defer model.CloseDB()
 
 	tables := []any{
+		&model.MealDishReview{},
+		&model.MealParticipant{},
 		&model.MealReview{},
 		&model.MealDish{},
 		&model.MealSession{},

@@ -10,4 +10,5 @@ extension Color {
     static let inkSecondary = Color("InkSecondary")
     static let inkMuted = Color("InkMuted")
     static let dividerLine = Color("Divider")
+    static let errorInk = Color("ErrorInk")
 }

@@ -11,13 +11,14 @@ struct ProfileView: View {
     @State private var inviteCode: String?
 
     // 本地持久化字段
-    @AppStorage("profile.householdMode") private var householdMode: String = HouseholdMode.couple.rawValue
     @AppStorage("profile.showScene") private var showSceneInList: Bool = true
 
     @State private var showCategoryManagement: Bool = false
     @State private var confirmLeaveHousehold: Bool = false
     @State private var showEditProfile: Bool = false
     @State private var stats: HouseholdStats?
+    @State private var errorMessage: String?
+    @State private var showInvite: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -28,8 +29,7 @@ struct ProfileView: View {
                     if let stats {
                         StatsCard(stats: stats)
                     }
-                    scenePicker
-                    householdModeCard
+                    modePicker
                     moodPicker
                     tastesCard
                     displayCard
@@ -54,6 +54,12 @@ struct ProfileView: View {
                 EditProfileSheet()
                     .environmentObject(appState)
             }
+            .sheet(isPresented: $showInvite) {
+                if let h = appState.household {
+                    InviteTicketView(household: h, inviterName: appState.currentUser?.nickname ?? "我")
+                }
+            }
+            .toast($errorMessage)
         }
     }
 
@@ -106,25 +112,27 @@ struct ProfileView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.xs) {
-            HStack {
+        VStack(spacing: AppSpacing.xs) {
+            HStack(spacing: 6) {
                 Text("我的")
                     .font(AppFont.title(30))
                     .foregroundStyle(Color.inkPrimary)
-                Image(systemName: "leaf.fill").foregroundStyle(Color.brandGreen)
-                Spacer()
+                Image(systemName: "heart.fill")
+                    .foregroundStyle(Color.brandGreen)
+                    .font(.system(size: 14))
             }
             Text("把这里调成你喜欢的样子")
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
         }
+        .frame(maxWidth: .infinity)
         .padding(.vertical, AppSpacing.sm)
     }
 
     private var userCard: some View {
         SectionCard {
             HStack(spacing: AppSpacing.md) {
-                Avatar(user: appState.currentUser)
+                AvatarView(user: appState.currentUser, size: 56, ring: true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(appState.currentUser?.displayName ?? "美食家")
                         .font(AppFont.headline(18))
@@ -149,44 +157,40 @@ struct ProfileView: View {
         }
     }
 
-    private var scenePicker: some View {
+    private var modePicker: some View {
         SectionCard {
-            NumberedSectionTitle(index: 1, title: "当前场景", hint: "决定你打开 App 看到哪一顿")
-            VStack(spacing: AppSpacing.sm) {
-                ForEach(MealScene.allCases) { scene in
-                    SceneRow(scene: scene, selected: appState.currentScene == scene) {
-                        Task { await updateScene(scene) }
-                    }
-                }
+            NumberedSectionTitle(index: 1, title: "相处模式", hint: "俩人世界还是家庭聚餐 决定首页这一顿")
+            HStack(spacing: AppSpacing.sm) {
+                modeButton(.pair, icon: "heart.fill")
+                modeButton(.family, icon: "house.fill")
             }
         }
     }
 
-    private var householdModeCard: some View {
-        SectionCard {
-            NumberedSectionTitle(index: 2, title: "家庭目前状态", hint: "告诉 App 你家几口人")
-            FlowLayout(spacing: AppSpacing.sm) {
-                ForEach(HouseholdMode.allCases) { mode in
-                    Button {
-                        householdMode = mode.rawValue
-                    } label: {
-                        Text(mode.label)
-                            .font(AppFont.body(13))
-                            .padding(.horizontal, AppSpacing.md)
-                            .padding(.vertical, 8)
-                            .foregroundStyle(householdMode == mode.rawValue ? .white : Color.inkPrimary)
-                            .background(householdMode == mode.rawValue ? Color.brandGreen : Color.appBackground)
-                            .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
+    private func modeButton(_ scene: MealScene, icon: String) -> some View {
+        let selected = appState.currentScene == scene
+        return Button {
+            Task { await updateScene(scene) }
+        } label: {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 22, weight: .light))
+                Text(scene.modeLabel)
+                    .font(AppFont.body(14))
             }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, AppSpacing.lg)
+            .foregroundStyle(selected ? .white : Color.inkPrimary)
+            .background(selected ? Color.brandGreen : Color.appBackground)
+            .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+            .capsuleHairline(color: selected ? .clear : Color.dividerLine.opacity(0.7))
         }
+        .buttonStyle(.plain)
     }
 
     private var moodPicker: some View {
         SectionCard {
-            NumberedSectionTitle(index: 3, title: "默认心情", hint: "首页默认打开哪一档")
+            NumberedSectionTitle(index: 2, title: "默认心情", hint: "首页默认打开哪一档")
             HStack(spacing: AppSpacing.sm) {
                 ForEach(Mood.allCases) { mood in
                     MoodChip(mood: mood, isSelected: appState.currentMood == mood) {
@@ -199,7 +203,7 @@ struct ProfileView: View {
 
     private var tastesCard: some View {
         SectionCard {
-            NumberedSectionTitle(index: 4, title: "口味偏好", hint: "多选 推荐时会偏向这些口味")
+            NumberedSectionTitle(index: 3, title: "口味偏好", hint: "多选 推荐时会偏向这些口味")
             FlowLayout(spacing: AppSpacing.sm) {
                 ForEach(TastePresets.all, id: \.self) { taste in
                     Button {
@@ -212,6 +216,7 @@ struct ProfileView: View {
                             .foregroundStyle(selectedTastes.contains(taste) ? .white : Color.inkPrimary)
                             .background(selectedTastes.contains(taste) ? Color.brandGreen : Color.appBackground)
                             .clipShape(Capsule())
+                            .capsuleHairline(color: selectedTastes.contains(taste) ? .clear : Color.dividerLine.opacity(0.7))
                     }
                     .buttonStyle(.plain)
                 }
@@ -231,7 +236,7 @@ struct ProfileView: View {
 
     private var displayCard: some View {
         SectionCard {
-            NumberedSectionTitle(index: 5, title: "显示方式")
+            NumberedSectionTitle(index: 4, title: "显示方式")
             Toggle(isOn: $showSceneInList) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("在列表里显示场景标签")
@@ -269,12 +274,17 @@ struct ProfileView: View {
                         .font(AppFont.mono(14))
                         .foregroundStyle(Color.brandGreen)
                 }
+                PrimaryButton(title: "邀请家人 · 出示餐券", icon: "qrcode") {
+                    showInvite = true
+                }
                 HStack(spacing: AppSpacing.sm) {
                     SecondaryButton(title: "新建邀请码", icon: "arrow.triangle.2.circlepath") {
                         Task { await refreshInvite() }
                     }
                     SecondaryButton(title: "复制邀请码", icon: "doc.on.doc") {
                         UIPasteboard.general.string = inviteCode ?? h.inviteCode
+                        Haptics.light()
+                        errorMessage = "邀请码已复制"
                     }
                 }
                 Button {
@@ -315,7 +325,10 @@ struct ProfileView: View {
         do {
             let user = try await AuthService.shared.updateProfile(UpdateProfileRequest(defaultScene: scene))
             appState.currentUser = user
-        } catch {}
+            Haptics.light()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func updateMood(_ mood: Mood) async {
@@ -323,7 +336,10 @@ struct ProfileView: View {
         do {
             let user = try await AuthService.shared.updateProfile(UpdateProfileRequest(defaultMood: mood))
             appState.currentUser = user
-        } catch {}
+            Haptics.light()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func toggleTaste(_ taste: String) {
@@ -342,14 +358,20 @@ struct ProfileView: View {
                 UpdateProfileRequest(tastePrefs: Array(selectedTastes))
             )
             appState.currentUser = user
-        } catch {}
+            errorMessage = "口味偏好已保存"
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func refreshInvite() async {
         do {
             let invite = try await HouseholdService.shared.createInvite(.init(expiresIn: 86400 * 7, maxUses: 5))
             inviteCode = invite.code
-        } catch {}
+            errorMessage = "已生成新邀请码 旧码失效"
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func leaveHousehold() async {
@@ -357,14 +379,18 @@ struct ProfileView: View {
             try await HouseholdService.shared.leave()
             appState.household = nil
             await appState.refreshProfile()
-        } catch {}
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func loadStats() async {
         guard appState.currentUser?.hasHousehold == true else { return }
         do {
             stats = try await MealService.shared.stats()
-        } catch {}
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }
 
@@ -464,85 +490,8 @@ private struct StatsCard: View {
     }
 }
 
-// 家庭组成模式 仅本地存
-enum HouseholdMode: String, CaseIterable, Identifiable {
-    case couple
-    case family3
-    case friends
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .couple: return "两个人"
-        case .family3: return "三口之家"
-        case .friends: return "朋友亲戚一起聚聚"
-        }
-    }
-}
-
 // 常见口味预设
 enum TastePresets {
     static let all = ["麻辣", "清淡", "酸甜", "咸鲜", "海鲜", "烧烤", "凉拌", "蒸煮", "炖煮", "面食", "米饭", "汤水"]
 }
 
-// 单条场景选项行
-private struct SceneRow: View {
-    let scene: MealScene
-    let selected: Bool
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            HStack {
-                Image(systemName: scene.icon)
-                    .foregroundStyle(selected ? Color.brandGreen : Color.inkMuted)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(scene.label).font(AppFont.body(15)).foregroundStyle(Color.inkPrimary)
-                    Text(scene.hint).font(AppFont.caption(11)).foregroundStyle(Color.inkMuted)
-                }
-                Spacer()
-                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(selected ? Color.brandGreen : Color.inkMuted)
-            }
-            .padding(AppSpacing.md)
-            .background(selected ? Color.brandGreen.opacity(0.06) : Color.appBackground)
-            .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-// 头像组件
-private struct Avatar: View {
-    let user: AppUser?
-
-    var body: some View {
-        Group {
-            if let urlString = user?.avatar, !urlString.isEmpty, let url = URL(string: urlString) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFill()
-                    default:
-                        placeholder
-                    }
-                }
-            } else {
-                placeholder
-            }
-        }
-        .frame(width: 56, height: 56)
-        .clipShape(Circle())
-        .overlay(Circle().stroke(Color.brandGreen.opacity(0.3), lineWidth: 1))
-    }
-
-    private var placeholder: some View {
-        ZStack {
-            Color.brandGreen.opacity(0.12)
-            Text(String(user?.displayName.prefix(1) ?? "你"))
-                .font(AppFont.headline(20))
-                .foregroundStyle(Color.brandGreen)
-        }
-    }
-}

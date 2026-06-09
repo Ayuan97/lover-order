@@ -19,7 +19,7 @@ struct EditProfileSheet: View {
                     if let errorMessage {
                         Text(errorMessage)
                             .font(AppFont.caption())
-                            .foregroundStyle(.red)
+                            .foregroundStyle(Color.errorInk)
                     }
                     Color.clear.frame(height: 40)
                 }

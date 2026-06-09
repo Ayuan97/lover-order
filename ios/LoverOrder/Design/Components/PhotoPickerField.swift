@@ -61,7 +61,7 @@ struct PhotoPickerField: View {
             if let errorMessage {
                 Text(errorMessage)
                     .font(AppFont.caption(11))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Color.errorInk)
             }
         }
         .onChange(of: pickerItem) { _, item in

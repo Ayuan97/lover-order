@@ -221,13 +221,7 @@ struct RecipeDetailView: View {
                 .foregroundStyle(Color.inkMuted)
             FlowLayout(spacing: AppSpacing.sm) {
                 ForEach(tags, id: \.self) { t in
-                    Text(t)
-                        .font(AppFont.caption(12))
-                        .padding(.horizontal, AppSpacing.md)
-                        .padding(.vertical, 6)
-                        .foregroundStyle(Color.brandGreen)
-                        .background(Color.brandGreen.opacity(0.1))
-                        .clipShape(Capsule())
+                    TagChip(text: t)
                 }
             }
         }

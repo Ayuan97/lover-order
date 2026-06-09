@@ -58,6 +58,7 @@ struct ShoppingListView: View {
             .task {
                 await load()
             }
+            .toast($errorMessage)
         }
     }
 

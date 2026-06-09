@@ -67,16 +67,7 @@ struct RecipeStepsView: View {
     }
 
     private func factChip(icon: String, text: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon).font(.system(size: 11))
-            Text(text)
-        }
-        .font(AppFont.caption(12))
-        .padding(.horizontal, AppSpacing.md)
-        .padding(.vertical, 6)
-        .foregroundStyle(Color.brandGreen)
-        .background(Color.brandGreen.opacity(0.1))
-        .clipShape(Capsule())
+        TagChip(text: text, icon: icon)
     }
 
     private var ingredientsGrid: some View {

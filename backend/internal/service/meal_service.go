@@ -36,9 +36,17 @@ type DishInput struct {
 
 // ReviewInput 评价一顿入参
 type ReviewInput struct {
-	Rating  int      `json:"rating"`
-	Comment string   `json:"comment"`
-	Photos  []string `json:"photos"`
+	Rating      int               `json:"rating"`
+	Comment     string            `json:"comment"`
+	Photos      []string          `json:"photos"`
+	DishReviews []DishReviewInput `json:"dish_reviews"`
+}
+
+// DishReviewInput 单道菜评价入参
+type DishReviewInput struct {
+	MealDishID uint   `json:"meal_dish_id"`
+	Rating     int    `json:"rating"`
+	Comment    string `json:"comment"`
 }
 
 // ListQuery 一顿列表筛选
@@ -71,10 +79,17 @@ func (s *MealService) Current(householdID, userID uint, scene, mood string) (*mo
 	}
 
 	var m model.MealSession
-	err := model.DB.Where("household_id = ? AND scene = ? AND status = ?",
-		householdID, scene, model.MealStatusPlanning).
-		Preload("Dishes").Order("id DESC").First(&m).Error
+	err := model.DB.Where("household_id = ? AND scene = ? AND status IN ?",
+		householdID, scene, []string{model.MealStatusPlanning, model.MealStatusConfirmed}).
+		Preload("Dishes.Adder").Order("id DESC").First(&m).Error
 	if err == nil {
+		if m.Status == model.MealStatusConfirmed && len(m.Dishes) == 0 {
+			m.Status = model.MealStatusPlanning
+			m.ConfirmedAt = nil
+			if err := model.DB.Save(&m).Error; err != nil {
+				return nil, err
+			}
+		}
 		return &m, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -166,6 +181,9 @@ func (s *MealService) Confirm(householdID, id uint) (*model.MealSession, error) 
 	if m.Status != model.MealStatusPlanning {
 		return nil, errors.New("当前状态不能定下")
 	}
+	if len(m.Dishes) == 0 {
+		return nil, errors.New("至少选一道菜再定下")
+	}
 	now := time.Now()
 	m.Status = model.MealStatusConfirmed
 	m.ConfirmedAt = &now
@@ -187,6 +205,8 @@ func (s *MealService) Complete(householdID, id uint) (*model.MealSession, error)
 	now := time.Now()
 	m.Status = model.MealStatusCompleted
 	m.CompletedAt = &now
+	m.RoomCode = ""
+	m.RoomExpiresAt = nil
 	if err := model.DB.Save(m).Error; err != nil {
 		return nil, err
 	}
@@ -203,6 +223,8 @@ func (s *MealService) Cancel(householdID, id uint) error {
 		return errors.New("已完成的一顿无法取消")
 	}
 	m.Status = model.MealStatusCancelled
+	m.RoomCode = ""
+	m.RoomExpiresAt = nil
 	return model.DB.Save(m).Error
 }
 
@@ -212,8 +234,8 @@ func (s *MealService) AddDish(householdID, userID, id uint, in DishInput) (*mode
 	if err != nil {
 		return nil, err
 	}
-	if m.Status != model.MealStatusPlanning {
-		return nil, errors.New("这一顿已定下 无法再添加")
+	if m.Status != model.MealStatusPlanning && m.Status != model.MealStatusConfirmed {
+		return nil, errors.New("这一顿已结束 无法再添加")
 	}
 
 	dish := &model.MealDish{
@@ -248,8 +270,8 @@ func (s *MealService) RemoveDish(householdID, mealID, dishID uint) error {
 	if err != nil {
 		return err
 	}
-	if m.Status != model.MealStatusPlanning {
-		return errors.New("这一顿已定下 无法修改")
+	if m.Status != model.MealStatusPlanning && m.Status != model.MealStatusConfirmed {
+		return errors.New("这一顿已结束 无法修改")
 	}
 	res := model.DB.Where("id = ? AND meal_session_id = ?", dishID, mealID).Delete(&model.MealDish{})
 	if res.Error != nil {
@@ -270,11 +292,19 @@ func (s *MealService) AddReview(householdID, userID, mealID uint, in ReviewInput
 	if m.Status != model.MealStatusCompleted {
 		return nil, errors.New("吃完后才能留下评价")
 	}
+	if in.Rating < 1 || in.Rating > 5 {
+		return nil, errors.New("评分必须在 1-5 之间")
+	}
 
 	photos, err := jsonMarshal(in.Photos)
 	if err != nil {
 		return nil, err
 	}
+	dishIDs := map[uint]bool{}
+	for _, dish := range m.Dishes {
+		dishIDs[dish.ID] = true
+	}
+
 	review := &model.MealReview{
 		MealSessionID: m.ID,
 		UserID:        userID,
@@ -282,7 +312,35 @@ func (s *MealService) AddReview(householdID, userID, mealID uint, in ReviewInput
 		Comment:       in.Comment,
 		Photos:        photos,
 	}
-	if err := model.DB.Create(review).Error; err != nil {
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(review).Error; err != nil {
+			return err
+		}
+		for _, item := range in.DishReviews {
+			if item.MealDishID == 0 {
+				continue
+			}
+			if !dishIDs[item.MealDishID] {
+				return errors.New("菜品不属于这一顿")
+			}
+			if item.Rating < 1 || item.Rating > 5 {
+				return errors.New("菜品评分必须在 1-5 之间")
+			}
+			dishReview := model.MealDishReview{
+				MealReviewID:  review.ID,
+				MealSessionID: m.ID,
+				MealDishID:    item.MealDishID,
+				UserID:        userID,
+				Rating:        item.Rating,
+				Comment:       item.Comment,
+			}
+			if err := tx.Create(&dishReview).Error; err != nil {
+				return err
+			}
+			review.DishReviews = append(review.DishReviews, dishReview)
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	return review, nil
@@ -341,7 +399,7 @@ func (s *MealService) ShoppingList(householdID, mealID uint) (*ShoppingList, err
 	}
 
 	indexByName := map[string]int{}
-	var items []ShoppingItem
+	items := []ShoppingItem{}
 
 	for _, dish := range m.Dishes {
 		if dish.RecipeID == nil {
@@ -381,12 +439,12 @@ func (s *MealService) ShoppingList(householdID, mealID uint) (*ShoppingList, err
 
 // HouseholdStats 一个家的累积统计
 type HouseholdStats struct {
-	TotalMeals      int64           `json:"total_meals"`
-	TotalDishes     int64           `json:"total_dishes"`
-	RecentDays      int             `json:"recent_days"`
-	RecentMeals     int64           `json:"recent_meals"`
-	TopDishes       []TopDishItem   `json:"top_dishes"`
-	SceneBreakdown  []SceneCountItem `json:"scene_breakdown"`
+	TotalMeals     int64            `json:"total_meals"`
+	TotalDishes    int64            `json:"total_dishes"`
+	RecentDays     int              `json:"recent_days"`
+	RecentMeals    int64            `json:"recent_meals"`
+	TopDishes      []TopDishItem    `json:"top_dishes"`
+	SceneBreakdown []SceneCountItem `json:"scene_breakdown"`
 }
 
 // TopDishItem 常吃 Top 项
@@ -404,7 +462,11 @@ type SceneCountItem struct {
 
 // Stats 计算一个家的累积统计
 func (s *MealService) Stats(householdID uint) (*HouseholdStats, error) {
-	stats := &HouseholdStats{RecentDays: 30}
+	stats := &HouseholdStats{
+		RecentDays:     30,
+		TopDishes:      []TopDishItem{},
+		SceneBreakdown: []SceneCountItem{},
+	}
 
 	if err := model.DB.Model(&model.MealSession{}).
 		Where("household_id = ? AND status = ?", householdID, model.MealStatusCompleted).
@@ -471,7 +533,7 @@ func (s *MealService) Stats(householdID uint) (*HouseholdStats, error) {
 func (s *MealService) Get(householdID, id uint) (*model.MealSession, error) {
 	var m model.MealSession
 	if err := model.DB.Where("id = ? AND household_id = ?", id, householdID).
-		Preload("Dishes").Preload("Reviews.User").Preload("Creator").
+		Preload("Dishes.Adder").Preload("Participants.User").Preload("Reviews.User").Preload("Reviews.DishReviews").Preload("Creator").
 		First(&m).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("这一顿不存在")
