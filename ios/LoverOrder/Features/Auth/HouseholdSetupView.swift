@@ -9,6 +9,7 @@ struct HouseholdSetupView: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var showScanner = false
+    @State private var showJoinDining = false
 
     enum Mode: Hashable { case create, join }
 
@@ -43,7 +44,19 @@ struct HouseholdSetupView: View {
 
             PrimaryButton(title: confirmTitle, isLoading: isLoading, action: submit)
                 .padding(.horizontal, AppSpacing.xl)
-                .padding(.bottom, AppSpacing.xxl)
+
+            // 来蹭饭的朋友不该被迫先建一个家 聚餐参与不要求有家
+            Button {
+                showJoinDining = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "qrcode.viewfinder")
+                    Text("先不建家 · 去朋友家蹭一顿")
+                }
+                .font(AppFont.caption(13))
+                .foregroundStyle(Color.inkMuted)
+            }
+            .padding(.bottom, AppSpacing.xxl)
         }
         .padding(.top, AppSpacing.xxl)
         .background(Color.appBackground.ignoresSafeArea())
@@ -52,6 +65,10 @@ struct HouseholdSetupView: View {
                 inviteCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
                 submit()
             }
+        }
+        .fullScreenCover(isPresented: $showJoinDining) {
+            DiningJoinView()
+                .environmentObject(appState)
         }
     }
 

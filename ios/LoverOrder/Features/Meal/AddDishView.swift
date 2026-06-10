@@ -74,6 +74,9 @@ struct AddDishView: View {
                 }
                 .environmentObject(appState)
             }
+            .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
+                Task { await loadPinned() }
+            }
             .toast($errorMessage)
         }
     }
@@ -86,7 +89,7 @@ struct AddDishView: View {
                     .font(AppFont.title(26))
                     .foregroundStyle(Color.inkPrimary)
                 Image(systemName: "heart.fill")
-                    .foregroundStyle(Color.brandGreen)
+                    .foregroundStyle(Color.accentWarm)
                     .font(.system(size: 13))
             }
             Text("把想吃的菜加入这一顿")
@@ -402,17 +405,21 @@ struct AddDishView: View {
     }
 
     // 把当前已选未收藏的菜谱批量加入收藏
+    // 接口是 toggle 必须先查已收藏的跳过 否则会把它们反向取消
     private func batchFavorite() async {
-        var newlyFavored = 0
-        for dish in pinnedDishes {
-            guard let rid = dish.recipeId else { continue }
-            do {
-                let favored = try await RecipeService.shared.toggleFavorite(id: rid)
-                if favored { newlyFavored += 1 }
-            } catch {}
-        }
-        if newlyFavored > 0 {
-            errorMessage = "已加入收藏 \(newlyFavored) 道"
+        do {
+            let favored = try await RecipeService.shared.list(.init(favorite: true, page: 1, pageSize: 100))
+            let favoredIds = Set(favored.items.map { $0.id })
+            var newlyFavored = 0
+            for dish in pinnedDishes {
+                guard let rid = dish.recipeId, !favoredIds.contains(rid) else { continue }
+                if (try? await RecipeService.shared.toggleFavorite(id: rid)) == true {
+                    newlyFavored += 1
+                }
+            }
+            errorMessage = newlyFavored > 0 ? "已加入收藏 \(newlyFavored) 道" : "都已经在收藏里啦"
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }

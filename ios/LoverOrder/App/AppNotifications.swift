@@ -5,11 +5,15 @@ extension Notification.Name {
     static let recipesChanged = Notification.Name("lover-order.recipes.changed")
     static let mealChanged = Notification.Name("lover-order.meal.changed")
     static let categoriesChanged = Notification.Name("lover-order.categories.changed")
+    static let sessionExpired = Notification.Name("lover-order.session.expired")
 }
 
 enum AppNotifications {
     static func recipesChanged() {
         NotificationCenter.default.post(name: .recipesChanged, object: nil)
+    }
+    static func sessionExpired() {
+        NotificationCenter.default.post(name: .sessionExpired, object: nil)
     }
     static func mealChanged() {
         NotificationCenter.default.post(name: .mealChanged, object: nil)

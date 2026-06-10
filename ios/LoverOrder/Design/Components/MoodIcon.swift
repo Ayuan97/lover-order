@@ -1,7 +1,7 @@
 import SwiftUI
 
-// 心情图标 + 文案 用于首页四档选择
-// 轻松点 / 正常吃 / 认真吃 / 换换口味
+// 心情胶囊 轻松点 / 正常吃 / 认真吃 / 换换口味
+// 压成单行小胶囊 把首屏空间让给菜
 struct MoodChip: View {
     let mood: Mood
     var isSelected: Bool = false
@@ -9,26 +9,18 @@ struct MoodChip: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: AppSpacing.sm) {
-                ZStack {
-                    Circle()
-                        .fill(isSelected ? Color.brandGreen.opacity(0.12) : Color.appBackground)
-                        .overlay(
-                            Circle().strokeBorder(
-                                isSelected ? Color.brandGreen.opacity(0.35) : Color.dividerLine.opacity(0.7),
-                                lineWidth: 1
-                            )
-                        )
-                        .frame(width: 56, height: 56)
-                    Image(systemName: mood.icon)
-                        .font(.system(size: 22, weight: .light))
-                        .foregroundStyle(isSelected ? Color.brandGreen : Color.inkSecondary)
-                }
+            HStack(spacing: 5) {
+                Image(systemName: mood.icon)
+                    .font(.system(size: 12, weight: .medium))
                 Text(mood.label)
                     .font(AppFont.body(13))
-                    .foregroundStyle(isSelected ? Color.brandGreen : Color.inkPrimary)
             }
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, AppSpacing.md)
+            .padding(.vertical, 9)
+            .foregroundStyle(isSelected ? .white : Color.inkSecondary)
+            .background(isSelected ? Color.brandGreen : Color.cardBackground)
+            .clipShape(Capsule(style: .continuous))
+            .capsuleHairline(color: isSelected ? .clear : Color.dividerLine.opacity(0.7))
         }
         .buttonStyle(.plain)
     }

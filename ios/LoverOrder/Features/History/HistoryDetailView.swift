@@ -184,7 +184,7 @@ struct HistoryDetailView: View {
     private func reviewRow(_ review: MealReview) -> some View {
         VStack(alignment: .leading, spacing: AppSpacing.sm) {
             HStack(spacing: AppSpacing.sm) {
-                if let avatar = review.user?.avatar, let url = URL(string: avatar) {
+                if let url = APIConfig.imageURL(review.user?.avatar) {
                     AsyncImage(url: url) { phase in
                         if case .success(let img) = phase {
                             img.resizable().scaledToFill()
@@ -210,7 +210,7 @@ struct HistoryDetailView: View {
                     ForEach(1...5, id: \.self) { star in
                         Image(systemName: star <= review.rating ? "leaf.fill" : "leaf")
                             .font(.system(size: 11))
-                            .foregroundStyle(star <= review.rating ? Color.brandGreen : Color.inkMuted)
+                            .foregroundStyle(star <= review.rating ? Color.accentWarm : Color.inkMuted)
                     }
                 }
             }
@@ -281,7 +281,7 @@ struct HistoryDetailView: View {
             for dish in meal.dishes ?? [] {
                 if let rid = dish.recipeId {
                     if existingRecipeIds.contains(rid) { continue }
-                    _ = try await MealService.shared.addDish(mealId: current.id, dish: DishInput(recipeId: rid, note: dish.note))
+                    _ = try await MealService.shared.addDish(mealId: current.id, dish: DishInput(recipeId: rid, name: dish.recipeName, image: dish.recipeImage, note: dish.note))
                     added += 1
                 } else if !dish.recipeName.isEmpty {
                     if existingNames.contains(dish.recipeName) { continue }

@@ -69,7 +69,8 @@ func (s *RecipeService) List(householdID uint, q ListQuery) (*ListResult, error)
 	}
 	if q.Keyword != "" {
 		kw := "%" + q.Keyword + "%"
-		tx = tx.Where("name LIKE ? OR description LIKE ?", kw, kw)
+		// 搜"鸡蛋"也该命中配料里有蛋的菜 不只搜名字
+		tx = tx.Where("name LIKE ? OR description LIKE ? OR CAST(ingredients AS CHAR) LIKE ?", kw, kw, kw)
 	}
 	if q.Mood != "" {
 		tx = tx.Where("JSON_CONTAINS(mood_tags, JSON_QUOTE(?))", q.Mood)
@@ -93,11 +94,37 @@ func (s *RecipeService) List(householdID uint, q ListQuery) (*ListResult, error)
 		Find(&items).Error; err != nil {
 		return nil, err
 	}
+	if q.UserID > 0 {
+		fillFavored(q.UserID, items)
+	}
 	return &ListResult{Total: total, Items: items}, nil
 }
 
+// fillFavored 标记当前用户是否收藏 客户端据此渲染心形初始态
+func fillFavored(userID uint, items []model.Recipe) {
+	if len(items) == 0 {
+		return
+	}
+	ids := make([]uint, 0, len(items))
+	for i := range items {
+		ids = append(ids, items[i].ID)
+	}
+	var favs []model.Favorite
+	if err := model.DB.Where("user_id = ? AND recipe_id IN ?", userID, ids).Find(&favs).Error; err != nil {
+		return
+	}
+	favored := make(map[uint]struct{}, len(favs))
+	for _, f := range favs {
+		favored[f.RecipeID] = struct{}{}
+	}
+	for i := range items {
+		_, ok := favored[items[i].ID]
+		items[i].IsFavored = ok
+	}
+}
+
 // Get 取菜谱详情并自增浏览数
-func (s *RecipeService) Get(householdID, id uint) (*model.Recipe, error) {
+func (s *RecipeService) Get(householdID, userID, id uint) (*model.Recipe, error) {
 	var r model.Recipe
 	if err := model.DB.Where("id = ? AND household_id = ?", id, householdID).
 		Preload("Category").First(&r).Error; err != nil {
@@ -107,6 +134,11 @@ func (s *RecipeService) Get(householdID, id uint) (*model.Recipe, error) {
 		return nil, err
 	}
 	_ = r.IncrViewCount()
+	if userID > 0 {
+		items := []model.Recipe{r}
+		fillFavored(userID, items)
+		r = items[0]
+	}
 	return &r, nil
 }
 

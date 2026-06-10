@@ -6,6 +6,7 @@ struct MenuView: View {
     @StateObject private var vm = MenuViewModel()
     @State private var searchActive: Bool = false
     @State private var showCreateRecipe: Bool = false
+    @Environment(\.scenePhase) private var scenePhase
 
     private let grid = [
         GridItem(.flexible(), spacing: AppSpacing.md),
@@ -28,11 +29,23 @@ struct MenuView: View {
                 .padding(.top, AppSpacing.md)
             }
             .background(Color.appBackground.ignoresSafeArea())
+            .refreshable {
+                await vm.loadCurrentMeal(scene: appState.currentScene, mood: appState.currentMood)
+                await vm.loadRecipes()
+            }
             .safeAreaInset(edge: .bottom) {
                 bottomBar
             }
             .task {
                 await vm.bootstrap(scene: appState.currentScene, mood: appState.currentMood)
+            }
+            .task {
+                // 与首页同款轮询 另一台手机加的菜自动出现在"已加入这一顿"
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(4))
+                    guard scenePhase == .active else { continue }
+                    await vm.syncMeal(scene: appState.currentScene, mood: appState.currentMood)
+                }
             }
             .onChange(of: appState.currentScene) { _, _ in
                 Task { await vm.loadCurrentMeal(scene: appState.currentScene, mood: appState.currentMood) }
@@ -42,6 +55,9 @@ struct MenuView: View {
             }
             .onReceive(NotificationCenter.default.publisher(for: .categoriesChanged)) { _ in
                 Task { await vm.loadCategories() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
+                Task { await vm.loadCurrentMeal(scene: appState.currentScene, mood: appState.currentMood) }
             }
             .navigationBarHidden(true)
             .sheet(isPresented: $showCreateRecipe) {
@@ -61,7 +77,7 @@ struct MenuView: View {
                     .font(AppFont.title(30))
                     .foregroundStyle(Color.inkPrimary)
                 Image(systemName: "heart.fill")
-                    .foregroundStyle(Color.brandGreen)
+                    .foregroundStyle(Color.accentWarm)
                     .font(.system(size: 14))
             }
             Text("把这一顿想选的菜放在这里")
@@ -160,7 +176,18 @@ struct MenuView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .onAppear {
+                            if recipe.id == vm.recipes.last?.id {
+                                Task { await vm.loadMore() }
+                            }
+                        }
                     }
+                }
+                if vm.isLoadingMore {
+                    ProgressView()
+                        .tint(Color.brandGreen)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, AppSpacing.md)
                 }
             }
         }
@@ -231,6 +258,8 @@ struct MenuView: View {
                     Task { await vm.confirmMeal() }
                 }
                 .frame(width: 180)
+                .disabled(vm.meal?.status != .planning)
+                .opacity(vm.meal?.status == .planning ? 1 : 0.55)
             }
             .padding(.horizontal, AppSpacing.lg)
             .padding(.vertical, AppSpacing.sm)
@@ -306,7 +335,7 @@ private struct MenuRecipeCard: View {
                         .font(.system(size: 12, weight: .bold))
                         .foregroundStyle(.white)
                         .frame(width: 28, height: 28)
-                        .background(Color.brandGreen)
+                        .background(alreadyAdded ? Color.inkMuted : Color.accentWarm)
                         .clipShape(Circle())
                 }
                 .padding(AppSpacing.sm)

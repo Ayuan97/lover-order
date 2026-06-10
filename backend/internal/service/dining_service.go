@@ -19,7 +19,8 @@ func NewDiningService() *DiningService {
 	return &DiningService{}
 }
 
-const diningTTL = 3 * time.Hour
+// 家宴经常一聊就是一下午 给足 6 小时
+const diningTTL = 6 * time.Hour
 
 // Open host 在自己家的某一顿上开聚餐 生成房间号
 func (s *DiningService) Open(householdID, mealID uint) (*model.MealSession, error) {

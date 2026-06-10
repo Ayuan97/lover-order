@@ -83,6 +83,9 @@ struct DiningGuestView: View {
             Text("聚餐中")
                 .font(AppFont.title(24))
                 .foregroundStyle(Color.inkPrimary)
+            Text("在 \(meal.creator?.displayName ?? "朋友") 家的这一顿")
+                .font(AppFont.caption(12))
+                .foregroundStyle(Color.inkMuted)
             HStack(spacing: -8) {
                 ForEach(participants.prefix(6)) { p in
                     AvatarView(user: p.user, size: 26, ring: true)

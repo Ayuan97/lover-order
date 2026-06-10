@@ -178,8 +178,12 @@ func (s *MealService) Confirm(householdID, id uint) (*model.MealSession, error) 
 	if err != nil {
 		return nil, err
 	}
+	if m.Status == model.MealStatusConfirmed {
+		// 两人同时点"定下"的撞车场景 让后点的人明白发生了什么
+		return nil, errors.New("Ta 刚把这一顿定下啦")
+	}
 	if m.Status != model.MealStatusPlanning {
-		return nil, errors.New("当前状态不能定下")
+		return nil, errors.New("这一顿已经结束了")
 	}
 	if len(m.Dishes) == 0 {
 		return nil, errors.New("至少选一道菜再定下")
@@ -248,12 +252,14 @@ func (s *MealService) AddDish(householdID, userID, id uint, in DishInput) (*mode
 	}
 	if in.RecipeID != nil {
 		var r model.Recipe
-		if err := model.DB.Where("id = ? AND household_id = ?", *in.RecipeID, householdID).First(&r).Error; err != nil {
-			return nil, errors.New("菜谱不存在")
+		if err := model.DB.Where("id = ? AND household_id = ?", *in.RecipeID, householdID).First(&r).Error; err == nil {
+			dish.RecipeName = r.Name
+			dish.RecipeImage = r.CoverImage
+			_ = r.MarkUsed()
+		} else {
+			// 菜谱删了也不挡复刻往顿:退回用调用方带的快照 只断开关联
+			dish.RecipeID = nil
 		}
-		dish.RecipeName = r.Name
-		dish.RecipeImage = r.CoverImage
-		_ = r.MarkUsed()
 	}
 	if dish.RecipeName == "" {
 		return nil, errors.New("菜品名称不能为空")
@@ -305,6 +311,10 @@ func (s *MealService) AddReview(householdID, userID, mealID uint, in ReviewInput
 		dishIDs[dish.ID] = true
 	}
 
+	// 同一人重复提交视为修改 覆盖自己的旧评价 不堆多份
+	var old model.MealReview
+	hasOld := model.DB.Where("meal_session_id = ? AND user_id = ?", m.ID, userID).First(&old).Error == nil
+
 	review := &model.MealReview{
 		MealSessionID: m.ID,
 		UserID:        userID,
@@ -313,6 +323,14 @@ func (s *MealService) AddReview(householdID, userID, mealID uint, in ReviewInput
 		Photos:        photos,
 	}
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if hasOld {
+			if err := tx.Unscoped().Where("meal_review_id = ?", old.ID).Delete(&model.MealDishReview{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Unscoped().Delete(&old).Error; err != nil {
+				return err
+			}
+		}
 		if err := tx.Create(review).Error; err != nil {
 			return err
 		}

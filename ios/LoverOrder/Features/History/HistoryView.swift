@@ -35,11 +35,17 @@ struct HistoryView: View {
                 .padding(.top, AppSpacing.md)
             }
             .background(Color.appBackground.ignoresSafeArea())
+            .refreshable {
+                await vm.load(filter: filter)
+            }
             .task {
                 await vm.load(filter: filter)
             }
             .onChange(of: filter) { _, newValue in
                 Task { await vm.load(filter: newValue) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
+                Task { await vm.load(filter: filter) }
             }
             .navigationBarHidden(true)
             .toast($vm.errorMessage)
@@ -53,7 +59,7 @@ struct HistoryView: View {
                     .font(AppFont.title(30))
                     .foregroundStyle(Color.inkPrimary)
                 Image(systemName: "heart.fill")
-                    .foregroundStyle(Color.brandGreen)
+                    .foregroundStyle(Color.accentWarm)
                     .font(.system(size: 14))
             }
             Text("把每一顿吃过的留下来")

@@ -18,6 +18,19 @@ enum APIConfig {
         return URL(string: host + "/api/v1") ?? URL(string: fallbackDeviceBaseURL + "/api/v1")!
         #endif
     }()
+
+    // 图片字段可能是 /static/... 相对路径 渲染前按当前后端地址补全
+    // 这样换 LAN IP 或模拟器/真机混用时 老图都不挂;历史数据里的绝对 URL 原样放行
+    static func imageURL(_ s: String?) -> URL? {
+        guard let s, !s.isEmpty else { return nil }
+        if s.hasPrefix("http://") || s.hasPrefix("https://") {
+            return URL(string: s)
+        }
+        var comp = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        comp?.path = s
+        comp?.query = nil
+        return comp?.url
+    }
 }
 
 // 统一 HTTP 客户端 只支持 POST / GET 与后端约定一致
@@ -103,6 +116,7 @@ final class APIClient {
 
         if http.statusCode == 401 {
             TokenStorage.shared.clear()
+            AppNotifications.sessionExpired()
             throw APIError.unauthorized
         }
 

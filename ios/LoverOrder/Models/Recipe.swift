@@ -85,6 +85,7 @@ struct Recipe: Codable, Identifiable, Hashable {
     var lastUsedAt: Date?
     var createdAt: Date?
     var creator: AppUser?
+    var isFavored: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -108,6 +109,7 @@ struct Recipe: Codable, Identifiable, Hashable {
         case lastUsedAt = "last_used_at"
         case createdAt = "created_at"
         case creator
+        case isFavored = "is_favored"
     }
 }
 

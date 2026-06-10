@@ -97,35 +97,52 @@ final class MealService {
         try await api.get("meals/\(id)")
     }
 
+    // 以下变更成功后广播 mealChanged:Tab 页常驻不重建 靠通知同步"这一顿"
+    // 在 Service 层发 是为了覆盖所有调用入口(首页/菜单/挑菜面板/菜谱详情/评价)
+
     func create(_ req: MealInput) async throws -> MealSession {
-        try await api.post("meals/create", body: req)
+        let m: MealSession = try await api.post("meals/create", body: req)
+        AppNotifications.mealChanged()
+        return m
     }
 
     func update(id: UInt, req: MealInput) async throws -> MealSession {
-        try await api.post("meals/\(id)/update", body: req)
+        let m: MealSession = try await api.post("meals/\(id)/update", body: req)
+        AppNotifications.mealChanged()
+        return m
     }
 
     func confirm(id: UInt) async throws -> MealSession {
-        try await api.post("meals/\(id)/confirm")
+        let m: MealSession = try await api.post("meals/\(id)/confirm")
+        AppNotifications.mealChanged()
+        return m
     }
 
     func complete(id: UInt) async throws -> MealSession {
-        try await api.post("meals/\(id)/complete")
+        let m: MealSession = try await api.post("meals/\(id)/complete")
+        AppNotifications.mealChanged()
+        return m
     }
 
     func cancel(id: UInt) async throws {
         let _: EmptyResponse = try await api.post("meals/\(id)/cancel")
+        AppNotifications.mealChanged()
     }
 
     func addDish(mealId: UInt, dish: DishInput) async throws -> MealDish {
-        try await api.post("meals/\(mealId)/dishes/add", body: dish)
+        let d: MealDish = try await api.post("meals/\(mealId)/dishes/add", body: dish)
+        AppNotifications.mealChanged()
+        return d
     }
 
     func removeDish(mealId: UInt, dishId: UInt) async throws {
         let _: EmptyResponse = try await api.post("meals/\(mealId)/dishes/\(dishId)/remove")
+        AppNotifications.mealChanged()
     }
 
     func review(mealId: UInt, _ req: ReviewInput) async throws -> MealReview {
-        try await api.post("meals/\(mealId)/review", body: req)
+        let r: MealReview = try await api.post("meals/\(mealId)/review", body: req)
+        AppNotifications.mealChanged()
+        return r
     }
 }

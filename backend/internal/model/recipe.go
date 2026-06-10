@@ -97,6 +97,7 @@ type Recipe struct {
 	ViewCount     int            `json:"view_count" gorm:"default:0;comment:查看次数"`
 	UseCount      int            `json:"use_count" gorm:"default:0;comment:加入一顿次数"`
 	LastUsedAt    *time.Time     `json:"last_used_at" gorm:"comment:最近一次被吃"`
+	IsFavored     bool           `json:"is_favored" gorm:"-"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 	DeletedAt     gorm.DeletedAt `json:"-" gorm:"index"`

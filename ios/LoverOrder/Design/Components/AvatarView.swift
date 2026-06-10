@@ -8,7 +8,7 @@ struct AvatarView: View {
 
     var body: some View {
         Group {
-            if let urlStr = user?.avatar, !urlStr.isEmpty, let url = URL(string: urlStr) {
+            if let url = APIConfig.imageURL(user?.avatar) {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let img):

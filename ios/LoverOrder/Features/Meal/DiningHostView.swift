@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // host 端聚餐:开聚餐后出示房间号 + 二维码 让客人扫码进来一起点这一顿
 struct DiningHostView: View {
@@ -88,16 +89,30 @@ struct DiningHostView: View {
                 .appCardShadow()
 
             VStack(spacing: 2) {
-                Text("房间号")
+                Text("房间号 · 点一下复制")
                     .font(AppFont.caption(11))
                     .foregroundStyle(Color.inkMuted)
-                Text(formatRoom(code))
-                    .font(AppFont.mono(30))
-                    .foregroundStyle(Color.brandGreen)
-                    .tracking(3)
+                // 人不在场的朋友扫不了码 复制房间号发微信
+                Button {
+                    UIPasteboard.general.string = code
+                    Haptics.light()
+                    errorMessage = "房间号已复制 发给朋友吧"
+                } label: {
+                    Text(formatRoom(code))
+                        .font(AppFont.mono(30))
+                        .foregroundStyle(Color.brandGreen)
+                        .tracking(3)
+                }
+                .buttonStyle(.plain)
             }
 
             participantsRow
+
+            if let count = meal?.dishes?.count, count > 0 {
+                Text("已点 \(count) 道菜 · 回首页可看明细")
+                    .font(AppFont.caption(12))
+                    .foregroundStyle(Color.inkSecondary)
+            }
 
             Spacer()
 

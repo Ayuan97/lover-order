@@ -52,12 +52,13 @@ func (h *RecipeHandler) List(c *gin.Context) {
 // Detail 详情
 func (h *RecipeHandler) Detail(c *gin.Context) {
 	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		Fail(c, CodeBadRequest, "id 不合法")
 		return
 	}
-	r, err := h.svc.Get(hid, uint(id))
+	r, err := h.svc.Get(hid, uid, uint(id))
 	if err != nil {
 		Fail(c, CodeNotFound, err.Error())
 		return

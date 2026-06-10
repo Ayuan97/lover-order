@@ -59,7 +59,7 @@ struct MealReviewView: View {
                     .font(AppFont.title(26))
                     .foregroundStyle(Color.inkPrimary)
                 Image(systemName: "heart.fill")
-                    .foregroundStyle(Color.brandGreen)
+                    .foregroundStyle(Color.accentWarm)
                     .font(.system(size: 13))
             }
             Text("留下点感受 下次更好选")
@@ -93,7 +93,7 @@ struct MealReviewView: View {
                     } label: {
                         Image(systemName: star <= rating ? "leaf.fill" : "leaf")
                             .font(.system(size: 28))
-                            .foregroundStyle(star <= rating ? Color.brandGreen : Color.inkMuted)
+                            .foregroundStyle(star <= rating ? Color.accentWarm : Color.inkMuted)
                     }
                     .buttonStyle(.plain)
                 }
@@ -153,7 +153,7 @@ struct MealReviewView: View {
                 } label: {
                     Image(systemName: star <= (dishRatings[dishId] ?? rating) ? "leaf.fill" : "leaf")
                         .font(.system(size: 20))
-                        .foregroundStyle(star <= (dishRatings[dishId] ?? rating) ? Color.brandGreen : Color.inkMuted)
+                        .foregroundStyle(star <= (dishRatings[dishId] ?? rating) ? Color.accentWarm : Color.inkMuted)
                 }
                 .buttonStyle(.plain)
             }

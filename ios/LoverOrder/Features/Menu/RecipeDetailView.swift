@@ -55,7 +55,7 @@ struct RecipeDetailView: View {
                         Task { await toggleFavor() }
                     } label: {
                         Image(systemName: isFavored ? "heart.fill" : "heart")
-                            .foregroundStyle(isFavored ? Color.brandGreen : Color.inkSecondary)
+                            .foregroundStyle(isFavored ? Color.accentWarm : Color.inkSecondary)
                     }
                     Menu {
                         Button {
@@ -352,6 +352,7 @@ struct RecipeDetailView: View {
             let (r, m) = try await (detail, current)
             self.recipe = r
             self.meal = m
+            self.isFavored = r.isFavored ?? false
             await loadRelated(r)
         } catch {
             errorMessage = error.localizedDescription

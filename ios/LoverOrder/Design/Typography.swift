@@ -2,8 +2,9 @@ import SwiftUI
 
 // 字体规范 沿用系统 PingFang 配合 SF 数字 视觉上贴近设计稿
 enum AppFont {
+    // system(design:.serif) 对中文无效(仍渲染苹方) 中文衬线必须显式用宋体
     static func title(_ size: CGFloat = 28) -> Font {
-        .system(size: size, weight: .semibold, design: .serif)
+        .custom("STSongti-SC-Bold", size: size)
     }
     static func headline(_ size: CGFloat = 20) -> Font {
         .system(size: size, weight: .semibold)

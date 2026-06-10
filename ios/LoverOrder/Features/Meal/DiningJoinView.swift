@@ -57,7 +57,10 @@ struct DiningJoinView: View {
                 Task { await join(code) }
             }
         }
-        .fullScreenCover(item: $joined) { m in
+        .fullScreenCover(item: $joined, onDismiss: {
+            // 访客离开聚餐后直接回首页 不停在输码页
+            dismiss()
+        }) { m in
             DiningGuestView(meal: m)
                 .environmentObject(appState)
         }

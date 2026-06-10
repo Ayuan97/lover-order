@@ -193,14 +193,16 @@ iOS：`ios/LoverOrder/Features/Auth/LoginView.swift`
 
 | 颜色资源 | 用途 |
 |---|---|
-| `AppBackground` | 主背景米白 #F3EEE6 |
-| `CardBackground` | 卡片米色 #F8F5F1 |
-| `BrandGreen` | 主色墨绿 #516B4A |
+| `AppBackground` | 主背景暖米白 #F7F1E4 |
+| `CardBackground` | 卡片暖白 #FFFDF8 |
+| `BrandGreen` | 主色墨绿 #496C43 |
+| `AccentWarm` | 柿子色点缀 #C96843（收藏心、加菜按钮、今日推荐标签等小面积食欲暖色） |
 | `AccentInk` | 深墨绿强调 #495F42 |
 | `InkPrimary` / `InkSecondary` / `InkMuted` | 文本灰阶 |
 | `Divider` | 分割线 |
+| `ErrorInk` | 错误陶土红 #B0584E |
 
-字体：`AppFont.title/headline/body/caption/mono`，标题用 `.serif` 设计风格贴合衬线大标题。
+字体：`AppFont.title/headline/body/caption/mono`。标题衬线用宋体 `STSongti-SC-Bold`（注意：`Font.system(design: .serif)` 对中文无效，中文衬线必须显式指定宋体）。
 
 ## 编码规则（必须遵守）
 

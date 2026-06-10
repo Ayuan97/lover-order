@@ -171,7 +171,7 @@ struct FuturePlansView: View {
             for dish in future.dishes ?? [] {
                 if let rid = dish.recipeId {
                     if existingRecipeIds.contains(rid) { continue }
-                    _ = try await MealService.shared.addDish(mealId: now.id, dish: DishInput(recipeId: rid, note: dish.note))
+                    _ = try await MealService.shared.addDish(mealId: now.id, dish: DishInput(recipeId: rid, name: dish.recipeName, image: dish.recipeImage, note: dish.note))
                 } else if !dish.recipeName.isEmpty {
                     if existingNames.contains(dish.recipeName) { continue }
                     _ = try await MealService.shared.addDish(mealId: now.id, dish: DishInput(name: dish.recipeName, image: dish.recipeImage, note: dish.note))

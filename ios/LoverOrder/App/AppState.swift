@@ -15,6 +15,16 @@ final class AppState: ObservableObject {
         currentUser != nil
     }
 
+    // 401 时 token 已被 APIClient 清掉 这里把人送回登录页 不然会留在主界面无限报错
+    init() {
+        NotificationCenter.default.addObserver(forName: .sessionExpired, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                self?.currentUser = nil
+                self?.household = nil
+            }
+        }
+    }
+
     // 启动时拉一次资料 据此决定走登录页还是主界面
     func bootstrap() async {
         defer { isBootstrapping = false }
@@ -29,7 +39,7 @@ final class AppState: ObservableObject {
                 household = h
             }
         } catch {
-            TokenStorage.shared.clear()
+            // 断网等临时错误不清 token 下次启动还能直接进;真 401 由 APIClient 统一清
             currentUser = nil
             household = nil
         }

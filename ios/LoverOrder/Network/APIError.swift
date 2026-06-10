@@ -9,20 +9,21 @@ enum APIError: LocalizedError {
     case unauthorized
     case noData
 
+    // 这些文案会直接以 toast 呈现给用户 说人话 不暴露技术细节
     var errorDescription: String? {
         switch self {
         case .invalidURL:
             return "请求地址有误"
-        case .requestFailed(let err):
-            return "网络异常：\(err.localizedDescription)"
-        case .decodingFailed(let err):
-            return "解析失败：\(err.localizedDescription)"
+        case .requestFailed:
+            return "网络好像不太通 检查一下再试"
+        case .decodingFailed:
+            return "数据有点不对劲 稍后再试"
         case .server(_, let msg):
             return msg
         case .unauthorized:
-            return "请重新登录"
+            return "登录过期了 请重新登录"
         case .noData:
-            return "无返回数据"
+            return "暂时没拿到内容 再试一次"
         }
     }
 }

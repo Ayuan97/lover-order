@@ -29,8 +29,13 @@ final class MenuViewModel: ObservableObject {
     @Published var pinnedDishes: [MealDish] = []
     @Published var meal: MealSession?
     @Published var isLoading: Bool = false
+    @Published var isLoadingMore: Bool = false
     @Published var loadFailed: Bool = false
     @Published var errorMessage: String?
+
+    private var page = 1
+    private var total = 0
+    var hasMore: Bool { recipes.count < total }
 
     private let recipeService = RecipeService.shared
     private let categoryService = CategoryService.shared
@@ -60,31 +65,57 @@ final class MenuViewModel: ObservableObject {
         }
     }
 
+    // 轮询静默同步这一顿 内容没变不动 UI
+    func syncMeal(scene: MealScene, mood: Mood) async {
+        guard let m = try? await mealService.current(scene: scene, mood: mood) else { return }
+        if m.syncSignature != meal?.syncSignature {
+            meal = m
+            pinnedDishes = m.dishes ?? []
+            AppNotifications.mealChanged()
+        }
+    }
+
     func loadRecipes() async {
         isLoading = true
         loadFailed = false
         defer { isLoading = false }
         do {
-            var query = RecipeListQuery(
-                categoryId: selectedCategoryId,
-                keyword: keyword.isEmpty ? nil : keyword,
-                page: 1,
-                pageSize: 50
-            )
-            switch quickFilter {
-            case .all:
-                break
-            case .loved:
-                query.favorite = true
-            case .recent, .filling:
-                break
-            }
-            let result = try await recipeService.list(query)
+            page = 1
+            let result = try await recipeService.list(buildQuery(page: 1))
+            total = result.total
             recipes = sortByFilter(result.items)
         } catch {
             loadFailed = true
             errorMessage = error.localizedDescription
         }
+    }
+
+    // 菜谱攒多了 50 条装不下 滚到底自动加载下一页
+    func loadMore() async {
+        guard hasMore, !isLoadingMore, !isLoading else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        do {
+            let result = try await recipeService.list(buildQuery(page: page + 1))
+            page += 1
+            total = result.total
+            recipes = sortByFilter(recipes + result.items)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func buildQuery(page: Int) -> RecipeListQuery {
+        var query = RecipeListQuery(
+            categoryId: selectedCategoryId,
+            keyword: keyword.isEmpty ? nil : keyword,
+            page: page,
+            pageSize: 50
+        )
+        if quickFilter == .loved {
+            query.favorite = true
+        }
+        return query
     }
 
     private func sortByFilter(_ items: [Recipe]) -> [Recipe] {
@@ -118,6 +149,10 @@ final class MenuViewModel: ObservableObject {
 
     func addDish(_ recipe: Recipe) async {
         guard let meal else { return }
+        if pinnedDishes.contains(where: { $0.recipeId == recipe.id }) {
+            errorMessage = "这道已经在这一顿里啦"
+            return
+        }
         do {
             _ = try await mealService.addDish(mealId: meal.id, dish: DishInput(recipeId: recipe.id))
             let updated = try await mealService.detail(id: meal.id)

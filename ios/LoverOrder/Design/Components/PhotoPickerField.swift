@@ -81,7 +81,8 @@ struct PhotoPickerField: View {
             }
             let compressed = compress(data: data)
             let uploaded = try await UploadService.shared.uploadImage(compressed)
-            imageURL = uploaded.url
+            // 存相对路径 换 IP / 模拟器真机混用时图都不挂
+            imageURL = uploaded.path
         } catch {
             errorMessage = error.localizedDescription
         }

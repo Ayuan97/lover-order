@@ -44,6 +44,7 @@ struct ProfileView: View {
             .background(Color.appBackground.ignoresSafeArea())
             .task {
                 selectedTastes = Set(appState.currentUser?.tastePrefs ?? [])
+                await appState.refreshHousehold()
                 await loadStats()
             }
             .navigationBarHidden(true)
@@ -118,7 +119,7 @@ struct ProfileView: View {
                     .font(AppFont.title(30))
                     .foregroundStyle(Color.inkPrimary)
                 Image(systemName: "heart.fill")
-                    .foregroundStyle(Color.brandGreen)
+                    .foregroundStyle(Color.accentWarm)
                     .font(.system(size: 14))
             }
             Text("把这里调成你喜欢的样子")
@@ -191,7 +192,7 @@ struct ProfileView: View {
     private var moodPicker: some View {
         SectionCard {
             NumberedSectionTitle(index: 2, title: "默认心情", hint: "首页默认打开哪一档")
-            HStack(spacing: AppSpacing.sm) {
+            FlowLayout(spacing: AppSpacing.sm) {
                 ForEach(Mood.allCases) { mood in
                     MoodChip(mood: mood, isSelected: appState.currentMood == mood) {
                         Task { await updateMood(mood) }
@@ -368,7 +369,7 @@ struct ProfileView: View {
         do {
             let invite = try await HouseholdService.shared.createInvite(.init(expiresIn: 86400 * 7, maxUses: 5))
             inviteCode = invite.code
-            errorMessage = "已生成新邀请码 旧码失效"
+            errorMessage = "已生成临时邀请码 7 天内可用 5 次"
         } catch {
             errorMessage = error.localizedDescription
         }
