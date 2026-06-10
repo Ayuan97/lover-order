@@ -36,6 +36,7 @@ type LoginResult struct {
 // DevLoginInput 开发期登录入参 通过昵称识别同一个用户
 type DevLoginInput struct {
 	Nickname string `json:"nickname" binding:"required"`
+	Code     string `json:"code"`
 }
 
 // LoginDev 开发期登录 仅在 server.mode != release 时启用

@@ -2,6 +2,7 @@ package api
 
 import (
 	"github.com/gin-gonic/gin"
+	"lover-order-backend/internal/config"
 	"lover-order-backend/internal/middleware"
 	"lover-order-backend/internal/service"
 )
@@ -21,6 +22,10 @@ func (h *AuthHandler) DevLogin(c *gin.Context) {
 	var in service.DevLoginInput
 	if err := c.ShouldBindJSON(&in); err != nil {
 		Fail(c, CodeBadRequest, "参数有误")
+		return
+	}
+	if want := config.AppConfig.Server.DevCode; want != "" && in.Code != want {
+		Fail(c, CodeBadRequest, "暗号不对")
 		return
 	}
 	result, err := h.svc.LoginDev(in)

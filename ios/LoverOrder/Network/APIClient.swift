@@ -6,7 +6,7 @@ import Foundation
 //   方式 A 改 Info.plist 加 API_BASE_URL 字符串 比如 "http://192.168.1.162:8081"
 //   方式 B 直接改下面的 fallbackDeviceBaseURL（更快）
 enum APIConfig {
-    private static let fallbackDeviceBaseURL = "http://192.168.1.162:8081"
+    private static let fallbackDeviceBaseURL = "http://180.110.203.208:8081"
 
     static let baseURL: URL = {
         #if targetEnvironment(simulator)

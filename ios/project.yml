@@ -20,6 +20,7 @@ targets:
       - path: LoverOrder
     resources:
       - path: LoverOrder/Resources/Assets.xcassets
+      - path: LoverOrder/Resources/PrivacyInfo.xcprivacy
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.loverorder.app
@@ -36,12 +37,13 @@ targets:
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSRequiresIPhoneOS: true
+        ITSAppUsesNonExemptEncryption: false
         UIRequiresFullScreen: true
         UILaunchScreen:
           UIColorName: AppBackground
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-        API_BASE_URL: http://192.168.1.162:8081
+        API_BASE_URL: http://180.110.203.208:8081
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         NSPhotoLibraryUsageDescription: 选择菜品照片和评价配图

@@ -21,6 +21,8 @@ type Config struct {
 type ServerConfig struct {
 	Port int    `mapstructure:"port"`
 	Mode string `mapstructure:"mode"`
+	// DevCode 非空时 dev 登录必须携带匹配暗号 防止公网部署后凭昵称顶号
+	DevCode string `mapstructure:"dev_code"`
 }
 
 type DatabaseConfig struct {

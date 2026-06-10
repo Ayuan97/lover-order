@@ -13,9 +13,10 @@ struct AppleLoginRequest: Encodable {
     }
 }
 
-// 开发登录入参
+// 开发登录入参 code 为线上部署的暗号 本地后端未配置时可不传
 struct DevLoginRequest: Encodable {
     let nickname: String
+    let code: String?
 }
 
 // 登录返回
@@ -68,8 +69,8 @@ final class AuthService {
         return try await api.post("auth/apple", body: body)
     }
 
-    func loginDev(nickname: String) async throws -> LoginResult {
-        try await api.post("auth/dev", body: DevLoginRequest(nickname: nickname))
+    func loginDev(nickname: String, code: String? = nil) async throws -> LoginResult {
+        try await api.post("auth/dev", body: DevLoginRequest(nickname: nickname, code: code))
     }
 
     func refresh(refreshToken: String) async throws -> String {

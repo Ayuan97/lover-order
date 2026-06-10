@@ -8,6 +8,7 @@ struct LoginView: View {
     @State private var errorMessage: String?
     @State private var showDevLogin: Bool = false
     @State private var devNickname: String = ""
+    @AppStorage("dev.server.code") private var devCode: String = ""
 
     var body: some View {
         VStack(spacing: AppSpacing.xxl) {
@@ -75,6 +76,7 @@ struct LoginView: View {
         }
         .alert("开发模式登录", isPresented: $showDevLogin) {
             TextField("起个昵称", text: $devNickname)
+            TextField("服务器暗号 本地可留空", text: $devCode)
             Button("登录") {
                 let name = devNickname.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !name.isEmpty else { return }
@@ -82,7 +84,7 @@ struct LoginView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("跳过 Apple Sign In 用昵称作为身份，仅用于本地调试")
+            Text("跳过 Apple Sign In 用昵称作为身份，仅用于调试")
         }
     }
 
@@ -91,7 +93,11 @@ struct LoginView: View {
         isLoading = true
         defer { isLoading = false }
         do {
-            let res = try await AuthService.shared.loginDev(nickname: nickname)
+            let trimmedCode = devCode.trimmingCharacters(in: .whitespacesAndNewlines)
+            let res = try await AuthService.shared.loginDev(
+                nickname: nickname,
+                code: trimmedCode.isEmpty ? nil : trimmedCode
+            )
             await appState.didLogin(res)
         } catch {
             errorMessage = error.localizedDescription
