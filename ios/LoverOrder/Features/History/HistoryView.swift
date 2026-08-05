@@ -65,8 +65,6 @@ struct HistoryView: View {
             Text("把每一顿吃过的留下来")
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
-            CurrentSceneBadge(scene: appState.currentScene)
-                .padding(.top, AppSpacing.xs)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, AppSpacing.sm)
@@ -206,8 +204,8 @@ private struct HistoryCard: View {
     private var peopleHint: String {
         switch meal.scene {
         case .pair: return "两个人"
-        case .family: return "一家人"
-        case .future: return "未来计划"
+        case .family: return "旧记录"
+        case .future: return "以后想吃"
         }
     }
 

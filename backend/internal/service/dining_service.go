@@ -36,27 +36,37 @@ func (s *DiningService) Open(householdID, mealID uint) (*model.MealSession, erro
 		return nil, err
 	}
 	expires := time.Now().Add(diningTTL)
-	if err := model.DB.Model(&m).Updates(map[string]any{"room_code": code, "room_expires_at": expires}).Error; err != nil {
+	// 新码开房时清掉旧参与：关房/过期后「再开一间」必须重新扫，菜保留
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&m).Updates(map[string]any{"room_code": code, "room_expires_at": expires}).Error; err != nil {
+			return err
+		}
+		return tx.Where("meal_session_id = ?", mealID).Delete(&model.MealParticipant{}).Error
+	})
+	if err != nil {
 		return nil, err
 	}
 	return s.detail(m.ID)
 }
 
-// Close host 关闭聚餐 房间号作废 参与者随之失效
+// Close host 关闭聚餐 房间号作废 参与者随之失效（菜不动）
 func (s *DiningService) Close(householdID, mealID uint) error {
-	res := model.DB.Model(&model.MealSession{}).
-		Where("id = ? AND household_id = ?", mealID, householdID).
-		Updates(map[string]any{"room_code": "", "room_expires_at": nil})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return errors.New("这一顿不存在")
-	}
-	return nil
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&model.MealSession{}).
+			Where("id = ? AND household_id = ?", mealID, householdID).
+			Updates(map[string]any{"room_code": "", "room_expires_at": nil})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return errors.New("这一顿不存在")
+		}
+		// 关房=清场资格，旧客人 current 不再复活
+		return tx.Where("meal_session_id = ?", mealID).Delete(&model.MealParticipant{}).Error
+	})
 }
 
-// Join 访客按房间号加入聚餐 仅记一条参与 不动 household
+// Join 访客按房间号加入聚餐 仅记一条参与 不动 household；自家成员不走访客壳
 func (s *DiningService) Join(userID uint, roomCode string) (*model.MealSession, error) {
 	var m model.MealSession
 	if err := model.DB.Where("room_code = ?", roomCode).First(&m).Error; err != nil {
@@ -64,6 +74,10 @@ func (s *DiningService) Join(userID uint, roomCode string) (*model.MealSession, 
 	}
 	if !roomAlive(&m) {
 		return nil, errors.New("点菜房间已关闭或过期")
+	}
+	// 同家的另一半继续走「我们这顿」主循环，别被锁进客人点菜壳
+	if s.isHouseholdMember(userID, m.HouseholdID) {
+		return nil, errors.New("这是自家的房间 回家页一起点就行")
 	}
 	var existing model.MealParticipant
 	err := model.DB.Where("meal_session_id = ? AND user_id = ?", m.ID, userID).First(&existing).Error
@@ -84,7 +98,7 @@ func (s *DiningService) Leave(userID, mealID uint) error {
 		Delete(&model.MealParticipant{}).Error
 }
 
-// Current 访客当前参与中的聚餐 没有或已过期返回 nil
+// Current 访客当前参与中的聚餐 没有或已过期返回 nil；自家成员不算访客
 func (s *DiningService) Current(userID uint) (*model.MealSession, error) {
 	var p model.MealParticipant
 	if err := model.DB.Where("user_id = ?", userID).Order("joined_at DESC").First(&p).Error; err != nil {
@@ -95,6 +109,10 @@ func (s *DiningService) Current(userID uint) (*model.MealSession, error) {
 		return nil, nil
 	}
 	if !roomAlive(m) {
+		return nil, nil
+	}
+	// 历史脏数据：同家成员曾误 join 的参与记录，不当访客壳劫持主循环
+	if s.isHouseholdMember(userID, m.HouseholdID) {
 		return nil, nil
 	}
 	return m, nil
@@ -194,16 +212,21 @@ func (s *DiningService) Recipes(userID, mealID uint, keyword string) ([]model.Re
 
 // canParticipate host 家成员或已加入的参与者
 func (s *DiningService) canParticipate(userID uint, m *model.MealSession) bool {
-	var u model.User
-	if err := model.DB.First(&u, userID).Error; err == nil {
-		if u.HouseholdID != nil && *u.HouseholdID == m.HouseholdID {
-			return true
-		}
+	if s.isHouseholdMember(userID, m.HouseholdID) {
+		return true
 	}
 	var cnt int64
 	model.DB.Model(&model.MealParticipant{}).
 		Where("meal_session_id = ? AND user_id = ?", m.ID, userID).Count(&cnt)
 	return cnt > 0
+}
+
+func (s *DiningService) isHouseholdMember(userID, householdID uint) bool {
+	var u model.User
+	if err := model.DB.First(&u, userID).Error; err != nil {
+		return false
+	}
+	return u.HouseholdID != nil && *u.HouseholdID == householdID
 }
 
 func (s *DiningService) detail(mealID uint) (*model.MealSession, error) {

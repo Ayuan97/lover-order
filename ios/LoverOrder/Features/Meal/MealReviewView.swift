@@ -48,44 +48,30 @@ struct MealReviewView: View {
                     }
                 }
             }
-            .toolbar(.hidden, for: .navigationBar)
         }
     }
 
     private var header: some View {
         VStack(spacing: AppSpacing.xs) {
             HStack(spacing: 6) {
-                Text("尝过了")
+                Text("吃得怎么样")
                     .font(AppFont.title(26))
                     .foregroundStyle(Color.inkPrimary)
                 Image(systemName: "heart.fill")
                     .foregroundStyle(Color.accentWarm)
                     .font(.system(size: 13))
             }
-            Text("留下点感受 下次更好选")
+            Text("随便写写 给下次自己看")
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
         }
         .frame(maxWidth: .infinity)
-        .overlay(alignment: .topTrailing) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 36, height: 36)
-                    .foregroundStyle(Color.inkSecondary)
-                    .background(Color.cardBackground)
-                    .clipShape(Circle())
-                    .capsuleHairline()
-            }
-        }
         .padding(.vertical, AppSpacing.sm)
     }
 
     private var ratingCard: some View {
         SectionCard {
-            FieldLabel("这一顿怎么样")
+            FieldLabel("总体")
             HStack(spacing: AppSpacing.sm) {
                 ForEach(1...5, id: \.self) { star in
                     Button {
@@ -108,10 +94,10 @@ struct MealReviewView: View {
     private var ratingLabel: String {
         switch rating {
         case 1: return "下次别做了"
-        case 2: return "还行"
-        case 3: return "凑合吃"
-        case 4: return "挺满意"
-        default: return "很满足 意犹未尽"
+        case 2: return "一般般"
+        case 3: return "还行"
+        case 4: return "挺好"
+        default: return "太香了"
         }
     }
 
@@ -119,7 +105,7 @@ struct MealReviewView: View {
     private var dishRatingCard: some View {
         if let dishes = meal?.dishes, !dishes.isEmpty {
             SectionCard {
-                FieldLabel("单独菜品怎么样")
+            FieldLabel("单道菜")
                 VStack(spacing: AppSpacing.md) {
                     ForEach(dishes) { dish in
                         VStack(alignment: .leading, spacing: AppSpacing.sm) {
@@ -131,7 +117,7 @@ struct MealReviewView: View {
                                 Spacer()
                             }
                             dishRatingRow(dish.id)
-                            TextField("这道菜的感受", text: dishCommentBinding(dish.id), axis: .vertical)
+                            TextField("这道怎么样", text: dishCommentBinding(dish.id), axis: .vertical)
                                 .lineLimit(2...4)
                                 .font(AppFont.body(14))
                                 .padding(AppSpacing.md)
@@ -183,8 +169,8 @@ struct MealReviewView: View {
 
     private var commentCard: some View {
         SectionCard {
-            FieldLabel("想说点什么")
-            TextField("写两句感受", text: $comment, axis: .vertical)
+            FieldLabel("还想说")
+            TextField("写两句也行", text: $comment, axis: .vertical)
                 .lineLimit(3...6)
                 .padding(AppSpacing.md)
                 .background(Color.appBackground)
@@ -206,8 +192,22 @@ struct MealReviewView: View {
     }
 
     private var bottomBar: some View {
-        PrimaryButton(title: isSubmitting ? "保存中" : "留下这份感受", isLoading: isSubmitting) {
-            Task { await submit() }
+        VStack(spacing: AppSpacing.sm) {
+            PrimaryButton(title: isSubmitting ? "在记…" : "记好了", isLoading: isSubmitting) {
+                Task { await submit() }
+            }
+            // 评价是可选的 出口要一眼能看见
+            Button {
+                dismiss()
+            } label: {
+                Text("先不了")
+                    .font(AppFont.body(14))
+                    .foregroundStyle(Color.inkMuted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+            .disabled(isSubmitting)
         }
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, AppSpacing.sm)

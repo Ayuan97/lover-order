@@ -7,7 +7,7 @@ enum Haptics {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
-    // 定下这一顿 / 做好啦 等有仪式感的确认
+    // 就这些 / 吃完了 等有仪式感的确认
     static func success() {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }

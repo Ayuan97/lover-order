@@ -11,9 +11,6 @@ struct HouseholdSetupView: View {
     @State private var errorMessage: String?
     @State private var showScanner = false
     @State private var showJoinDining = false
-    // 建家成功先弹餐券 关闭后再写 membership 避免与 Root 切页抢跑
-    @State private var pendingCreated: Household?
-    @State private var showInviteAfterCreate = false
 
     enum Mode: Hashable { case create, join }
 
@@ -22,8 +19,8 @@ struct HouseholdSetupView: View {
             header
 
             Picker("", selection: $mode) {
-                Text("创建一个家").tag(Mode.create)
-                Text("加入一个家").tag(Mode.join)
+                Text("建个家").tag(Mode.create)
+                Text("进 Ta 的家").tag(Mode.join)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, AppSpacing.xl)
@@ -57,13 +54,13 @@ struct HouseholdSetupView: View {
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "qrcode.viewfinder")
-                    Text("先不建家 · 去朋友家蹭一顿")
+                    Text("不建家 只去朋友那儿蹭一顿")
                 }
                 .font(AppFont.caption(13))
                 .foregroundStyle(Color.inkMuted)
             }
 
-            // 半状态：资料不同步时可见重试；也可退出换账号
+            // 卡住时能自救 也能换账号
             VStack(spacing: AppSpacing.sm) {
                 Button {
                     Task { await resync() }
@@ -74,7 +71,7 @@ struct HouseholdSetupView: View {
                         } else {
                             Image(systemName: "arrow.triangle.2.circlepath")
                         }
-                        Text("重新同步家庭状态")
+                        Text("好像卡住了 再试一次")
                     }
                     .font(AppFont.caption(13))
                     .foregroundStyle(Color.brandGreen)
@@ -84,7 +81,7 @@ struct HouseholdSetupView: View {
                 Button {
                     Task { await appState.didLogout() }
                 } label: {
-                    Text("退出登录")
+                    Text("换个账号")
                         .font(AppFont.caption(13))
                         .foregroundStyle(Color.inkMuted)
                 }
@@ -95,41 +92,21 @@ struct HouseholdSetupView: View {
         .background(Color.appBackground.ignoresSafeArea())
         .fullScreenCover(isPresented: $showScanner) {
             QRScannerScreen(hint: "对准对方餐券上的二维码", manualEntryTitle: "改为手输邀请码") { code in
-                inviteCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
-                submit()
+                handleScannedInvite(code)
             }
         }
         .fullScreenCover(isPresented: $showJoinDining) {
             DiningJoinView()
                 .environmentObject(appState)
         }
-        .sheet(isPresented: $showInviteAfterCreate, onDismiss: {
-            // 同步乐观写入 立刻让 Root 进主页 再后台刷新资料
-            if let h = pendingCreated {
-                pendingCreated = nil
-                appState.applyHouseholdMembership(h)
-                Task {
-                    if await appState.refreshProfile() {
-                        await appState.refreshHousehold()
-                    }
-                }
-            }
-        }) {
-            if let h = pendingCreated {
-                InviteTicketView(
-                    household: h,
-                    inviterName: appState.currentUser?.nickname ?? "我"
-                )
-            }
-        }
     }
 
     private var header: some View {
         VStack(spacing: AppSpacing.sm) {
-            Text("先建一个家吧")
+            Text("先有个家")
                 .font(AppFont.title(28))
                 .foregroundStyle(Color.inkPrimary)
-            Text("有了家 才能一起决定每一顿吃什么")
+            Text("两个人的菜单 得放在同一个地方")
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
         }
@@ -145,7 +122,7 @@ struct HouseholdSetupView: View {
                 .padding(AppSpacing.md)
                 .background(Color.appBackground)
                 .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
-            Text("创建后会得到一个邀请码 让 Ta 加入")
+            Text("建好后把餐券给 Ta 就行")
                 .font(AppFont.caption())
                 .foregroundStyle(Color.inkMuted)
         }
@@ -176,11 +153,14 @@ struct HouseholdSetupView: View {
                 .padding(AppSpacing.md)
                 .background(Color.appBackground)
                 .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+            Text("这是入伙餐券，要进家用上面；蹭饭要房间号")
+                .font(AppFont.caption(11))
+                .foregroundStyle(Color.inkMuted)
         }
     }
 
     private var confirmTitle: String {
-        mode == .create ? "建好这个家" : "加入"
+        mode == .create ? "建好" : "进去"
     }
 
     private func submit() {
@@ -191,20 +171,54 @@ struct HouseholdSetupView: View {
             do {
                 switch mode {
                 case .create:
+                    let name = newName.trimmingCharacters(in: .whitespaces)
+                    guard !name.isEmpty else {
+                        errorMessage = "先给家起个名字吧"
+                        return
+                    }
                     let household = try await HouseholdService.shared.create(
-                        CreateHouseholdRequest(name: newName.trimmingCharacters(in: .whitespaces))
+                        CreateHouseholdRequest(name: name)
                     )
-                    pendingCreated = household
-                    showInviteAfterCreate = true
+                    // 立刻写 membership，关票才算进家会半状态卡死
+                    appState.applyHouseholdMembership(household)
+                    appState.pendingInviteTicket = household
                 case .join:
-                    let household = try await HouseholdService.shared.join(
-                        code: inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
-                    )
+                    let raw = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !raw.isEmpty else {
+                        errorMessage = "把 Ta 的邀请码填进来再点"
+                        return
+                    }
+                    // 手输：邀请码本体；若贴了深链只接受 home
+                    let code: String
+                    if let kind = LoverScanLink.parse(raw) {
+                        switch kind {
+                        case .home(let c): code = c
+                        case .room:
+                            errorMessage = "这是蹭饭房间号 进家要用餐券码"
+                            return
+                        }
+                    } else {
+                        code = raw
+                    }
+                    let household = try await HouseholdService.shared.join(code: code)
                     await finishMembership(household)
                 }
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = humanize(error)
             }
+        }
+    }
+
+    // 扫码只认 lo://home/；裸串不当餐券（无兼容）
+    private func handleScannedInvite(_ raw: String) {
+        switch LoverScanLink.parse(raw) {
+        case .home(let code):
+            inviteCode = code
+            submit()
+        case .room:
+            errorMessage = "扫到的是蹭饭房间号，不是入伙餐券——要进家用餐券；蹭饭点下面那行"
+        case nil:
+            errorMessage = "请扫餐券上的码（手输邀请码用上面输入框）"
         }
     }
 
@@ -213,7 +227,7 @@ struct HouseholdSetupView: View {
         appState.applyHouseholdMembership(household)
         let synced = await appState.refreshProfile()
         if !synced {
-            errorMessage = "家已就绪，但资料同步失败，可点下方重新同步"
+            errorMessage = "家有了 资料还没跟上 点下面再试一次"
         } else {
             await appState.refreshHousehold()
         }
@@ -225,9 +239,29 @@ struct HouseholdSetupView: View {
         errorMessage = nil
         let ok = await appState.resyncMembership()
         if !ok {
-            errorMessage = "同步失败，请检查网络后重试"
+            errorMessage = "网有点不稳，再点一次试试"
         } else if appState.currentUser?.hasHousehold != true && appState.household == nil {
-            errorMessage = "尚未加入任何家，请创建或输入邀请码"
+            errorMessage = "还没进哪个家——上面建一个，或把 Ta 的码填进来"
         }
+    }
+
+    private func humanize(_ error: Error) -> String {
+        let msg = error.localizedDescription
+        if msg.contains("已加入") {
+            return "你已经在一个家里了 点下面「再试一次」同步一下"
+        }
+        if msg.contains("参数有误") {
+            return "填的有点不对 再看看"
+        }
+        if msg.contains("邀请码无效") || msg.contains("过期") || msg.contains("失效") {
+            return "这个码进不去 是不是扫成房间号了？进家要用餐券上的码"
+        }
+        if msg.contains("网络") || (error as? APIError).map({
+            if case .requestFailed = $0 { return true }
+            return false
+        }) == true {
+            return "网有点不稳，再点一次试试"
+        }
+        return msg
     }
 }

@@ -52,10 +52,10 @@ struct DiningGuestView: View {
             Image(systemName: "checkmark.seal")
                 .font(.system(size: 42, weight: .light))
                 .foregroundStyle(Color.brandGreen)
-            Text("点菜房间已关闭")
+            Text("不能再点了")
                 .font(AppFont.title(24))
                 .foregroundStyle(Color.inkPrimary)
-            Text("主人关掉了点菜入口\n已点的菜还在这一顿里")
+            Text("主人收摊了\n你点过的还在桌上")
                 .multilineTextAlignment(.center)
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
@@ -81,10 +81,10 @@ struct DiningGuestView: View {
                 }
                 Spacer()
             }
-            Text("聚餐中")
+            Text("在点菜")
                 .font(AppFont.title(24))
                 .foregroundStyle(Color.inkPrimary)
-            Text("在 \(meal.creator?.displayName ?? "朋友") 家的这一顿")
+            Text("跟 \(meal.creator?.displayName ?? "朋友") 一起")
                 .font(AppFont.caption(12))
                 .foregroundStyle(Color.inkMuted)
             HStack(spacing: -8) {
@@ -92,7 +92,7 @@ struct DiningGuestView: View {
                     AvatarView(user: p.user, size: 26, ring: true)
                 }
             }
-            Text("\(participants.count) 人一起点 · 共 \(dishes.count) 道")
+            Text("\(participants.count) 个人 · \(dishes.count) 道")
                 .font(AppFont.caption(12))
                 .foregroundStyle(Color.inkMuted)
         }
@@ -103,7 +103,7 @@ struct DiningGuestView: View {
     private var dishesCard: some View {
         SectionCard {
             if dishes.isEmpty {
-                Text("还没点菜 打开下面菜单挑挑")
+                Text("还没点 下面挑")
                     .font(AppFont.caption())
                     .foregroundStyle(Color.inkMuted)
                     .frame(maxWidth: .infinity)
@@ -134,7 +134,7 @@ struct DiningGuestView: View {
     }
 
     private var addBar: some View {
-        PrimaryButton(title: "点菜 · 打开这桌菜单", icon: "fork.knife") {
+        PrimaryButton(title: "我要点菜", icon: "fork.knife") {
             showPicker = true
         }
         .padding(.horizontal, AppSpacing.lg)

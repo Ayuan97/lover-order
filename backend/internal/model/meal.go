@@ -6,11 +6,11 @@ import (
 	"gorm.io/gorm"
 )
 
-// 场景常量
+// 数据标签（非产品「三模式」）：pair=日常我们这顿；future=以后想吃；family=历史残留勿当产品模式
 const (
-	SceneCouple = "pair"   // 我们这顿
-	SceneFamily = "family" // 家里这顿
-	SceneFuture = "future" // 未来这顿
+	SceneCouple = "pair"
+	SceneFamily = "family"
+	SceneFuture = "future"
 )
 
 // 心情常量

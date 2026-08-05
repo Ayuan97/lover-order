@@ -1,6 +1,6 @@
 import SwiftUI
 
-// 添加菜品挑菜面板：已选 + 输入 + 4 列快速入口 + 6 列推荐 + 也可以 + 底部完成
+// 点菜面板：已选 + 输入 + 快速入口 + 推荐 + 底部完成
 struct AddDishView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -15,6 +15,7 @@ struct AddDishView: View {
     @State private var isLoading: Bool = false
     @State private var isSubmittingCustom: Bool = false
     @State private var errorMessage: String?
+    @State private var tipMessage: String?
     @State private var showCreateRecipe: Bool = false
 
     enum QuickSource: String, CaseIterable, Identifiable {
@@ -27,10 +28,10 @@ struct AddDishView: View {
 
         var label: String {
             switch self {
-            case .custom: return "自定义菜品"
-            case .all: return "从图鉴选"
-            case .favorite: return "收藏精选"
-            case .recent: return "历史常用"
+            case .custom: return "写个菜名"
+            case .all: return "从菜单里挑"
+            case .favorite: return "爱吃的"
+            case .recent: return "常做的"
             }
         }
 
@@ -78,6 +79,7 @@ struct AddDishView: View {
                 Task { await loadPinned() }
             }
             .toast($errorMessage)
+            .tipToast($tipMessage)
         }
     }
 
@@ -85,14 +87,14 @@ struct AddDishView: View {
     private var header: some View {
         VStack(spacing: AppSpacing.xs) {
             HStack(spacing: 6) {
-                Text("添加菜品")
+                Text("加几道")
                     .font(AppFont.title(26))
                     .foregroundStyle(Color.inkPrimary)
                 Image(systemName: "heart.fill")
                     .foregroundStyle(Color.accentWarm)
                     .font(.system(size: 13))
             }
-            Text("把想吃的菜加入这一顿")
+            Text("想吃啥就点进来")
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
         }
@@ -117,18 +119,18 @@ struct AddDishView: View {
     private var pinnedSection: some View {
         SectionCard {
             HStack {
-                Text("这一顿想加 \(pinnedDishes.count) 道菜")
+                Text(pinnedDishes.isEmpty ? "还没点" : "桌上 \(pinnedDishes.count) 道了")
                     .font(AppFont.headline(15))
                     .foregroundStyle(Color.inkPrimary)
                 Spacer()
                 if !pinnedDishes.isEmpty {
-                    Text("点击右侧 - 移除")
+                    Text("点 − 去掉")
                         .font(AppFont.caption(11))
                         .foregroundStyle(Color.inkMuted)
                 }
             }
             if pinnedDishes.isEmpty {
-                Text("还没选 在下方挑挑")
+                Text("下面挑几道呗")
                     .font(AppFont.caption())
                     .foregroundStyle(Color.inkMuted)
             } else {
@@ -164,7 +166,7 @@ struct AddDishView: View {
             HStack(spacing: AppSpacing.sm) {
                 Image(systemName: "fork.knife")
                     .foregroundStyle(Color.inkMuted)
-                TextField("可输入菜名快速添加", text: $customName)
+                TextField("写个菜名就行", text: $customName)
                     .submitLabel(.done)
                     .onSubmit {
                         Task { await addCustom() }
@@ -194,7 +196,7 @@ struct AddDishView: View {
     // 4 列快速入口
     private var quickEntries: some View {
         VStack(alignment: .leading, spacing: AppSpacing.md) {
-            Text("快速添加")
+            Text("从哪儿挑")
                 .font(AppFont.headline(15))
                 .foregroundStyle(Color.inkPrimary)
             HStack(spacing: AppSpacing.sm) {
@@ -227,7 +229,7 @@ struct AddDishView: View {
     private var recommendSection: some View {
         VStack(alignment: .leading, spacing: AppSpacing.md) {
             HStack {
-                Text(quickSource == .custom ? "推荐加入" : "可以加入")
+                Text(quickSource == .custom ? "上面写个名字就行" : "点一下加上")
                     .font(AppFont.headline(15))
                     .foregroundStyle(Color.inkPrimary)
                 Spacer()
@@ -247,7 +249,8 @@ struct AddDishView: View {
                 let columns = Array(repeating: GridItem(.flexible(), spacing: AppSpacing.md), count: 3)
                 LazyVGrid(columns: columns, spacing: AppSpacing.md) {
                     ForEach(recipes.prefix(6)) { recipe in
-                        RecipeCircleCard(recipe: recipe) {
+                        let onTable = alreadyOnTable(recipe)
+                        RecipeCircleCard(recipe: recipe, alreadyAdded: onTable) {
                             Task { await addRecipe(recipe) }
                         }
                     }
@@ -305,10 +308,14 @@ struct AddDishView: View {
 
     private var emptyHint: String {
         switch quickSource {
-        case .favorite: return "还没收藏菜谱 在详情页点 ❤"
-        case .recent: return "还没吃过哪道菜 多攒几顿就有了"
-        default: return "暂时没有合适的推荐"
+        case .favorite: return "还没有爱吃的 详情里点 ❤ 就行"
+        case .recent: return "多吃几顿 常做的会出现"
+        default: return "菜单里还没有"
         }
+    }
+
+    private func alreadyOnTable(_ recipe: Recipe) -> Bool {
+        pinnedDishes.contains { $0.recipeId == recipe.id }
     }
 
     private func select(_ source: QuickSource) {
@@ -339,7 +346,7 @@ struct AddDishView: View {
                 query.favorite = true
             case .all:
                 query.mood = appState.currentMood
-                query.scene = appState.currentScene
+                query.scene = .pair
             case .recent:
                 break
             case .custom:
@@ -364,13 +371,16 @@ struct AddDishView: View {
     }
 
     private func addRecipe(_ recipe: Recipe) async {
-        if pinnedDishes.contains(where: { $0.recipeId == recipe.id }) {
+        if alreadyOnTable(recipe) {
+            tipMessage = "这道已经在桌上了"
+            Haptics.light()
             return
         }
         do {
             _ = try await MealService.shared.addDish(mealId: mealId, dish: DishInput(recipeId: recipe.id))
             await loadPinned()
             onChanged()
+            Haptics.light()
         } catch {
             errorMessage = error.localizedDescription
         }

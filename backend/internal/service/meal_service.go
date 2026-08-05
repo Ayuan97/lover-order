@@ -96,13 +96,7 @@ func (s *MealService) Current(householdID, userID uint, scene, mood string) (*mo
 			householdID, scene, []string{model.MealStatusPlanning, model.MealStatusConfirmed}).
 			Preload("Dishes.Adder").Order("id DESC").First(&m).Error
 		if err == nil {
-			if m.Status == model.MealStatusConfirmed && len(m.Dishes) == 0 {
-				m.Status = model.MealStatusPlanning
-				m.ConfirmedAt = nil
-				if err := conn.Save(&m).Error; err != nil {
-					return err
-				}
-			}
+			// 不静默把 confirmed 空菜降回 planning：否则等于没点「算了 重选」就撤销「就这些」
 			result = &m
 			return nil
 		}
@@ -198,15 +192,8 @@ func (s *MealService) Confirm(householdID, id uint) (*model.MealSession, error) 
 	if err != nil {
 		return nil, err
 	}
-	if m.Status == model.MealStatusConfirmed {
-		// 两人同时点"定下"的撞车场景 让后点的人明白发生了什么
-		return nil, errors.New("Ta 刚把这一顿定下啦")
-	}
-	if m.Status != model.MealStatusPlanning {
-		return nil, errors.New("这一顿已经结束了")
-	}
-	if len(m.Dishes) == 0 {
-		return nil, errors.New("至少选一道菜再定下")
+	if err := errIfCannotConfirm(m.Status, len(m.Dishes)); err != nil {
+		return nil, err
 	}
 	now := time.Now()
 	m.Status = model.MealStatusConfirmed
@@ -223,13 +210,8 @@ func (s *MealService) Complete(householdID, id uint) (*model.MealSession, error)
 	if err != nil {
 		return nil, err
 	}
-	// 状态机要求 planning → confirmed → completed，禁止跳过「定下」
-	if m.Status != model.MealStatusConfirmed {
-		return nil, errors.New("请先定下这一顿再标记吃完")
-	}
-	// 0 道菜没有「吃完」的意义 禁止空完成
-	if len(m.Dishes) == 0 {
-		return nil, errors.New("至少留下一道菜再标记吃完")
+	if err := errIfCannotComplete(m.Status, len(m.Dishes)); err != nil {
+		return nil, err
 	}
 	now := time.Now()
 	m.Status = model.MealStatusCompleted
@@ -301,8 +283,8 @@ func (s *MealService) RemoveDish(householdID, mealID, dishID uint) error {
 	if err != nil {
 		return err
 	}
-	if m.Status != model.MealStatusPlanning && m.Status != model.MealStatusConfirmed {
-		return errors.New("这一顿已结束 无法修改")
+	if err := errIfCannotRemoveDish(m.Status, len(m.Dishes)); err != nil {
+		return err
 	}
 	res := model.DB.Where("id = ? AND meal_session_id = ?", dishID, mealID).Delete(&model.MealDish{})
 	if res.Error != nil {

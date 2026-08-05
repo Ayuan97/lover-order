@@ -62,10 +62,11 @@ struct InviteTicketView: View {
                     .font(AppFont.mono(12))
                     .foregroundStyle(Color.inkMuted)
 
-                BrandQRCode(content: code, size: 188)
+                // QR 带 lo://home/ 前缀，避免被扫进蹭饭房间流
+                BrandQRCode(content: LoverScanLink.homePayload(code), size: 188)
                     .padding(.vertical, AppSpacing.sm)
 
-                Text(isTemporaryCode ? "扫一扫 · 限时邀请进我们家" : "扫一扫 · 进我们家")
+                Text(isTemporaryCode ? "扫一下 限时进我们家" : "扫一下 进我们家")
                     .font(AppFont.body(13))
                     .foregroundStyle(Color.inkSecondary)
             }
@@ -76,14 +77,14 @@ struct InviteTicketView: View {
             perforation
 
             VStack(spacing: AppSpacing.xs) {
-                Text("\(inviterName) 请你来吃饭")
+                Text("\(inviterName) 叫你进来")
                     .font(AppFont.headline(16))
                     .foregroundStyle(Color.inkPrimary)
-                Text("没相机就手输邀请码  \(code)")
+                Text("扫不了就手输  \(code)")
                     .font(AppFont.caption(12))
                     .foregroundStyle(Color.inkMuted)
                 if isTemporaryCode {
-                    Text("此为临时邀请码 与家的固定码不同")
+                    Text("这个码有期限 跟家里固定的不一样")
                         .font(AppFont.caption(11))
                         .foregroundStyle(Color.inkMuted)
                 }
@@ -126,9 +127,8 @@ struct InviteTicketView: View {
     }
 
     private var shareButton: some View {
-        PrimaryButton(title: "把餐券发给 Ta", icon: "square.and.arrow.up") {
-            let kind = isTemporaryCode ? "临时邀请码" : "邀请码"
-            shareItem = ShareItem(text: "来加入「\(household.name)」，一起决定每天吃什么～\(kind)：\(code)")
+        PrimaryButton(title: "发给 Ta", icon: "square.and.arrow.up") {
+            shareItem = ShareItem(text: "来「\(household.name)」吧 邀请码 \(code)")
         }
     }
 }

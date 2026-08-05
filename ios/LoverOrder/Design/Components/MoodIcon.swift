@@ -61,28 +61,28 @@ enum MealScene: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
+    // pair=日常主轴；future=支线以后想吃；family=历史数据标签，不当模式卖
     var label: String {
         switch self {
         case .pair: return "我们这顿"
-        case .family: return "家里这顿"
-        case .future: return "未来这顿"
+        case .family: return "旧记录"
+        case .future: return "以后想吃"
         }
     }
 
-    // 在"相处模式"语境下的叫法
     var modeLabel: String {
         switch self {
-        case .pair: return "俩人世界"
-        case .family: return "家庭聚餐"
-        case .future: return "未来这顿"
+        case .pair: return "我们这顿"
+        case .family: return "旧记录"
+        case .future: return "以后想吃"
         }
     }
 
     var hint: String {
         switch self {
-        case .pair: return "两个人轻松决定吃什么"
-        case .family: return "家里人聚一聚 想吃点什么"
-        case .future: return "暂时还没安排 留个心愿"
+        case .pair: return "今天想吃点什么"
+        case .family: return ""
+        case .future: return "先记下 不急着今天做"
         }
     }
 

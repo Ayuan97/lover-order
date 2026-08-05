@@ -10,15 +10,14 @@ struct ProfileView: View {
     @State private var isSavingTastes = false
     @State private var inviteCode: String?
 
-    // 本地持久化字段
-    @AppStorage("profile.showScene") private var showSceneInList: Bool = true
-
     @State private var showCategoryManagement: Bool = false
     @State private var confirmLeaveHousehold: Bool = false
     @State private var showEditProfile: Bool = false
     @State private var stats: HouseholdStats?
     @State private var errorMessage: String?
     @State private var showInvite: Bool = false
+    // 客人扫/输房间号 放在「我的」次要区 不抢首页主路径
+    @State private var showJoinDining: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -29,10 +28,8 @@ struct ProfileView: View {
                     if let stats {
                         StatsCard(stats: stats)
                     }
-                    modePicker
                     moodPicker
                     tastesCard
-                    displayCard
                     toolsCard
                     householdCard
                     actionsCard
@@ -65,6 +62,10 @@ struct ProfileView: View {
                     )
                 }
             }
+            .sheet(isPresented: $showJoinDining) {
+                DiningJoinView()
+                    .environmentObject(appState)
+            }
             .toast($errorMessage)
         }
     }
@@ -83,13 +84,20 @@ struct ProfileView: View {
                 FuturePlansView()
                     .environmentObject(appState)
             } label: {
-                navRow(title: "未来这顿", subtitle: "留着以后吃的菜单", icon: "moon.stars")
+                navRow(title: "以后想吃", subtitle: "先记下 不急着今天做", icon: "moon.stars")
             }
             .buttonStyle(.plain)
             Button {
                 showCategoryManagement = true
             } label: {
                 navRow(title: "管理菜谱分类", subtitle: "新建 改名 删除", icon: "square.grid.2x2")
+            }
+            .buttonStyle(.plain)
+            // 聚会弱入口：进房(房间号)≠进家(餐券)；客人点菜不加入 household
+            Button {
+                showJoinDining = true
+            } label: {
+                navRow(title: "去朋友家蹭一顿", subtitle: "扫/输房间号 不进他们家", icon: "qrcode.viewfinder")
             }
             .buttonStyle(.plain)
         }
@@ -143,7 +151,7 @@ struct ProfileView: View {
                     Text(appState.currentUser?.displayName ?? "美食家")
                         .font(AppFont.headline(18))
                         .foregroundStyle(Color.inkPrimary)
-                    Text(appState.household?.name ?? "未加入家")
+                    Text(householdSubtitle)
                         .font(AppFont.caption())
                         .foregroundStyle(Color.inkMuted)
                 }
@@ -163,40 +171,9 @@ struct ProfileView: View {
         }
     }
 
-    private var modePicker: some View {
-        SectionCard {
-            NumberedSectionTitle(index: 1, title: "相处模式", hint: "俩人世界还是家庭聚餐 决定首页这一顿")
-            HStack(spacing: AppSpacing.sm) {
-                modeButton(.pair, icon: "heart.fill")
-                modeButton(.family, icon: "house.fill")
-            }
-        }
-    }
-
-    private func modeButton(_ scene: MealScene, icon: String) -> some View {
-        let selected = appState.currentScene == scene
-        return Button {
-            Task { await updateScene(scene) }
-        } label: {
-            VStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 22, weight: .light))
-                Text(scene.modeLabel)
-                    .font(AppFont.body(14))
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, AppSpacing.lg)
-            .foregroundStyle(selected ? .white : Color.inkPrimary)
-            .background(selected ? Color.brandGreen : Color.appBackground)
-            .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
-            .capsuleHairline(color: selected ? .clear : Color.dividerLine.opacity(0.7))
-        }
-        .buttonStyle(.plain)
-    }
-
     private var moodPicker: some View {
         SectionCard {
-            NumberedSectionTitle(index: 2, title: "默认心情", hint: "首页默认打开哪一档")
+            NumberedSectionTitle(index: 1, title: "默认心情", hint: "打开 App 时想怎么吃")
             FlowLayout(spacing: AppSpacing.sm) {
                 ForEach(Mood.allCases) { mood in
                     MoodChip(mood: mood, isSelected: appState.currentMood == mood) {
@@ -209,7 +186,7 @@ struct ProfileView: View {
 
     private var tastesCard: some View {
         SectionCard {
-            NumberedSectionTitle(index: 3, title: "口味偏好", hint: "多选 推荐时会偏向这些口味")
+            NumberedSectionTitle(index: 2, title: "口味偏好", hint: "多选 推荐时会偏向这些口味")
             FlowLayout(spacing: AppSpacing.sm) {
                 ForEach(TastePresets.all, id: \.self) { taste in
                     Button {
@@ -240,23 +217,6 @@ struct ProfileView: View {
         }
     }
 
-    private var displayCard: some View {
-        SectionCard {
-            NumberedSectionTitle(index: 4, title: "显示方式")
-            Toggle(isOn: $showSceneInList) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("在列表里显示场景标签")
-                        .font(AppFont.body(15))
-                        .foregroundStyle(Color.inkPrimary)
-                    Text("方便区分这是哪一顿")
-                        .font(AppFont.caption(11))
-                        .foregroundStyle(Color.inkMuted)
-                }
-            }
-            .tint(Color.brandGreen)
-        }
-    }
-
     private var householdCard: some View {
         SectionCard {
             HStack(spacing: AppSpacing.sm) {
@@ -280,7 +240,7 @@ struct ProfileView: View {
                         .font(AppFont.mono(14))
                         .foregroundStyle(Color.brandGreen)
                 }
-                PrimaryButton(title: "邀请家人 · 出示餐券", icon: "qrcode") {
+                PrimaryButton(title: "叫 Ta 进来", icon: "qrcode") {
                     showInvite = true
                 }
                 HStack(spacing: AppSpacing.sm) {
@@ -304,6 +264,19 @@ struct ProfileView: View {
                     .foregroundStyle(Color.inkMuted)
                     .padding(.top, AppSpacing.sm)
                 }
+            } else if appState.currentUser?.hasHousehold == true {
+                // 有家但 info 没拉到：别写成「还没加入家」
+                Text("家信息还没拉到")
+                    .font(AppFont.caption())
+                    .foregroundStyle(Color.inkMuted)
+                PrimaryButton(title: "点一下再试", icon: "arrow.triangle.2.circlepath") {
+                    Task {
+                        await appState.refreshHousehold()
+                        if appState.householdLoadFailed {
+                            errorMessage = "家信息还没拉到，点一下再试"
+                        }
+                    }
+                }
             } else {
                 Text("还没加入家").font(AppFont.caption()).foregroundStyle(Color.inkMuted)
             }
@@ -318,22 +291,19 @@ struct ProfileView: View {
         }
     }
 
+    private var householdSubtitle: String {
+        if let name = appState.household?.name { return name }
+        if appState.currentUser?.hasHousehold == true {
+            return appState.householdLoadFailed ? "家信息还没拉到" : "家里…"
+        }
+        return "未加入家"
+    }
+
     private var actionsCard: some View {
         VStack(spacing: AppSpacing.md) {
             SecondaryButton(title: "退出登录", icon: "rectangle.portrait.and.arrow.right") {
                 Task { await appState.didLogout() }
             }
-        }
-    }
-
-    private func updateScene(_ scene: MealScene) async {
-        appState.currentScene = scene
-        do {
-            let user = try await AuthService.shared.updateProfile(UpdateProfileRequest(defaultScene: scene))
-            appState.currentUser = user
-            Haptics.light()
-        } catch {
-            errorMessage = error.localizedDescription
         }
     }
 
@@ -380,34 +350,35 @@ struct ProfileView: View {
         }
     }
 
-    // 仅自己时后端会解散这个家 文案必须说清楚
+    // 仅自己时后端会软删这个家；菜单不一定立刻清空，但人回不去
     private var isSoleHouseholdMember: Bool {
         guard let members = appState.household?.members else { return true }
         return members.count <= 1
     }
 
     private var leaveDialogTitle: String {
-        isSoleHouseholdMember ? "退出并解散这个家？" : "退出当前的家？"
+        isSoleHouseholdMember ? "就你一个人了，还退吗？" : "退出当前的家？"
     }
 
     private var leaveDialogMessage: String {
         if isSoleHouseholdMember {
-            return "你是这个家唯一的人，退出后这个家将被解散，菜单与记录会一并清空且无法恢复"
+            return "就你一个人的话，这个家会收掉，你就退回「先有个家」。菜单不一定立刻没了，但你也进不去了。"
         }
-        return "退出后你将看不到这个家的菜单和记录 重新加入即可恢复"
+        return "退了就看不到这个家的菜单和记录了，以后用邀请码还能再进来"
     }
 
     private func leaveHousehold() async {
         do {
             try await HouseholdService.shared.leave()
             appState.household = nil
+            appState.householdLoadFailed = false
             if var u = appState.currentUser {
                 u.householdId = nil
                 appState.currentUser = u
             }
             let ok = await appState.refreshProfile()
             if !ok {
-                errorMessage = "已退出，但资料同步失败，可下拉或重新进入后再试"
+                errorMessage = "退了，资料还没跟上 过会儿再进一下就好"
             }
         } catch {
             errorMessage = error.localizedDescription

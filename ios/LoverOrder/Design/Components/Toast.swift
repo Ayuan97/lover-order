@@ -3,6 +3,7 @@ import SwiftUI
 // 统一轻提示 顶部滑入的深色浮层 用于操作失败/提示 自动消失 也可点掉
 private struct ToastModifier: ViewModifier {
     @Binding var message: String?
+    var isTip: Bool = false
 
     func body(content: Content) -> some View {
         content
@@ -25,7 +26,7 @@ private struct ToastModifier: ViewModifier {
 
     private func banner(_ text: String) -> some View {
         HStack(spacing: AppSpacing.sm) {
-            Image(systemName: "exclamationmark.circle")
+            Image(systemName: isTip ? "checkmark.circle" : "exclamationmark.circle")
                 .foregroundStyle(.white.opacity(0.85))
             Text(text)
                 .font(AppFont.body(14))
@@ -36,7 +37,7 @@ private struct ToastModifier: ViewModifier {
         }
         .padding(.horizontal, AppSpacing.md)
         .padding(.vertical, 10)
-        .background(Color.accentInk)
+        .background(isTip ? Color.brandGreen : Color.accentInk)
         .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
         .appCardShadow()
         .contentShape(Rectangle())
@@ -47,6 +48,11 @@ private struct ToastModifier: ViewModifier {
 extension View {
     // 绑定一个 String? 非空即浮现一条提示 用于把 ViewModel 的 errorMessage 显式呈现给用户
     func toast(_ message: Binding<String?>) -> some View {
-        modifier(ToastModifier(message: message))
+        modifier(ToastModifier(message: message, isTip: false))
+    }
+
+    // 成功/轻提示通道 和 error 分开 避免「那就 XXX 吧」像报错
+    func tipToast(_ message: Binding<String?>) -> some View {
+        modifier(ToastModifier(message: message, isTip: true))
     }
 }

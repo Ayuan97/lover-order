@@ -91,10 +91,10 @@ struct RecipeDetailView: View {
         } message: {
             Text("删除后这道菜不会再出现在菜单里 但已经记下的历史不受影响")
         }
-        .alert("已留到周末", isPresented: $showSaveToFuture) {
+        .alert("已记到以后想吃", isPresented: $showSaveToFuture) {
             Button("好") {}
         } message: {
-            Text("可以在'未来这顿'里找到它")
+            Text("可以在「以后想吃」里找到它")
         }
     }
 
@@ -326,7 +326,7 @@ struct RecipeDetailView: View {
 
     private var bottomBar: some View {
         HStack(spacing: AppSpacing.md) {
-            SecondaryButton(title: "留到周末", icon: "calendar") {
+            SecondaryButton(title: "以后想吃", icon: "calendar") {
                 Task { await saveToFuture() }
             }
             PrimaryButton(title: alreadyAdded ? "已加入" : "加入这一顿", isLoading: isLoading) {
@@ -348,7 +348,7 @@ struct RecipeDetailView: View {
         defer { isLoading = false }
         do {
             async let detail = RecipeService.shared.detail(id: recipeId)
-            async let current = MealService.shared.current(scene: appState.currentScene, mood: appState.currentMood)
+            async let current = MealService.shared.current(scene: .pair, mood: appState.currentMood)
             let (r, m) = try await (detail, current)
             self.recipe = r
             self.meal = m

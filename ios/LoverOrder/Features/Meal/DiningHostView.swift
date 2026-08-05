@@ -4,12 +4,19 @@ import UIKit
 // host 端聚餐:开房后出示房间号 + 二维码；展示已点菜与点菜人；按过期时间判存活
 struct DiningHostView: View {
     let mealId: UInt
+    // 本次 sheet 内是否真关过房 供首页 onDismiss 决定要不要催「可以定下来了」
+    @Binding var didCloseRoom: Bool
     @Environment(\.dismiss) private var dismiss
     @State private var meal: MealSession?
     @State private var isLoading = true
     @State private var isActing = false
     @State private var errorMessage: String?
     @State private var showCloseConfirm = false
+
+    init(mealId: UInt, didCloseRoom: Binding<Bool> = .constant(false)) {
+        self.mealId = mealId
+        self._didCloseRoom = didCloseRoom
+    }
 
     private var roomCode: String? {
         guard let c = meal?.roomCode, !c.isEmpty else { return nil }
@@ -64,13 +71,13 @@ struct DiningHostView: View {
             }
         }
         .toast($errorMessage)
-        .confirmationDialog("关闭点菜房间？", isPresented: $showCloseConfirm) {
-            Button("关闭房间", role: .destructive) {
+        .confirmationDialog("关掉房间？", isPresented: $showCloseConfirm) {
+            Button("关掉", role: .destructive) {
                 Task { await close() }
             }
             Button("再等等", role: .cancel) {}
         } message: {
-            Text("关闭后朋友不能再加菜，已点的菜还在这一顿里")
+            Text("他们就不能再加了 已经点的还在")
         }
     }
 
@@ -80,15 +87,15 @@ struct DiningHostView: View {
             Image(systemName: "person.3.sequence.fill")
                 .font(.system(size: 42, weight: .light))
                 .foregroundStyle(Color.brandGreen)
-            Text("家里来客了?")
+            Text("家里来人了")
                 .font(AppFont.title(26))
                 .foregroundStyle(Color.inkPrimary)
-            Text("开个点菜房间 让大家扫码\n一起点这一顿")
+            Text("开个房间 让大家扫码一起点")
                 .multilineTextAlignment(.center)
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
             Spacer()
-            PrimaryButton(title: "开启点菜房间", icon: "qrcode", isLoading: isActing) {
+            PrimaryButton(title: "开房间", icon: "qrcode", isLoading: isActing) {
                 Task { await open() }
             }
             .disabled(isActing)
@@ -103,20 +110,20 @@ struct DiningHostView: View {
             Image(systemName: "clock.badge.exclamationmark")
                 .font(.system(size: 42, weight: .light))
                 .foregroundStyle(Color.accentWarm)
-            Text("点菜房间已过期")
+            Text("房间过期了")
                 .font(AppFont.title(24))
                 .foregroundStyle(Color.inkPrimary)
-            Text("之前的房间号不能用了\n重新开一间让朋友再扫一次")
+            Text("再开一间 让大家重新扫一下")
                 .multilineTextAlignment(.center)
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
             if !dishes.isEmpty {
-                Text("已点 \(dishes.count) 道菜还在这一顿里")
+                Text("刚才点的 \(dishes.count) 道还在")
                     .font(AppFont.caption(12))
                     .foregroundStyle(Color.inkSecondary)
             }
             Spacer()
-            PrimaryButton(title: "重新开房", icon: "qrcode", isLoading: isActing) {
+            PrimaryButton(title: "再开一间", icon: "qrcode", isLoading: isActing) {
                 Task { await open() }
             }
             .disabled(isActing)
@@ -130,16 +137,17 @@ struct DiningHostView: View {
             ScrollView {
                 VStack(spacing: AppSpacing.lg) {
                     VStack(spacing: AppSpacing.xs) {
-                        Text("点菜房间进行中")
+                        Text("大家在点")
                             .font(AppFont.title(24))
                             .foregroundStyle(Color.inkPrimary)
-                        Text("让朋友扫码 加入一起点菜")
+                        Text("让他们扫这个码")
                             .font(AppFont.body(13))
                             .foregroundStyle(Color.inkMuted)
                     }
                     .padding(.top, AppSpacing.xxl)
 
-                    BrandQRCode(content: code, size: 180)
+                    // QR 带 lo://room/ 前缀，避免被扫进进家流
+                    BrandQRCode(content: LoverScanLink.roomPayload(code), size: 180)
                         .padding(AppSpacing.lg)
                         .background(
                             RoundedRectangle(cornerRadius: AppRadius.xl, style: .continuous)
@@ -148,14 +156,14 @@ struct DiningHostView: View {
                         .appCardShadow()
 
                     VStack(spacing: 2) {
-                        Text("房间号 · 点一下复制")
+                        Text("房间号 · 点一下抄走")
                             .font(AppFont.caption(11))
                             .foregroundStyle(Color.inkMuted)
                         // 人不在场的朋友扫不了码 复制房间号发微信
                         Button {
                             UIPasteboard.general.string = code
                             Haptics.light()
-                            errorMessage = "房间号已复制 发给朋友吧"
+                            errorMessage = "抄好了 发给他们吧"
                         } label: {
                             Text(formatRoom(code))
                                 .font(AppFont.mono(30))
@@ -172,7 +180,7 @@ struct DiningHostView: View {
                 .padding(.bottom, AppSpacing.lg)
             }
 
-            SecondaryButton(title: "关闭点菜房间", icon: "xmark.circle") {
+            SecondaryButton(title: "关掉房间", icon: "xmark.circle") {
                 showCloseConfirm = true
             }
             .disabled(isActing)
@@ -188,7 +196,7 @@ struct DiningHostView: View {
         let people = meal?.participants ?? []
         return HStack(spacing: AppSpacing.sm) {
             if people.isEmpty {
-                Text("还没有人加入 把房间号发给大家")
+                Text("还没人进来 把号发过去就行")
                     .font(AppFont.caption(12))
                     .foregroundStyle(Color.inkMuted)
             } else {
@@ -197,7 +205,7 @@ struct DiningHostView: View {
                         AvatarView(user: p.user, size: 28, ring: true)
                     }
                 }
-                Text("\(people.count) 人已加入")
+                Text("\(people.count) 个人在")
                     .font(AppFont.caption(12))
                     .foregroundStyle(Color.inkSecondary)
             }
@@ -207,7 +215,7 @@ struct DiningHostView: View {
     private var dishesSection: some View {
         SectionCard {
             HStack {
-                Text("这一顿已点")
+                Text("已经点了")
                     .font(AppFont.headline(15))
                     .foregroundStyle(Color.inkPrimary)
                 Spacer()
@@ -216,7 +224,7 @@ struct DiningHostView: View {
                     .foregroundStyle(Color.inkMuted)
             }
             if dishes.isEmpty {
-                Text("还没点菜 等朋友扫码后一起挑")
+                Text("还空着 等他们扫进来再点")
                     .font(AppFont.caption())
                     .foregroundStyle(Color.inkMuted)
                     .frame(maxWidth: .infinity)
@@ -282,6 +290,7 @@ struct DiningHostView: View {
         defer { isActing = false }
         do {
             try await DiningService.shared.close(mealId: mealId)
+            didCloseRoom = true
             Haptics.light()
             dismiss()
         } catch {

@@ -56,10 +56,6 @@ struct LoginView: View {
                         .foregroundStyle(Color.errorInk)
                         .multilineTextAlignment(.center)
                 }
-
-                Text("继续即表示同意我们的服务条款")
-                    .font(AppFont.caption())
-                    .foregroundStyle(Color.inkMuted)
             }
             .padding(.horizontal, AppSpacing.xl)
             .padding(.bottom, AppSpacing.xxl)

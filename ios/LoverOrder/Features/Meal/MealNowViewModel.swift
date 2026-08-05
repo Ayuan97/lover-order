@@ -1,5 +1,27 @@
 import Foundation
 
+// 待写两句：UserDefaults 落盘，杀进程后首页仍能补评
+enum PendingReviewStore {
+    static let mealIdKey = "meal.pendingReviewMealId"
+    static let collapsedKey = "meal.pendingReviewCollapsed"
+
+    static func save(mealId: UInt, collapsed: Bool) {
+        UserDefaults.standard.set(Int(mealId), forKey: mealIdKey)
+        UserDefaults.standard.set(collapsed, forKey: collapsedKey)
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: mealIdKey)
+        UserDefaults.standard.removeObject(forKey: collapsedKey)
+    }
+
+    static func load() -> (mealId: UInt, collapsed: Bool)? {
+        let id = UserDefaults.standard.integer(forKey: mealIdKey)
+        guard id > 0 else { return nil }
+        return (UInt(id), UserDefaults.standard.bool(forKey: collapsedKey))
+    }
+}
+
 @MainActor
 final class MealNowViewModel: ObservableObject {
     @Published var meal: MealSession?
@@ -8,9 +30,11 @@ final class MealNowViewModel: ObservableObject {
     @Published var isLoading: Bool = false
     @Published var loadFailed: Bool = false
     @Published var errorMessage: String?
+    // 成功/轻提示 与 errorMessage 分通道 避免安心反馈像报错
+    @Published var tipMessage: String?
     // confirm / complete 防重入
     @Published var isActing: Bool = false
-    // 吃完后待评价：关掉 sheet 也不丢 首页 banner 可再打开
+    // 吃完后待评价：关掉 sheet 也不丢 首页 banner 可再打开；杀进程后可恢复
     @Published var pendingReviewMealId: UInt?
     // 轻量收起 banner 仍保留入口
     @Published var reviewBannerCollapsed: Bool = false
@@ -58,10 +82,12 @@ final class MealNowViewModel: ObservableObject {
             self.meal = m
             self.suggestions = s.items
             self.frequents = f.items
+            restorePendingReview()
         } catch {
             guard seq == loadSeq else { return }
             loadFailed = true
             errorMessage = error.localizedDescription
+            restorePendingReview()
         }
     }
 
@@ -101,11 +127,27 @@ final class MealNowViewModel: ObservableObject {
     func noteNeedsReview(_ mealId: UInt) {
         pendingReviewMealId = mealId
         reviewBannerCollapsed = false
+        PendingReviewStore.save(mealId: mealId, collapsed: false)
     }
 
     func clearPendingReview() {
         pendingReviewMealId = nil
         reviewBannerCollapsed = false
+        PendingReviewStore.clear()
+    }
+
+    // 收起 banner 也落盘，杀进程后仍知道「有待写、已收起」
+    func setReviewBannerCollapsed(_ collapsed: Bool) {
+        reviewBannerCollapsed = collapsed
+        if let id = pendingReviewMealId {
+            PendingReviewStore.save(mealId: id, collapsed: collapsed)
+        }
+    }
+
+    private func restorePendingReview() {
+        guard let saved = PendingReviewStore.load() else { return }
+        pendingReviewMealId = saved.mealId
+        reviewBannerCollapsed = saved.collapsed
     }
 
     // 改心情时 bump loadSeq 让在途 load 结果作废 再写 meal + 刷推荐
@@ -137,11 +179,11 @@ final class MealNowViewModel: ObservableObject {
 
     func addDish(_ recipe: Recipe) async {
         guard let meal else {
-            errorMessage = loadFailed ? "加载失败 下拉重试后再加菜" : "这一顿还没准备好 稍后再试"
+            errorMessage = loadFailed ? "没连上 下拉再试" : "再等一小会儿"
             return
         }
         if dishes.contains(where: { $0.recipeId == recipe.id }) {
-            errorMessage = "这道已经在这一顿里啦"
+            errorMessage = "这道已经在桌上了"
             return
         }
         do {
@@ -155,6 +197,11 @@ final class MealNowViewModel: ObservableObject {
 
     func removeDish(_ dish: MealDish) async {
         guard let meal else { return }
+        // confirmed 至少留一道；清光请走「算了 重选」，别卡成空 confirmed
+        if meal.status == .confirmed && dishCount <= 1 {
+            errorMessage = "定了至少留一道 要重选就点「算了 重选」"
+            return
+        }
         do {
             try await mealService.removeDish(mealId: meal.id, dishId: dish.id)
             self.meal = try await mealService.detail(id: meal.id)
@@ -190,7 +237,7 @@ final class MealNowViewModel: ObservableObject {
     func complete() async {
         guard let meal, !isActing else { return }
         if dishCount == 0 {
-            errorMessage = "至少留下一道菜再标记吃完"
+            errorMessage = "菜都没了 先留一道"
             return
         }
         isActing = true

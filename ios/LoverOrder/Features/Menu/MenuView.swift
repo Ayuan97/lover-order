@@ -1,6 +1,6 @@
 import SwiftUI
 
-// 菜单页 双列网格 + 已加入这一顿 + 底部"定下这一顿"
+// 菜单页 双列网格 + 已加入这一顿 + 底部「就这些」
 struct MenuView: View {
     @EnvironmentObject private var appState: AppState
     @StateObject private var vm = MenuViewModel()
@@ -30,25 +30,22 @@ struct MenuView: View {
             }
             .background(Color.appBackground.ignoresSafeArea())
             .refreshable {
-                await vm.loadCurrentMeal(scene: appState.currentScene, mood: appState.currentMood)
+                await vm.loadCurrentMeal(scene: .pair, mood: appState.currentMood)
                 await vm.loadRecipes()
             }
             .safeAreaInset(edge: .bottom) {
                 bottomBar
             }
             .task {
-                await vm.bootstrap(scene: appState.currentScene, mood: appState.currentMood)
+                await vm.bootstrap(scene: .pair, mood: appState.currentMood)
             }
             .task {
                 // 与首页同款轮询 另一台手机加的菜自动出现在"已加入这一顿"
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(4))
                     guard scenePhase == .active else { continue }
-                    await vm.syncMeal(scene: appState.currentScene, mood: appState.currentMood)
+                    await vm.syncMeal(scene: .pair, mood: appState.currentMood)
                 }
-            }
-            .onChange(of: appState.currentScene) { _, _ in
-                Task { await vm.loadCurrentMeal(scene: appState.currentScene, mood: appState.currentMood) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
                 Task { await vm.loadRecipes() }
@@ -57,7 +54,7 @@ struct MenuView: View {
                 Task { await vm.loadCategories() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
-                Task { await vm.loadCurrentMeal(scene: appState.currentScene, mood: appState.currentMood) }
+                Task { await vm.loadCurrentMeal(scene: .pair, mood: appState.currentMood) }
             }
             .navigationBarHidden(true)
             .sheet(isPresented: $showCreateRecipe) {
@@ -83,8 +80,6 @@ struct MenuView: View {
             Text("把这一顿想选的菜放在这里")
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
-            CurrentSceneBadge(scene: appState.currentScene)
-                .padding(.top, AppSpacing.xs)
         }
         .frame(maxWidth: .infinity)
         .overlay(alignment: .topTrailing) {
@@ -227,11 +222,14 @@ struct MenuView: View {
                                     .font(AppFont.body(15))
                                     .foregroundStyle(Color.inkPrimary)
                                 Spacer()
-                                Button {
-                                    Task { await vm.removeDish(dish) }
-                                } label: {
-                                    Image(systemName: "minus.circle")
-                                        .foregroundStyle(Color.inkMuted)
+                                // confirmed 最后一道不能删，与首页一致
+                                if canRemovePinnedDish {
+                                    Button {
+                                        Task { await vm.removeDish(dish) }
+                                    } label: {
+                                        Image(systemName: "minus.circle")
+                                            .foregroundStyle(Color.inkMuted)
+                                    }
                                 }
                             }
                         }
@@ -249,7 +247,7 @@ struct MenuView: View {
                     Text("\(vm.pinnedDishes.count) 道菜")
                         .font(AppFont.headline(15))
                         .foregroundStyle(Color.inkPrimary)
-                    Text(appState.currentScene.label + " · " + appState.currentMood.label)
+                    Text("我们这顿 · " + appState.currentMood.label)
                         .font(AppFont.caption())
                         .foregroundStyle(Color.inkMuted)
                 }
@@ -271,10 +269,17 @@ struct MenuView: View {
         vm.pinnedDishes.contains { $0.recipeId == recipe.id }
     }
 
+    // planning 可删任意道；confirmed 至少留一道（与 MealNow 一致）
+    private var canRemovePinnedDish: Bool {
+        guard let status = vm.meal?.status else { return true }
+        if status == .confirmed { return vm.pinnedDishes.count > 1 }
+        return status == .planning
+    }
+
     private var confirmTitle: String {
-        guard let meal = vm.meal else { return "定下这一顿" }
+        guard let meal = vm.meal else { return "就这些" }
         switch meal.status {
-        case .planning: return "定下这一顿"
+        case .planning: return "就这些"
         case .confirmed: return "已定下"
         case .completed: return "已完成"
         case .cancelled: return "已取消"

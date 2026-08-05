@@ -28,14 +28,14 @@ struct DiningJoinView: View {
                 Button { showScanner = true } label: {
                     HStack(spacing: AppSpacing.sm) {
                         Image(systemName: "qrcode.viewfinder")
-                        Text("扫一扫 · 对方的聚餐码")
+                        Text("扫一扫房间码")
                     }
                     .font(AppFont.body(14))
                     .foregroundStyle(Color.brandGreen)
                 }
                 Spacer()
-                PrimaryButton(title: "加入聚餐", isLoading: joining) {
-                    Task { await join(roomCode) }
+                PrimaryButton(title: "进去", isLoading: joining) {
+                    Task { await joinTyped(roomCode) }
                 }
             }
             .padding(AppSpacing.xl)
@@ -54,14 +54,13 @@ struct DiningJoinView: View {
         .toast($errorMessage)
         .fullScreenCover(isPresented: $showScanner) {
             QRScannerScreen(
-                hint: "对准对方的聚餐二维码",
-                manualEntryTitle: "改为手输房间号"
+                hint: "对准房间二维码",
+                manualEntryTitle: "改用手输房间号"
             ) { code in
-                Task { await join(code) }
+                Task { await joinScanned(code) }
             }
         }
         .fullScreenCover(item: $joined, onDismiss: {
-            // 访客离开聚餐后直接回首页 不停在输码页
             dismiss()
         }) { m in
             DiningGuestView(meal: m)
@@ -74,10 +73,10 @@ struct DiningJoinView: View {
             Image(systemName: "person.2.wave.2.fill")
                 .font(.system(size: 36, weight: .light))
                 .foregroundStyle(Color.brandGreen)
-            Text("加入聚餐")
+            Text("去朋友那儿点菜")
                 .font(AppFont.title(26))
                 .foregroundStyle(Color.inkPrimary)
-            Text("输房间号或扫码 临时一起点这一顿\n不会变成对方家的人")
+            Text("扫码用房间二维码\n手输就填 6 位房间号\n不会变成他们家的人")
                 .multilineTextAlignment(.center)
                 .font(AppFont.body(13))
                 .foregroundStyle(Color.inkMuted)
@@ -85,8 +84,39 @@ struct DiningJoinView: View {
         .padding(.top, AppSpacing.xl)
     }
 
-    private func join(_ code: String) async {
-        let c = code.trimmingCharacters(in: .whitespacesAndNewlines)
+    // 扫码：只认 lo://room/…，裸串 / 餐券一律拒绝（无兼容）
+    private func joinScanned(_ raw: String) async {
+        switch LoverScanLink.parse(raw) {
+        case .room(let c):
+            await joinRoom(c)
+        case .home:
+            errorMessage = "这是入伙餐券，蹭饭要扫房间码"
+        case nil:
+            errorMessage = "请扫房间二维码（手输房间号用上面输入框）"
+        }
+    }
+
+    // 手输：只接受文本框里的房间号本体（可 6 位数字）
+    private func joinTyped(_ raw: String) async {
+        let c = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !c.isEmpty else { return }
+        if c.lowercased().hasPrefix("lo://") {
+            // 手输框贴了深链：只接受 room，不把裸路径当兼容
+            switch LoverScanLink.parse(c) {
+            case .room(let code):
+                await joinRoom(code)
+            case .home:
+                errorMessage = "这是入伙餐券，蹭饭填房间号"
+            case nil:
+                errorMessage = "房间号不对"
+            }
+            return
+        }
+        await joinRoom(c)
+    }
+
+    private func joinRoom(_ room: String) async {
+        let c = room.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !c.isEmpty else { return }
         joining = true
         defer { joining = false }

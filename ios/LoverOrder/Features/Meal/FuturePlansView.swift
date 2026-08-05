@@ -1,6 +1,6 @@
 import SwiftUI
 
-// 未来这顿：future 场景下还没定下的菜单
+// 以后想吃：支线清单，不上首页
 struct FuturePlansView: View {
     @EnvironmentObject private var appState: AppState
 
@@ -27,7 +27,7 @@ struct FuturePlansView: View {
         .task {
             await load()
         }
-        .navigationTitle("未来这顿")
+        .navigationTitle("以后想吃")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showAddDish) {
             if let mid = meal?.id {
@@ -64,7 +64,7 @@ struct FuturePlansView: View {
             }
             let dishes = meal.dishes ?? []
             if dishes.isEmpty {
-                Text("在菜谱详情里点'留到周末'就能加进来")
+                Text("在菜谱详情里点「以后想吃」就能加进来")
                     .font(AppFont.caption())
                     .foregroundStyle(Color.inkMuted)
             } else {
@@ -165,7 +165,8 @@ struct FuturePlansView: View {
 
     private func moveToNow(_ future: MealSession) async {
         do {
-            let now = try await MealService.shared.current(scene: appState.currentScene, mood: appState.currentMood)
+            // 转到今天：打进日常我们这顿
+            let now = try await MealService.shared.current(scene: .pair, mood: appState.currentMood)
             let existingRecipeIds = Set((now.dishes ?? []).compactMap { $0.recipeId })
             let existingNames = Set((now.dishes ?? []).map { $0.recipeName })
             for dish in future.dishes ?? [] {

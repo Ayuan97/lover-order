@@ -68,7 +68,7 @@ struct ShoppingListView: View {
                 Text("买买买")
                     .font(AppFont.title(24))
                     .foregroundStyle(Color.inkPrimary)
-                Text("点一下完成 划掉的会暗一点")
+                Text("买到了就点一下")
                     .font(AppFont.body())
                     .foregroundStyle(Color.inkMuted)
             }
@@ -82,7 +82,7 @@ struct ShoppingListView: View {
         let done = list.items.filter { checked.contains(key(for: $0)) }.count
         return SectionCard {
             HStack {
-                Text("\(done) / \(total) 已搞定")
+                Text("\(done) / \(total) 买好了")
                     .font(AppFont.caption())
                     .foregroundStyle(Color.inkMuted)
                 Spacer()
@@ -132,21 +132,21 @@ struct ShoppingListView: View {
             Image(systemName: "cart")
                 .font(.system(size: 32))
                 .foregroundStyle(Color.inkMuted)
-            Text("清单还是空的")
+            Text("没什么要买的")
                 .font(AppFont.headline(16))
                 .foregroundStyle(Color.inkPrimary)
-            Text("自定义菜或没写食材的菜谱不会出现在这里")
+            Text("只有写了食材的菜才会出现")
                 .font(AppFont.body(13))
                 .foregroundStyle(Color.inkMuted)
                 .multilineTextAlignment(.center)
-            Text("去菜单给菜谱补上食材，或把自定义菜存成菜谱后再来")
+            Text("去菜单里给菜补上食材就行")
                 .font(AppFont.caption(12))
                 .foregroundStyle(Color.inkMuted)
                 .multilineTextAlignment(.center)
             Button {
                 dismiss()
             } label: {
-                Text("先去补食材 / 存菜单")
+                Text("好 我去补")
                     .font(AppFont.headline(15))
                     .foregroundStyle(Color.brandGreen)
                     .padding(.horizontal, AppSpacing.lg)

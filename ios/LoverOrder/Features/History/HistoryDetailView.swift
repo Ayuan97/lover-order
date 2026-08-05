@@ -274,7 +274,7 @@ struct HistoryDetailView: View {
         isRepeating = true
         defer { isRepeating = false }
         do {
-            let current = try await MealService.shared.current(scene: appState.currentScene, mood: appState.currentMood)
+            let current = try await MealService.shared.current(scene: .pair, mood: appState.currentMood)
             let existingRecipeIds = Set((current.dishes ?? []).compactMap { $0.recipeId })
             let existingNames = Set((current.dishes ?? []).map { $0.recipeName })
             var added = 0
@@ -289,7 +289,8 @@ struct HistoryDetailView: View {
                     added += 1
                 }
             }
-            repeatedToast = "已复制 \(added) 道到\(appState.currentScene.label)"
+            // 再来一次始终打进日常我们这顿
+            repeatedToast = "已复制 \(added) 道到我们这顿"
         } catch {
             errorMessage = error.localizedDescription
         }
