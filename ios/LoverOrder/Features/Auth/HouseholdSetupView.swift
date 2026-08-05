@@ -7,9 +7,13 @@ struct HouseholdSetupView: View {
     @State private var newName: String = ""
     @State private var inviteCode: String = ""
     @State private var isLoading = false
+    @State private var isSyncing = false
     @State private var errorMessage: String?
     @State private var showScanner = false
     @State private var showJoinDining = false
+    // 建家成功先弹餐券 关闭后再写 membership 避免与 Root 切页抢跑
+    @State private var pendingCreated: Household?
+    @State private var showInviteAfterCreate = false
 
     enum Mode: Hashable { case create, join }
 
@@ -38,6 +42,8 @@ struct HouseholdSetupView: View {
                 Text(errorMessage)
                     .font(AppFont.caption())
                     .foregroundStyle(Color.errorInk)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, AppSpacing.xl)
             }
 
             Spacer()
@@ -56,12 +62,39 @@ struct HouseholdSetupView: View {
                 .font(AppFont.caption(13))
                 .foregroundStyle(Color.inkMuted)
             }
+
+            // 半状态：资料不同步时可见重试；也可退出换账号
+            VStack(spacing: AppSpacing.sm) {
+                Button {
+                    Task { await resync() }
+                } label: {
+                    HStack(spacing: 5) {
+                        if isSyncing {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                        }
+                        Text("重新同步家庭状态")
+                    }
+                    .font(AppFont.caption(13))
+                    .foregroundStyle(Color.brandGreen)
+                }
+                .disabled(isSyncing)
+
+                Button {
+                    Task { await appState.didLogout() }
+                } label: {
+                    Text("退出登录")
+                        .font(AppFont.caption(13))
+                        .foregroundStyle(Color.inkMuted)
+                }
+            }
             .padding(.bottom, AppSpacing.xxl)
         }
         .padding(.top, AppSpacing.xxl)
         .background(Color.appBackground.ignoresSafeArea())
         .fullScreenCover(isPresented: $showScanner) {
-            QRScannerScreen { code in
+            QRScannerScreen(hint: "对准对方餐券上的二维码", manualEntryTitle: "改为手输邀请码") { code in
                 inviteCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
                 submit()
             }
@@ -69,6 +102,25 @@ struct HouseholdSetupView: View {
         .fullScreenCover(isPresented: $showJoinDining) {
             DiningJoinView()
                 .environmentObject(appState)
+        }
+        .sheet(isPresented: $showInviteAfterCreate, onDismiss: {
+            // 同步乐观写入 立刻让 Root 进主页 再后台刷新资料
+            if let h = pendingCreated {
+                pendingCreated = nil
+                appState.applyHouseholdMembership(h)
+                Task {
+                    if await appState.refreshProfile() {
+                        await appState.refreshHousehold()
+                    }
+                }
+            }
+        }) {
+            if let h = pendingCreated {
+                InviteTicketView(
+                    household: h,
+                    inviterName: appState.currentUser?.nickname ?? "我"
+                )
+            }
         }
     }
 
@@ -137,22 +189,45 @@ struct HouseholdSetupView: View {
             isLoading = true
             defer { isLoading = false }
             do {
-                let household: Household
                 switch mode {
                 case .create:
-                    household = try await HouseholdService.shared.create(
+                    let household = try await HouseholdService.shared.create(
                         CreateHouseholdRequest(name: newName.trimmingCharacters(in: .whitespaces))
                     )
+                    pendingCreated = household
+                    showInviteAfterCreate = true
                 case .join:
-                    household = try await HouseholdService.shared.join(
+                    let household = try await HouseholdService.shared.join(
                         code: inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
                     )
+                    await finishMembership(household)
                 }
-                await appState.refreshProfile()
-                appState.household = household
             } catch {
                 errorMessage = error.localizedDescription
             }
+        }
+    }
+
+    // 乐观写 householdId 再 refresh 失败也可进主页 并给出可见重试
+    private func finishMembership(_ household: Household) async {
+        appState.applyHouseholdMembership(household)
+        let synced = await appState.refreshProfile()
+        if !synced {
+            errorMessage = "家已就绪，但资料同步失败，可点下方重新同步"
+        } else {
+            await appState.refreshHousehold()
+        }
+    }
+
+    private func resync() async {
+        isSyncing = true
+        defer { isSyncing = false }
+        errorMessage = nil
+        let ok = await appState.resyncMembership()
+        if !ok {
+            errorMessage = "同步失败，请检查网络后重试"
+        } else if appState.currentUser?.hasHousehold != true && appState.household == nil {
+            errorMessage = "尚未加入任何家，请创建或输入邀请码"
         }
     }
 }

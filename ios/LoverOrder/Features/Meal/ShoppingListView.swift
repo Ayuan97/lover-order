@@ -132,15 +132,33 @@ struct ShoppingListView: View {
             Image(systemName: "cart")
                 .font(.system(size: 32))
                 .foregroundStyle(Color.inkMuted)
-            Text("这一顿的菜还没补食材")
-                .font(AppFont.body())
+            Text("清单还是空的")
+                .font(AppFont.headline(16))
+                .foregroundStyle(Color.inkPrimary)
+            Text("自定义菜或没写食材的菜谱不会出现在这里")
+                .font(AppFont.body(13))
                 .foregroundStyle(Color.inkMuted)
-            Text("在菜谱里加上食材清单 这里就能用了")
-                .font(AppFont.caption())
+                .multilineTextAlignment(.center)
+            Text("去菜单给菜谱补上食材，或把自定义菜存成菜谱后再来")
+                .font(AppFont.caption(12))
                 .foregroundStyle(Color.inkMuted)
+                .multilineTextAlignment(.center)
+            Button {
+                dismiss()
+            } label: {
+                Text("先去补食材 / 存菜单")
+                    .font(AppFont.headline(15))
+                    .foregroundStyle(Color.brandGreen)
+                    .padding(.horizontal, AppSpacing.lg)
+                    .padding(.vertical, 12)
+                    .background(Color.brandGreen.opacity(0.1))
+                    .clipShape(Capsule())
+            }
+            .padding(.top, AppSpacing.sm)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, AppSpacing.xxxl)
+        .padding(.horizontal, AppSpacing.md)
     }
 
     private func key(for item: ShoppingItem) -> String {

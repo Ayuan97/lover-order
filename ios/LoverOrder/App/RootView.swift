@@ -17,7 +17,8 @@ struct RootView: View {
         if appState.isBootstrapping {
             SplashView()
         } else if appState.isLoggedIn {
-            if appState.currentUser?.hasHousehold == true {
+            // household 已加载或用户已绑家 都进主页 避免只认 hasHousehold 的半状态死胡同
+            if appState.currentUser?.hasHousehold == true || appState.household != nil {
                 MainTabView()
             } else {
                 HouseholdSetupView()

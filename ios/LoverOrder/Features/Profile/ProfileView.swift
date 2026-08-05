@@ -57,7 +57,12 @@ struct ProfileView: View {
             }
             .sheet(isPresented: $showInvite) {
                 if let h = appState.household {
-                    InviteTicketView(household: h, inviterName: appState.currentUser?.nickname ?? "我")
+                    // 与列表展示同一码：有临时邀请码则餐券/QR/分享都用它
+                    InviteTicketView(
+                        household: h,
+                        inviterName: appState.currentUser?.nickname ?? "我",
+                        displayCode: inviteCode
+                    )
                 }
             }
             .toast($errorMessage)
@@ -303,13 +308,13 @@ struct ProfileView: View {
                 Text("还没加入家").font(AppFont.caption()).foregroundStyle(Color.inkMuted)
             }
         }
-        .confirmationDialog("退出当前的家？", isPresented: $confirmLeaveHousehold) {
-            Button("退出", role: .destructive) {
+        .confirmationDialog(leaveDialogTitle, isPresented: $confirmLeaveHousehold) {
+            Button(isSoleHouseholdMember ? "退出并解散" : "退出", role: .destructive) {
                 Task { await leaveHousehold() }
             }
             Button("再想想", role: .cancel) {}
         } message: {
-            Text("退出后你将看不到这个家的菜单和记录 重新加入即可恢复")
+            Text(leaveDialogMessage)
         }
     }
 
@@ -375,11 +380,35 @@ struct ProfileView: View {
         }
     }
 
+    // 仅自己时后端会解散这个家 文案必须说清楚
+    private var isSoleHouseholdMember: Bool {
+        guard let members = appState.household?.members else { return true }
+        return members.count <= 1
+    }
+
+    private var leaveDialogTitle: String {
+        isSoleHouseholdMember ? "退出并解散这个家？" : "退出当前的家？"
+    }
+
+    private var leaveDialogMessage: String {
+        if isSoleHouseholdMember {
+            return "你是这个家唯一的人，退出后这个家将被解散，菜单与记录会一并清空且无法恢复"
+        }
+        return "退出后你将看不到这个家的菜单和记录 重新加入即可恢复"
+    }
+
     private func leaveHousehold() async {
         do {
             try await HouseholdService.shared.leave()
             appState.household = nil
-            await appState.refreshProfile()
+            if var u = appState.currentUser {
+                u.householdId = nil
+                appState.currentUser = u
+            }
+            let ok = await appState.refreshProfile()
+            if !ok {
+                errorMessage = "已退出，但资料同步失败，可下拉或重新进入后再试"
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

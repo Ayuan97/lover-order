@@ -63,7 +63,7 @@ func (s *DiningService) Join(userID uint, roomCode string) (*model.MealSession, 
 		return nil, errors.New("房间号无效")
 	}
 	if !roomAlive(&m) {
-		return nil, errors.New("聚餐已结束")
+		return nil, errors.New("点菜房间已关闭或过期")
 	}
 	var existing model.MealParticipant
 	err := model.DB.Where("meal_session_id = ? AND user_id = ?", m.ID, userID).First(&existing).Error
@@ -107,7 +107,10 @@ func (s *DiningService) AddDish(userID, mealID uint, in DishInput) (*model.MealS
 		return nil, errors.New("聚餐不存在")
 	}
 	if !roomAlive(&m) {
-		return nil, errors.New("聚餐已结束")
+		return nil, errors.New("点菜房间已关闭或过期")
+	}
+	if m.Status == model.MealStatusCompleted || m.Status == model.MealStatusCancelled {
+		return nil, errors.New("这一顿已结束 无法修改")
 	}
 	if !s.canParticipate(userID, &m) {
 		return nil, errors.New("你不在这个聚餐里")
@@ -125,7 +128,13 @@ func (s *DiningService) AddDish(userID, mealID uint, in DishInput) (*model.MealS
 		if err := model.DB.Where("id = ? AND household_id = ?", *in.RecipeID, m.HouseholdID).First(&r).Error; err == nil {
 			dish.RecipeName = r.Name
 			dish.RecipeImage = r.CoverImage
+		} else {
+			// 菜谱缺失或不在 host 家：断开关联，避免脏 RecipeID 落库
+			dish.RecipeID = nil
 		}
+	}
+	if dish.RecipeName == "" {
+		return nil, errors.New("菜品名称不能为空")
 	}
 	if err := model.DB.Create(dish).Error; err != nil {
 		return nil, err
@@ -135,6 +144,20 @@ func (s *DiningService) AddDish(userID, mealID uint, in DishInput) (*model.MealS
 
 // RemoveDish 聚餐里移除自己加的菜
 func (s *DiningService) RemoveDish(userID, mealID, dishID uint) error {
+	var m model.MealSession
+	if err := model.DB.First(&m, mealID).Error; err != nil {
+		return errors.New("聚餐不存在")
+	}
+	// 房间过期/关闭或一顿已终态时禁止改历史，避免吃完后还能删菜
+	if !roomAlive(&m) {
+		return errors.New("点菜房间已关闭或过期")
+	}
+	if m.Status == model.MealStatusCompleted || m.Status == model.MealStatusCancelled {
+		return errors.New("这一顿已结束 无法修改")
+	}
+	if !s.canParticipate(userID, &m) {
+		return errors.New("你不在这个聚餐里")
+	}
 	res := model.DB.Where("id = ? AND meal_session_id = ? AND added_by = ?", dishID, mealID, userID).
 		Delete(&model.MealDish{})
 	if res.Error != nil {
@@ -153,7 +176,7 @@ func (s *DiningService) Recipes(userID, mealID uint, keyword string) ([]model.Re
 		return nil, errors.New("聚餐不存在")
 	}
 	if !roomAlive(&m) {
-		return nil, errors.New("聚餐已结束")
+		return nil, errors.New("点菜房间已关闭或过期")
 	}
 	if !s.canParticipate(userID, &m) {
 		return nil, errors.New("你不在这个聚餐里")

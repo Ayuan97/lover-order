@@ -53,7 +53,10 @@ struct DiningJoinView: View {
         }
         .toast($errorMessage)
         .fullScreenCover(isPresented: $showScanner) {
-            QRScannerScreen { code in
+            QRScannerScreen(
+                hint: "对准对方的聚餐二维码",
+                manualEntryTitle: "改为手输房间号"
+            ) { code in
                 Task { await join(code) }
             }
         }

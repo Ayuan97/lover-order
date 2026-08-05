@@ -67,8 +67,11 @@ struct MealSession: Codable, Identifiable, Hashable {
 
 extension MealSession {
     // 轮询同步用的内容指纹 变了才刷 UI 避免每 4 秒无谓重绘
+    // 含房间码/过期 以便开房关房后首页「聚餐中」入口能跟上
     var syncSignature: String {
-        "\(id)|\(status.rawValue)|" + (dishes ?? []).map { String($0.id) }.joined(separator: ",")
+        let room = "\(roomCode ?? "")|\(Int(roomExpiresAt?.timeIntervalSince1970 ?? 0))"
+        let dishIds = (dishes ?? []).map { String($0.id) }.joined(separator: ",")
+        return "\(id)|\(status.rawValue)|\(room)|\(dishIds)"
     }
 }
 

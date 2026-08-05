@@ -2,13 +2,24 @@ import SwiftUI
 import UIKit
 
 // 入伙餐券 邀请家人扫码进家 票券风格
+// displayCode：临时邀请码与家永久码双轨时 餐券/QR/分享统一用当前展示的码
 struct InviteTicketView: View {
     let household: Household
     let inviterName: String
+    var displayCode: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var shareItem: ShareItem?
 
-    private var code: String { household.inviteCode }
+    private var code: String {
+        let raw = displayCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return raw.isEmpty ? household.inviteCode : raw
+    }
+    private var isTemporaryCode: Bool {
+        guard let d = displayCode?.trimmingCharacters(in: .whitespacesAndNewlines), !d.isEmpty else {
+            return false
+        }
+        return d != household.inviteCode
+    }
     private var ticketNo: String { String(code.suffix(4)).uppercased() }
 
     var body: some View {
@@ -47,14 +58,14 @@ struct InviteTicketView: View {
                         .font(AppFont.title(22))
                         .foregroundStyle(Color.inkPrimary)
                 }
-                Text("入伙餐券 · No.\(ticketNo)")
+                Text(isTemporaryCode ? "临时餐券 · No.\(ticketNo)" : "入伙餐券 · No.\(ticketNo)")
                     .font(AppFont.mono(12))
                     .foregroundStyle(Color.inkMuted)
 
                 BrandQRCode(content: code, size: 188)
                     .padding(.vertical, AppSpacing.sm)
 
-                Text("扫一扫 · 进我们家")
+                Text(isTemporaryCode ? "扫一扫 · 限时邀请进我们家" : "扫一扫 · 进我们家")
                     .font(AppFont.body(13))
                     .foregroundStyle(Color.inkSecondary)
             }
@@ -71,6 +82,11 @@ struct InviteTicketView: View {
                 Text("没相机就手输邀请码  \(code)")
                     .font(AppFont.caption(12))
                     .foregroundStyle(Color.inkMuted)
+                if isTemporaryCode {
+                    Text("此为临时邀请码 与家的固定码不同")
+                        .font(AppFont.caption(11))
+                        .foregroundStyle(Color.inkMuted)
+                }
             }
             .padding(.horizontal, AppSpacing.xl)
             .padding(.vertical, AppSpacing.lg)
@@ -111,7 +127,8 @@ struct InviteTicketView: View {
 
     private var shareButton: some View {
         PrimaryButton(title: "把餐券发给 Ta", icon: "square.and.arrow.up") {
-            shareItem = ShareItem(text: "来加入「\(household.name)」，一起决定每天吃什么～邀请码：\(code)")
+            let kind = isTemporaryCode ? "临时邀请码" : "邀请码"
+            shareItem = ShareItem(text: "来加入「\(household.name)」，一起决定每天吃什么～\(kind)：\(code)")
         }
     }
 }

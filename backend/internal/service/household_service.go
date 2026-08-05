@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"lover-order-backend/internal/model"
 )
 
@@ -98,22 +99,34 @@ func (s *HouseholdService) Join(userID uint, in JoinInput) (*model.Household, er
 		return &household, nil
 	}
 
-	var invite model.HouseholdInvite
-	if err := model.DB.Where("code = ?", in.Code).First(&invite).Error; err != nil {
-		return nil, errors.New("邀请码无效")
-	}
-	if !invite.Usable() {
-		return nil, errors.New("邀请码已过期或失效")
-	}
-
-	if err := model.DB.First(&household, invite.HouseholdID).Error; err != nil {
-		return nil, err
-	}
+	// 限次邀请：校验与 used_count 自增必须同事务且行锁，避免并发 TOCTOU 超限
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		var invite model.HouseholdInvite
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("code = ?", in.Code).First(&invite).Error; err != nil {
+			return errors.New("邀请码无效")
+		}
+		if !invite.Usable() {
+			return errors.New("邀请码已过期或失效")
+		}
+		if err := tx.First(&household, invite.HouseholdID).Error; err != nil {
+			return err
+		}
 		if err := tx.Model(&user).Update("household_id", household.ID).Error; err != nil {
 			return err
 		}
-		return tx.Model(&invite).Update("used_count", gorm.Expr("used_count + ?", 1)).Error
+		// 条件自增：即便锁语义异常也保证 max_uses 不被突破
+		res := tx.Model(&model.HouseholdInvite{}).
+			Where("id = ?", invite.ID).
+			Where("max_uses = 0 OR used_count < max_uses").
+			Update("used_count", gorm.Expr("used_count + ?", 1))
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return errors.New("邀请码已过期或失效")
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err

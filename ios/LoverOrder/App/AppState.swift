@@ -68,9 +68,35 @@ final class AppState: ObservableObject {
         household = try? await HouseholdService.shared.info()
     }
 
-    func refreshProfile() async {
-        if let u = try? await AuthService.shared.profile() {
+    // 返回是否成功 调用方需要可见错误时用返回值 避免 try? 半状态
+    @discardableResult
+    func refreshProfile() async -> Bool {
+        do {
+            currentUser = try await AuthService.shared.profile()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    // 建家/加入成功后立刻写入 避免 refresh 失败卡在引导页
+    func applyHouseholdMembership(_ h: Household) {
+        household = h
+        if var u = currentUser {
+            u.householdId = h.id
             currentUser = u
         }
+    }
+
+    // 同步资料 + 家 引导页半状态重试用
+    @discardableResult
+    func resyncMembership() async -> Bool {
+        let ok = await refreshProfile()
+        if currentUser?.hasHousehold == true {
+            await refreshHousehold()
+        } else {
+            household = nil
+        }
+        return ok
     }
 }

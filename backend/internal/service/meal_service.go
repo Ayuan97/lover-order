@@ -78,35 +78,55 @@ func (s *MealService) Current(householdID, userID uint, scene, mood string) (*mo
 		return nil, errors.New("mood 不合法")
 	}
 
-	var m model.MealSession
-	err := model.DB.Where("household_id = ? AND scene = ? AND status IN ?",
-		householdID, scene, []string{model.MealStatusPlanning, model.MealStatusConfirmed}).
-		Preload("Dishes.Adder").Order("id DESC").First(&m).Error
-	if err == nil {
-		if m.Status == model.MealStatusConfirmed && len(m.Dishes) == 0 {
-			m.Status = model.MealStatusPlanning
-			m.ConfirmedAt = nil
-			if err := model.DB.Save(&m).Error; err != nil {
-				return nil, err
-			}
+	// WHY: 同一 (household, scene) 的 find-or-create 必须串行；无唯一约束时并发会各插一行 planning 孤儿
+	var result *model.MealSession
+	err := model.DB.Connection(func(conn *gorm.DB) error {
+		lockName := fmt.Sprintf("meal_current_%d_%s", householdID, scene)
+		var got int
+		if err := conn.Raw("SELECT GET_LOCK(?, 5)", lockName).Scan(&got).Error; err != nil {
+			return err
 		}
-		return &m, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
+		if got != 1 {
+			return errors.New("获取当前一顿繁忙 请稍后重试")
+		}
+		defer func() { _ = conn.Exec("SELECT RELEASE_LOCK(?)", lockName).Error }()
 
-	m = model.MealSession{
-		Scene:       scene,
-		Mood:        mood,
-		Status:      model.MealStatusPlanning,
-		HouseholdID: householdID,
-		CreatedBy:   userID,
-	}
-	if err := model.DB.Create(&m).Error; err != nil {
+		var m model.MealSession
+		err := conn.Where("household_id = ? AND scene = ? AND status IN ?",
+			householdID, scene, []string{model.MealStatusPlanning, model.MealStatusConfirmed}).
+			Preload("Dishes.Adder").Order("id DESC").First(&m).Error
+		if err == nil {
+			if m.Status == model.MealStatusConfirmed && len(m.Dishes) == 0 {
+				m.Status = model.MealStatusPlanning
+				m.ConfirmedAt = nil
+				if err := conn.Save(&m).Error; err != nil {
+					return err
+				}
+			}
+			result = &m
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		m = model.MealSession{
+			Scene:       scene,
+			Mood:        mood,
+			Status:      model.MealStatusPlanning,
+			HouseholdID: householdID,
+			CreatedBy:   userID,
+		}
+		if err := conn.Create(&m).Error; err != nil {
+			return err
+		}
+		result = &m
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	return &m, nil
+	return result, nil
 }
 
 // Create 显式创建一顿
@@ -203,8 +223,13 @@ func (s *MealService) Complete(householdID, id uint) (*model.MealSession, error)
 	if err != nil {
 		return nil, err
 	}
-	if m.Status == model.MealStatusCompleted || m.Status == model.MealStatusCancelled {
-		return nil, errors.New("当前状态不能完成")
+	// 状态机要求 planning → confirmed → completed，禁止跳过「定下」
+	if m.Status != model.MealStatusConfirmed {
+		return nil, errors.New("请先定下这一顿再标记吃完")
+	}
+	// 0 道菜没有「吃完」的意义 禁止空完成
+	if len(m.Dishes) == 0 {
+		return nil, errors.New("至少留下一道菜再标记吃完")
 	}
 	now := time.Now()
 	m.Status = model.MealStatusCompleted
@@ -424,7 +449,8 @@ func (s *MealService) ShoppingList(householdID, mealID uint) (*ShoppingList, err
 			continue
 		}
 		var r model.Recipe
-		if err := model.DB.First(&r, *dish.RecipeID).Error; err != nil {
+		// 必须带 household：聚餐曾可能写入外家 recipe_id，按 id 裸查会泄漏别家食材
+		if err := model.DB.Where("id = ? AND household_id = ?", *dish.RecipeID, householdID).First(&r).Error; err != nil {
 			continue
 		}
 		for _, ing := range r.IngredientsList() {
