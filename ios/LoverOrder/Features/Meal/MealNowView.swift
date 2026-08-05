@@ -104,13 +104,23 @@ struct MealNowView: View {
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(4))
                     guard scenePhase == .active else { continue }
-                    await vm.syncMeal(scene: coupleScene, mood: appState.currentMood)
+                    await vm.syncMeal(
+                        scene: coupleScene,
+                        mood: appState.currentMood,
+                        selfUserId: appState.currentUser?.id
+                    )
                     await checkDining()
                 }
             }
             // 改心情只走 applyMood 不并行 load 避免慢请求盖掉刚写的 mood
             .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
-                Task { await vm.refreshMeal(scene: coupleScene, mood: appState.currentMood) }
+                Task {
+                    await vm.refreshMeal(
+                        scene: coupleScene,
+                        mood: appState.currentMood,
+                        selfUserId: appState.currentUser?.id
+                    )
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
                 Task { await vm.load(scene: coupleScene, mood: appState.currentMood) }
@@ -186,7 +196,11 @@ struct MealNowView: View {
             .tipToast($vm.tipMessage)
             .sheet(isPresented: $showDiningHost, onDismiss: {
                 Task {
-                    await vm.refreshMeal(scene: coupleScene, mood: appState.currentMood)
+                    await vm.refreshMeal(
+                        scene: coupleScene,
+                        mood: appState.currentMood,
+                        selfUserId: appState.currentUser?.id
+                    )
                     // 只在本次 sheet 内真关过房时催一下；打开看一眼就关掉不打扰
                     if diningHostDidCloseRoom,
                        vm.meal?.status == .planning,
@@ -600,7 +614,7 @@ struct MealNowView: View {
     private var currentMealCard: some View {
         SectionCard {
             HStack {
-                Text("先点了这些")
+                Text(togetherDishTitle)
                     .font(AppFont.headline(15))
                     .foregroundStyle(Color.inkPrimary)
                 Spacer()
@@ -844,6 +858,19 @@ struct MealNowView: View {
         return result
     }
 
+    // 桌上有没有「不是我点的」
+    private var togetherDishTitle: String {
+        let me = appState.currentUser?.id
+        let mine = vm.dishes.contains { $0.addedBy == me }
+        let others = vm.dishes.contains { dish in
+            guard let by = dish.addedBy else { return false }
+            return by != me
+        }
+        if mine && others { return "你们一起点的" }
+        if others { return "Ta 也在点" }
+        return "先点了这些"
+    }
+
     private var participantsRow: some View {
         HStack(spacing: AppSpacing.sm) {
             HStack(spacing: -8) {
@@ -852,7 +879,9 @@ struct MealNowView: View {
                         .overlay(Circle().strokeBorder(Color.cardBackground, lineWidth: 2))
                 }
             }
-            Text("\(participants.count) 个人 · \(vm.dishCount) 道")
+            Text(participants.count >= 2
+                 ? "两个人都在 · \(vm.dishCount) 道"
+                 : "\(participants.count) 个人 · \(vm.dishCount) 道")
                 .font(AppFont.caption(12))
                 .foregroundStyle(Color.inkSecondary)
             Spacer()

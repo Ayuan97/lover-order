@@ -92,23 +92,62 @@ final class MealNowViewModel: ObservableObject {
     }
 
     // 别的页面改了这一顿后轻量同步 只刷 meal 不动推荐位
-    // 也做完成检测:人在菜单页时对方标记"做好了" 走的是这条路 不能丢提醒
-    func refreshMeal(scene: MealScene, mood: Mood) async {
+    // 也做完成检测 + 对方加菜/定下的轻感知
+    func refreshMeal(scene: MealScene, mood: Mood, selfUserId: UInt? = nil) async {
         if let m = try? await mealService.current(scene: scene, mood: mood) {
-            await detectCompletedByOther(old: meal, new: m)
-            meal = m
+            await applyRemoteMeal(old: meal, new: m, selfUserId: selfUserId, broadcast: false)
         }
     }
 
     // 轮询静默同步 让另一台手机的改动几秒内自动出现 内容没变不动 UI
-    func syncMeal(scene: MealScene, mood: Mood) async {
+    func syncMeal(scene: MealScene, mood: Mood, selfUserId: UInt? = nil) async {
         guard let m = try? await mealService.current(scene: scene, mood: mood) else { return }
         if m.syncSignature != meal?.syncSignature {
-            await detectCompletedByOther(old: meal, new: m)
-            meal = m
-            // 广播给开着的挑菜面板等弹层 让它们也跟上
+            await applyRemoteMeal(old: meal, new: m, selfUserId: selfUserId, broadcast: true)
+        }
+    }
+
+    private func applyRemoteMeal(old: MealSession?, new m: MealSession, selfUserId: UInt?, broadcast: Bool) async {
+        await noticePartnerActivity(old: old, new: m, selfUserId: selfUserId)
+        await detectCompletedByOther(old: old, new: m)
+        meal = m
+        if broadcast {
             AppNotifications.mealChanged()
         }
+    }
+
+    // 对方在同一顿上的动作：加菜 / 定下 / 重选 — 只 tip，不打断
+    private func noticePartnerActivity(old: MealSession?, new m: MealSession, selfUserId: UInt?) async {
+        guard let old, old.id == m.id else { return }
+
+        // 状态变化优先（比加菜更「大事」）
+        if old.status == .planning, m.status == .confirmed {
+            tipMessage = "Ta 定下了 就这些"
+            Haptics.success()
+            return
+        }
+        if old.status == .confirmed, m.status == .cancelled {
+            tipMessage = "Ta 又改主意了"
+            Haptics.light()
+            return
+        }
+        // completed 走 noteNeedsReview，这里不抢 tip
+
+        let oldIds = Set((old.dishes ?? []).map(\.id))
+        let newlyAdded = (m.dishes ?? []).filter { !oldIds.contains($0.id) }
+        let byOther = newlyAdded.filter { dish in
+            guard let by = dish.addedBy else { return true }
+            guard let me = selfUserId else { return true }
+            return by != me
+        }
+        guard !byOther.isEmpty else { return }
+
+        if byOther.count == 1, let name = byOther.first?.recipeName, !name.isEmpty {
+            tipMessage = "Ta 加了 \(name)"
+        } else {
+            tipMessage = "Ta 加了 \(byOther.count) 道菜"
+        }
+        Haptics.light()
     }
 
     // confirmed 的单被对方收掉:同 id 变 completed 直接提醒;换了新单要回查旧单
@@ -117,9 +156,16 @@ final class MealNowViewModel: ObservableObject {
         guard let old, old.status == .confirmed else { return }
         if m.id == old.id, m.status == .completed {
             noteNeedsReview(old.id)
+            // 对方点的吃完：补一句人话，和补评条一起出现
+            if tipMessage == nil {
+                tipMessage = "Ta 说吃完了"
+            }
         } else if m.id != old.id {
             if let detail = try? await mealService.detail(id: old.id), detail.status == .completed {
                 noteNeedsReview(old.id)
+                if tipMessage == nil {
+                    tipMessage = "Ta 说吃完了"
+                }
             }
         }
     }
