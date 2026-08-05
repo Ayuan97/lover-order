@@ -36,12 +36,18 @@ func jsonMarshal(v any) (model.JSON, error) {
 	return model.JSON(data), nil
 }
 
+// isValidScene 接受 pair/future 与历史 family（仅旧数据）；family 不可作新建产品默认
 func isValidScene(s string) bool {
 	switch s {
 	case model.SceneCouple, model.SceneFamily, model.SceneFuture:
 		return true
 	}
 	return false
+}
+
+// isProductScene 用户可主动选择的餐次标签（日常 + 以后想吃）
+func isProductScene(s string) bool {
+	return s == model.SceneCouple || s == model.SceneFuture
 }
 
 func isValidMood(s string) bool {

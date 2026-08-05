@@ -90,7 +90,7 @@ struct MealNowView: View {
                 bottomBar
             }
             .task {
-                // 首页只服务情侣日常 不跟 family/future 场景切换
+                // 首页只服务情侣日常我们这顿
                 if appState.currentScene != .pair {
                     appState.currentScene = .pair
                 }
@@ -262,7 +262,7 @@ struct MealNowView: View {
         !vm.isLoading && vm.suggestions.isEmpty && vm.frequents.isEmpty && vm.dishes.isEmpty
     }
 
-    // 首页只承载情侣日常「我们这顿」；聚会是偶发能力不是并列场景
+    // 首页只承载情侣日常「我们这顿」
     private var coupleScene: MealScene { .pair }
 
     // 次要推荐：大图以外的可能喜欢 + 常吃（饿时默认收起）

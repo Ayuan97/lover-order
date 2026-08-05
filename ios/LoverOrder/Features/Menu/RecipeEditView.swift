@@ -228,7 +228,7 @@ struct RecipeEditView: View {
 
     private var tagsSection: some View {
         SectionCard {
-            FieldLabel("适合心情 / 场景 / 风味", required: false)
+            FieldLabel("适合心情 / 什么时候吃 / 风味", required: false)
 
             Text("适合心情")
                 .font(AppFont.caption(11))
@@ -245,9 +245,8 @@ struct RecipeEditView: View {
                 .font(AppFont.caption(11))
                 .foregroundStyle(Color.inkMuted)
                 .padding(.top, AppSpacing.xs)
-            // 只保留日常 / 以后想吃，不提供 family「模式」
             FlowLayout(spacing: AppSpacing.sm) {
-                ForEach([MealScene.pair, MealScene.future], id: \.self) { s in
+                ForEach(MealScene.productCases, id: \.self) { s in
                     chipButton(title: s.label, isSelected: sceneTags.contains(s)) {
                         toggleSet(&sceneTags, value: s)
                     }

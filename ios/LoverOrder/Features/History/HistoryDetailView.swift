@@ -1,6 +1,6 @@
 import SwiftUI
 
-// 一顿的历史详情：场景头 + 菜列表 + 评价列表 + 补评 / 再来一次
+// 一顿的历史详情：头 + 菜列表 + 评价 + 补评 / 再来一次
 struct HistoryDetailView: View {
     let mealId: UInt
 
@@ -269,7 +269,7 @@ struct HistoryDetailView: View {
         }
     }
 
-    // 把这一顿的菜复制到当前 scene 的规划中
+    // 把这一顿的菜复制到日常「我们这顿」
     private func repeatMeal(_ meal: MealSession) async {
         isRepeating = true
         defer { isRepeating = false }

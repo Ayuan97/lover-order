@@ -395,7 +395,7 @@ struct ProfileView: View {
     }
 }
 
-// 我们的小本本：总顿数 / 最近 30 天 / Top 5 常吃 / 场景分布
+// 我们的小本本：总顿数 / 最近 30 天 / Top 5 常吃 / 吃饭场合分布
 private struct StatsCard: View {
     let stats: HouseholdStats
 

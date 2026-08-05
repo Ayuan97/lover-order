@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-lover-order 是一个面向情侣 / 家庭的日常吃饭决策工具，移动端原生应用。**先做 iOS（SwiftUI），后期做 Android（Jetpack Compose）。**
+lover-order 是一个面向情侣的日常吃饭决策工具，移动端原生应用。**先做 iOS（SwiftUI），后期做 Android（Jetpack Compose）。**
 
 **产品理念：**
 - 解决日常痛点：情侣「今天吃什么」；极少情况家里来客一起点
@@ -169,7 +169,7 @@ mysql -u root -p -e "CREATE DATABASE lover_order CHARACTER SET utf8mb4 COLLATE u
 | | `/recipes/:id/favorite` | POST | 切换收藏 |
 | 一顿 | `/meals/current` | GET | 拿当前规划中的一顿，没有就创建 |
 | | `/meals/list` | GET | 历史列表 支持 status / scene |
-| | `/meals/stats` | GET | 家庭统计（总顿数 / 总菜数 / 近 30 天 / 高频菜 / 场景分布） |
+| | `/meals/stats` | GET | 家庭统计（总顿数 / 总菜数 / 近 30 天 / 高频菜 / 餐次标签分布） |
 | | `/meals/:id` | GET | 详情含菜与评价 |
 | | `/meals/create` | POST | 显式新建 |
 | | `/meals/:id/update` | POST | 改场景 / 心情 / 备注 |

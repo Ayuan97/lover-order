@@ -53,7 +53,8 @@ enum Mood: String, CaseIterable, Identifiable, Codable {
     }
 }
 
-// 与 SwiftUI.Scene 协议同名会冲突 用 MealScene 区分
+// 餐次数据标签（非产品「模式」）。
+// pair = 日常我们这顿；future = 支线以后想吃；family = 仅解码历史行，无入口可选。
 enum MealScene: String, CaseIterable, Identifiable, Codable {
     case pair
     case family
@@ -61,19 +62,11 @@ enum MealScene: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
-    // pair=日常主轴；future=支线以后想吃；family=历史数据标签，不当模式卖
+    /// 用户可见短名：family 只作历史展示，不暗示可选模式
     var label: String {
         switch self {
         case .pair: return "我们这顿"
-        case .family: return "旧记录"
-        case .future: return "以后想吃"
-        }
-    }
-
-    var modeLabel: String {
-        switch self {
-        case .pair: return "我们这顿"
-        case .family: return "旧记录"
+        case .family: return "历史记录"
         case .future: return "以后想吃"
         }
     }
@@ -89,8 +82,11 @@ enum MealScene: String, CaseIterable, Identifiable, Codable {
     var icon: String {
         switch self {
         case .pair: return "heart.fill"
-        case .family: return "house.fill"
+        case .family: return "clock.arrow.circlepath"
         case .future: return "moon.stars.fill"
         }
     }
+
+    /// 用户可选标签（编辑菜谱等）；不含 family
+    static var productCases: [MealScene] { [.pair, .future] }
 }

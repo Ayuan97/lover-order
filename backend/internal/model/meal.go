@@ -6,7 +6,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// 数据标签（非产品「三模式」）：pair=日常我们这顿；future=以后想吃；family=历史残留勿当产品模式
+// Scene 数据标签：pair=日常我们这顿；future=以后想吃；family=历史残留（无产品入口，仅解码旧行）
 const (
 	SceneCouple = "pair"
 	SceneFamily = "family"
@@ -33,7 +33,7 @@ const (
 type MealSession struct {
 	ID          uint           `json:"id" gorm:"primaryKey"`
 	Title       string         `json:"title" gorm:"size:64;comment:可选的一顿标题"`
-	Scene       string         `json:"scene" gorm:"type:enum('pair','family','future');default:'pair';index;comment:场景"`
+	Scene       string         `json:"scene" gorm:"type:enum('pair','family','future');default:'pair';index;comment:标签 pair日常 future以后想吃 family历史"`
 	Mood        string         `json:"mood" gorm:"type:enum('easy','normal','serious','change');default:'easy';comment:心情"`
 	PlannedAt   *time.Time     `json:"planned_at" gorm:"comment:打算吃的时间"`
 	ConfirmedAt *time.Time     `json:"confirmed_at" gorm:"comment:定下来的时间"`

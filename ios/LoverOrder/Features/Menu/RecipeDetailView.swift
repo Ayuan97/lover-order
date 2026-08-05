@@ -206,7 +206,7 @@ struct RecipeDetailView: View {
                 tagGroup(label: "适合心情", tags: moods.map { $0.label })
             }
             if let scenes = r.sceneTags, !scenes.isEmpty {
-                tagGroup(label: "适合场景", tags: scenes.map { $0.label })
+                tagGroup(label: "什么时候吃", tags: scenes.map { $0.label })
             }
             if let flavors = r.tags, !flavors.isEmpty {
                 tagGroup(label: "风味", tags: flavors)

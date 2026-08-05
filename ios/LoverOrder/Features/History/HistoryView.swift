@@ -125,7 +125,7 @@ struct HistoryView: View {
     }
 }
 
-// 历史卡片：水平长条 左侧场景小徽章 + 中间文字 + 右侧菜品图横向
+// 历史卡片：左侧类型标记 + 文字 + 菜品缩略图
 private struct HistoryCard: View {
     let meal: MealSession
 
@@ -189,7 +189,6 @@ private struct HistoryCard: View {
         }
     }
 
-    // 场景徽章 区分三种场景配色
     private var sceneBadge: some View {
         ZStack {
             Color.brandGreen.opacity(0.12)
@@ -204,7 +203,7 @@ private struct HistoryCard: View {
     private var peopleHint: String {
         switch meal.scene {
         case .pair: return "两个人"
-        case .family: return "旧记录"
+        case .family: return "更早"
         case .future: return "以后想吃"
         }
     }

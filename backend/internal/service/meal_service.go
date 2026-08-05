@@ -63,12 +63,13 @@ type MealList struct {
 	Items []model.MealSession `json:"items"`
 }
 
-// Current 取或创建当前规划中的一顿
+// Current 取或创建当前规划中的一顿；仅 pair/future（产品标签），禁止 family 再被 find-or-create
+// 历史 family 行仍可通过 Get 按 id 加载
 func (s *MealService) Current(householdID, userID uint, scene, mood string) (*model.MealSession, error) {
 	if scene == "" {
 		scene = model.SceneCouple
 	}
-	if !isValidScene(scene) {
+	if !isProductScene(scene) {
 		return nil, errors.New("scene 不合法")
 	}
 	if mood == "" {
@@ -129,7 +130,8 @@ func (s *MealService) Create(householdID, userID uint, in MealInput) (*model.Mea
 	if scene == "" {
 		scene = model.SceneCouple
 	}
-	if !isValidScene(scene) {
+	// 新建只允许产品标签 pair/future，禁止再开 family「模式」
+	if !isProductScene(scene) {
 		return nil, errors.New("scene 不合法")
 	}
 	mood := in.Mood
@@ -166,7 +168,7 @@ func (s *MealService) Update(householdID, id uint, in MealInput) (*model.MealSes
 		return nil, errors.New("这一顿已定下 无法修改")
 	}
 	if in.Scene != "" {
-		if !isValidScene(in.Scene) {
+		if !isProductScene(in.Scene) {
 			return nil, errors.New("scene 不合法")
 		}
 		m.Scene = in.Scene
@@ -480,7 +482,7 @@ type TopDishItem struct {
 	Count int64  `json:"count"`
 }
 
-// SceneCountItem 场景分布项
+// SceneCountItem 餐次标签分布（统计用，非产品模式切换）
 type SceneCountItem struct {
 	Scene string `json:"scene"`
 	Count int64  `json:"count"`

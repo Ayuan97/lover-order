@@ -15,7 +15,7 @@ type User struct {
 	Avatar       string         `json:"avatar" gorm:"size:512;comment:头像 URL"`
 	Gender       int8           `json:"gender" gorm:"default:0;comment:性别 0未知 1男 2女"`
 	HouseholdID  *uint          `json:"household_id" gorm:"index;comment:所属一个家"`
-	DefaultScene string         `json:"default_scene" gorm:"size:16;default:'pair';comment:默认场景 pair/family/future"`
+	DefaultScene string         `json:"default_scene" gorm:"size:16;default:'pair';comment:默认餐次标签 产品固定 pair"`
 	DefaultMood  string         `json:"default_mood" gorm:"size:16;default:'easy';comment:默认心情 easy/normal/serious/change"`
 	TastePrefs   JSON           `json:"taste_prefs" gorm:"type:json;comment:口味偏好标签"`
 	IsActive     bool           `json:"is_active" gorm:"default:true;index;comment:是否激活"`

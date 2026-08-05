@@ -258,8 +258,9 @@ func applyRecipeJSON(r *model.Recipe, in RecipeInput) error {
 		}
 	}
 	if in.SceneTags != nil {
+		// 写入只允许产品标签 pair/future；历史 family 标签可读但不可再写入
 		for _, sc := range in.SceneTags {
-			if !isValidScene(sc) {
+			if !isProductScene(sc) {
 				return fmt.Errorf("scene_tags 含非法值：%s", sc)
 			}
 		}

@@ -45,7 +45,7 @@ final class AppState: ObservableObject {
             let user = try await AuthService.shared.profile()
             currentUser = user
             bootstrapFailed = false
-            // 产品主轴固定情侣日常；不把 family/future 当作首页模式
+            // 产品主轴固定情侣日常我们这顿
             currentScene = .pair
             if let mood = user.defaultMood { currentMood = mood }
             if user.hasHousehold {

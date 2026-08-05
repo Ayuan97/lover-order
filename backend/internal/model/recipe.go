@@ -90,7 +90,7 @@ type Recipe struct {
 	Tips          string         `json:"tips" gorm:"type:text;comment:小贴士"`
 	Tags          JSON           `json:"tags" gorm:"type:json;comment:风味标签"`
 	MoodTags      JSON           `json:"mood_tags" gorm:"type:json;comment:适用心情 easy/normal/serious/change"`
-	SceneTags     JSON           `json:"scene_tags" gorm:"type:json;comment:适用场景标签"`
+	SceneTags     JSON           `json:"scene_tags" gorm:"type:json;comment:适用标签 pair/future"`
 	HouseholdID   uint           `json:"household_id" gorm:"not null;index;comment:所属一个家"`
 	CreatedBy     uint           `json:"created_by" gorm:"not null;index;comment:创建者"`
 	IsArchived    bool           `json:"is_archived" gorm:"default:false;index;comment:是否归档"`
