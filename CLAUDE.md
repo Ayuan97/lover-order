@@ -72,8 +72,76 @@ lover-order/
 │       ├── Features/          # Auth / Meal / Menu / History / Profile
 │       └── Resources/         # Assets.xcassets / Info.plist / entitlements
 ├── love/                       # 设计稿 PNG（不要删）
+├── Brewfile                    # Homebrew 工具链（go / mysql@8.0 / xcodegen）
 └── CLAUDE.md
 ```
+
+## 构建安装依赖
+
+无 Node / Java / Redis / Docker / CocoaPods / SPM 第三方包。配置只读 `backend/config.yaml`，无环境变量。必须在 `backend/` 目录启动服务，否则找不到配置文件。
+
+仓库根一键装 Homebrew 项：
+
+```bash
+brew bundle
+```
+
+### 系统工具链
+
+| 用途 | 包 / 软件 | 最低版本 | 安装 |
+|---|---|---|---|
+| 包管理 | Homebrew | 任意近期 | https://brew.sh |
+| 后端语言 | `go` | 1.24.4 | `brew install go` |
+| 数据库 | `mysql@8.0` | 8.0+ | `brew install mysql@8.0` 后 `brew services start mysql@8.0` |
+| iOS 工程生成 | `xcodegen` | 2.x | `brew install xcodegen` |
+| iOS 编译 / 模拟器 | **Xcode**（完整 IDE，不是 Command Line Tools） | 含 iOS 17 SDK | App Store，然后 `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` |
+| iOS 真机签名 | Apple 开发者账号 | Team `7QFF99S2V4` 已写在 `ios/project.yml` | Xcode Automatic signing |
+
+### 后端 Go 直接依赖（`backend/go.mod`）
+
+`cd backend && go mod tidy` 拉齐即可，不用手装。
+
+- `github.com/gin-gonic/gin` v1.10.1
+- `github.com/golang-jwt/jwt/v4` v4.5.2
+- `github.com/spf13/viper` v1.20.1
+- `gorm.io/gorm` v1.30.0
+- `gorm.io/driver/mysql` v1.6.0
+
+间接关键：`github.com/go-sql-driver/mysql` v1.8.1。
+
+AutoMigrate **不建库**。先建库再启服务（账号密码以 `config.yaml` 为准，默认 `root` / `root`）：
+
+```bash
+mysql -u root -proot -e "CREATE DATABASE IF NOT EXISTS lover_order CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+cd backend && go run ./cmd/server
+```
+
+服务监听 `:8081`。`GET /health` 探活。开发登录 `POST /api/v1/auth/dev` 仅非 release。
+
+### iOS（无第三方包）
+
+系统框架（`import`，不用声明）：SwiftUI、Combine、AuthenticationServices、Security、PhotosUI、AVFoundation、CoreImage。
+
+```bash
+cd ios && xcodegen generate && open LoverOrder.xcodeproj
+```
+
+模拟器打 `http://localhost:8081/api/v1`；真机打 `Info.plist` 的 `API_BASE_URL`。
+
+`ios/LoverOrder/Resources/LoverOrder.entitlements` 有 Sign in with Apple，但 `ios/project.yml` 未挂 `CODE_SIGN_ENTITLEMENTS`，`xcodegen generate` 后能力不会自动进工程。
+
+### 启动顺序
+
+1. `brew services start mysql@8.0`（或确认 mysqld 已在跑）
+2. 建库 `lover_order`（若尚未创建）
+3. `cd backend && go run ./cmd/server`
+4. 装好完整 Xcode 后：`cd ios && xcodegen generate && open LoverOrder.xcodeproj`
+
+### 开发机核对（2026-09-03）
+
+已齐：Homebrew、Go 1.25.1（满足 go.mod 1.24.4）、MySQL 8.0.46（库 `lover_order` 已存在）、XcodeGen 2.45.4。
+
+缺口：没有完整 Xcode（`xcode-select` 只指向 Command Line Tools）→ iOS 编不了。工作区若缺 `LoverOrderApp.swift` / `RootView.swift` / `MainTabView.swift`，没有 `@main`，装了 Xcode 也编不过。
 
 ## 常用命令
 
