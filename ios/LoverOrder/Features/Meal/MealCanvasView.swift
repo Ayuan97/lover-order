@@ -25,6 +25,7 @@ struct MealCanvasView: View {
     @State private var brushColor: CanvasBrushColor = .white
     @State private var brushWidth: CGFloat = 4
     @State private var selectedStickerID: UUID?
+    @State private var selectedNoteID: UUID?
     @State private var drawingEnabled = false
     @State private var showBackgroundPicker = false
     @State private var showInsertPicker = false
@@ -44,7 +45,10 @@ struct MealCanvasView: View {
                     header
 
                     canvas
-                    if selectedStickerID != nil {
+                    if selectedCanvasElement != nil {
+                        selectionTools
+                    }
+                    if selectedCanvasElement != nil {
                         transformBar
                     }
                     actionBar
@@ -101,6 +105,7 @@ struct MealCanvasView: View {
         .onAppear { restoreDocumentIfNeeded() }
         .onChange(of: vm.meal?.id) { _, _ in
             selectedStickerID = nil
+            selectedNoteID = nil
             activeStroke.removeAll()
             restoreDocumentIfNeeded()
         }
@@ -194,17 +199,27 @@ struct MealCanvasView: View {
                         canvasSize: proxy.size,
                         isSelected: sticker.id == selectedStickerID,
                         reduceMotion: reduceMotion,
-                        onSelect: { selectedStickerID = sticker.id },
+                        onSelect: {
+                            selectedStickerID = sticker.id
+                            selectedNoteID = nil
+                        },
                         onChange: saveDocument
                     )
+                    .zIndex(Double(sticker.layer))
                 }
 
                 ForEach($notes) { $note in
                     CanvasNoteView(
                         note: $note,
                         canvasSize: proxy.size,
+                        isSelected: note.id == selectedNoteID,
+                        onSelect: {
+                            selectedStickerID = nil
+                            selectedNoteID = note.id
+                        },
                         onChange: saveDocument
                     )
+                    .zIndex(Double(note.layer))
                 }
 
                 CanvasDrawingView(
@@ -249,7 +264,10 @@ struct MealCanvasView: View {
             .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
             .onTapGesture {
-                if !drawingEnabled { selectedStickerID = nil }
+                if !drawingEnabled {
+                    selectedStickerID = nil
+                    selectedNoteID = nil
+                }
             }
         }
         .aspectRatio(0.78, contentMode: .fit)
@@ -301,6 +319,61 @@ struct MealCanvasView: View {
         .foregroundStyle(.white)
     }
 
+    private var selectedCanvasElement: CanvasSelection? {
+        if let selectedStickerID { return .sticker(selectedStickerID) }
+        if let selectedNoteID { return .note(selectedNoteID) }
+        return nil
+    }
+
+    private var selectedElementTitle: String {
+        switch selectedCanvasElement {
+        case .sticker(let id):
+            return stickers.first(where: { $0.id == id })?.name ?? "菜品"
+        case .note(let id):
+            guard let note = notes.first(where: { $0.id == id }) else { return "画布元素" }
+            return note.isEmoji ? "\(note.text) 表情" : "文字"
+        case nil:
+            return "画布元素"
+        }
+    }
+
+    private var selectionTools: some View {
+        HStack(spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: selectedCanvasElement?.icon ?? "square.3.layers.3d")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(CanvasPalette.accent)
+                    .frame(width: 22, height: 22)
+                    .background(CanvasPalette.accent.opacity(0.13), in: Circle())
+                Text(selectedElementTitle)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(CanvasPalette.ink)
+                    .lineLimit(1)
+            }
+            .frame(width: 76, alignment: .leading)
+
+            CanvasSelectionAction(title: "置底", icon: "arrow.down.to.line") {
+                moveSelectedLayer(.back)
+            }
+            CanvasSelectionAction(title: "下移", icon: "chevron.down") {
+                moveSelectedLayer(.backward)
+            }
+            CanvasSelectionAction(title: "上移", icon: "chevron.up") {
+                moveSelectedLayer(.forward)
+            }
+            CanvasSelectionAction(title: "置顶", icon: "arrow.up.to.line") {
+                moveSelectedLayer(.front)
+            }
+            CanvasSelectionAction(title: "删除", icon: "trash", role: .destructive) {
+                deleteSelectedElement()
+            }
+        }
+        .padding(7)
+        .frame(height: 58)
+        .background(CanvasPalette.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(CanvasPalette.ink.opacity(0.08), lineWidth: 1))
+    }
+
     private var transformBar: some View {
         HStack(spacing: 12) {
             Image(systemName: "arrow.up.left.and.arrow.down.right")
@@ -309,7 +382,7 @@ struct MealCanvasView: View {
             Slider(value: selectedScaleBinding, in: 0.55...1.75)
                 .tint(CanvasPalette.accent)
                 .frame(maxWidth: .infinity)
-                .accessibilityLabel("菜品大小")
+                .accessibilityLabel("元素大小")
 
             Image(systemName: "rotate.right")
                 .font(.system(size: 13, weight: .semibold))
@@ -317,13 +390,21 @@ struct MealCanvasView: View {
             Slider(value: selectedRotationBinding, in: -180...180)
                 .tint(CanvasPalette.accent)
                 .frame(maxWidth: .infinity)
-                .accessibilityLabel("菜品旋转")
+                .accessibilityLabel("元素旋转")
 
             Button {
-                guard let selectedStickerID,
-                      let index = stickers.firstIndex(where: { $0.id == selectedStickerID }) else { return }
-                stickers[index].scale = 1
-                stickers[index].rotationDegrees = 0
+                switch selectedCanvasElement {
+                case .sticker(let id):
+                    guard let index = stickers.firstIndex(where: { $0.id == id }) else { return }
+                    stickers[index].scale = 1
+                    stickers[index].rotationDegrees = 0
+                case .note(let id):
+                    guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+                    notes[index].scale = 1
+                    notes[index].rotationDegrees = 0
+                case nil:
+                    return
+                }
                 saveDocument()
             } label: {
                 Text("重置")
@@ -339,21 +420,28 @@ struct MealCanvasView: View {
         .frame(height: 44)
         .background(CanvasPalette.surface, in: Capsule())
         .overlay(Capsule().stroke(CanvasPalette.ink.opacity(0.08), lineWidth: 1))
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("调整选中的菜品")
     }
 
     private var selectedScaleBinding: Binding<CGFloat> {
         Binding(
             get: {
-                guard let selectedStickerID,
-                      let sticker = stickers.first(where: { $0.id == selectedStickerID }) else { return 1 }
-                return sticker.scale
+                switch selectedCanvasElement {
+                case .sticker(let id): return stickers.first(where: { $0.id == id })?.scale ?? 1
+                case .note(let id): return notes.first(where: { $0.id == id })?.scale ?? 1
+                case nil: return 1
+                }
             },
             set: { value in
-                guard let selectedStickerID,
-                      let index = stickers.firstIndex(where: { $0.id == selectedStickerID }) else { return }
-                stickers[index].scale = value
+                switch selectedCanvasElement {
+                case .sticker(let id):
+                    guard let index = stickers.firstIndex(where: { $0.id == id }) else { return }
+                    stickers[index].scale = value
+                case .note(let id):
+                    guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+                    notes[index].scale = value
+                case nil:
+                    return
+                }
                 saveDocument()
             }
         )
@@ -362,17 +450,75 @@ struct MealCanvasView: View {
     private var selectedRotationBinding: Binding<Double> {
         Binding(
             get: {
-                guard let selectedStickerID,
-                      let sticker = stickers.first(where: { $0.id == selectedStickerID }) else { return 0 }
-                return sticker.rotationDegrees
+                switch selectedCanvasElement {
+                case .sticker(let id): return stickers.first(where: { $0.id == id })?.rotationDegrees ?? 0
+                case .note(let id): return notes.first(where: { $0.id == id })?.rotationDegrees ?? 0
+                case nil: return 0
+                }
             },
             set: { value in
-                guard let selectedStickerID,
-                      let index = stickers.firstIndex(where: { $0.id == selectedStickerID }) else { return }
-                stickers[index].rotationDegrees = value
+                switch selectedCanvasElement {
+                case .sticker(let id):
+                    guard let index = stickers.firstIndex(where: { $0.id == id }) else { return }
+                    stickers[index].rotationDegrees = value
+                case .note(let id):
+                    guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+                    notes[index].rotationDegrees = value
+                case nil:
+                    return
+                }
                 saveDocument()
             }
         )
+    }
+
+    private var layerEntries: [CanvasLayerEntry] {
+        stickers.map { CanvasLayerEntry(selection: .sticker($0.id), layer: $0.layer) }
+            + notes.map { CanvasLayerEntry(selection: .note($0.id), layer: $0.layer) }
+    }
+
+    private func moveSelectedLayer(_ move: CanvasLayerMove) {
+        guard let selected = selectedCanvasElement else { return }
+        let ordered = layerEntries.sorted { $0.layer < $1.layer }
+        guard let currentIndex = ordered.firstIndex(where: { $0.selection == selected }) else { return }
+
+        switch move {
+        case .front:
+            setLayer((ordered.last?.layer ?? 0) + 1, for: selected)
+        case .back:
+            setLayer((ordered.first?.layer ?? 0) - 1, for: selected)
+        case .forward, .backward:
+            let targetIndex = move == .forward ? currentIndex + 1 : currentIndex - 1
+            guard ordered.indices.contains(targetIndex) else { return }
+            let other = ordered[targetIndex]
+            setLayer(other.layer, for: selected)
+            setLayer(ordered[currentIndex].layer, for: other.selection)
+        }
+        saveDocument()
+    }
+
+    private func setLayer(_ layer: Int, for selection: CanvasSelection) {
+        switch selection {
+        case .sticker(let id):
+            guard let index = stickers.firstIndex(where: { $0.id == id }) else { return }
+            stickers[index].layer = layer
+        case .note(let id):
+            guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+            notes[index].layer = layer
+        }
+    }
+
+    private func deleteSelectedElement() {
+        guard let selected = selectedCanvasElement else { return }
+        switch selected {
+        case .sticker(let id):
+            stickers.removeAll { $0.id == id }
+            selectedStickerID = nil
+        case .note(let id):
+            notes.removeAll { $0.id == id }
+            selectedNoteID = nil
+        }
+        saveDocument()
     }
 
     private var actionBar: some View {
@@ -410,10 +556,16 @@ struct MealCanvasView: View {
         !notes.isEmpty || !strokes.isEmpty || !activeStroke.isEmpty
     }
 
+    private var nextLayerIndex: Int {
+        let highest = (stickers.map(\.layer) + notes.map(\.layer)).max() ?? -1
+        return highest + 1
+    }
+
     private func clearCanvasAdditions() {
         notes.removeAll()
         strokes.removeAll()
         activeStroke.removeAll()
+        selectedNoteID = nil
         saveDocument()
     }
 
@@ -467,7 +619,10 @@ struct MealCanvasView: View {
     private func insert(_ item: CanvasInsertItem) {
         switch item {
         case .text:
-            notes.append(CanvasNote(text: "今晚吃点好的", isEmoji: false, position: CanvasPoint(x: 0.50, y: 0.22)))
+            let note = CanvasNote(text: "今晚吃点好的", isEmoji: false, position: CanvasPoint(x: 0.50, y: 0.22), layer: nextLayerIndex)
+            notes.append(note)
+            selectedStickerID = nil
+            selectedNoteID = note.id
         case .emoji:
             insertEmoji("♥︎")
         }
@@ -475,12 +630,16 @@ struct MealCanvasView: View {
     }
 
     private func insertEmoji(_ emoji: String) {
-        notes.append(CanvasNote(text: emoji, isEmoji: true, position: CanvasPoint(x: 0.78, y: 0.73)))
+        let note = CanvasNote(text: emoji, isEmoji: true, position: CanvasPoint(x: 0.78, y: 0.73), layer: nextLayerIndex)
+        notes.append(note)
+        selectedStickerID = nil
+        selectedNoteID = note.id
         saveDocument()
     }
 
     private func syncStickers() {
         let existing = Dictionary(uniqueKeysWithValues: stickers.map { ($0.mealDishID, $0) })
+        var newLayer = nextLayerIndex
         let positions: [CanvasPoint] = [
             CanvasPoint(x: 0.28, y: 0.27),
             CanvasPoint(x: 0.72, y: 0.25),
@@ -496,6 +655,8 @@ struct MealCanvasView: View {
                 }
                 return old
             }
+            let layer = newLayer
+            newLayer += 1
             return CanvasSticker(
                 mealDishID: dish.id,
                 name: dish.recipeName,
@@ -504,7 +665,8 @@ struct MealCanvasView: View {
                 position: positions[index % positions.count],
                 scale: [0.92, 0.78, 1.08, 0.86, 0.72, 0.98][index % 6],
                 rotationDegrees: [(-8.0), 6.0, -4.0, 9.0, -12.0, 3.0][index % 6],
-                shapeIndex: index % 5
+                shapeIndex: index % 5,
+                layer: layer
             )
         }
         if let selectedStickerID, !stickers.contains(where: { $0.id == selectedStickerID }) {
@@ -540,6 +702,7 @@ struct MealCanvasView: View {
             notes = document.notes
             strokes = document.strokes
             activeStroke = []
+            migrateLegacyLayerOrderIfNeeded()
         } else {
             background = .meadow
             blur = 3.0
@@ -549,8 +712,23 @@ struct MealCanvasView: View {
             strokes = []
             activeStroke = []
             selectedStickerID = nil
+            selectedNoteID = nil
         }
         syncStickers()
+    }
+
+    private func migrateLegacyLayerOrderIfNeeded() {
+        let layers = stickers.map(\.layer) + notes.map(\.layer)
+        guard layers.count > 1, Set(layers).count == 1 else { return }
+        var nextLayer = 0
+        for index in stickers.indices {
+            stickers[index].layer = nextLayer
+            nextLayer += 1
+        }
+        for index in notes.indices {
+            notes[index].layer = nextLayer
+            nextLayer += 1
+        }
     }
 
     private func saveDocument() {
@@ -582,6 +760,27 @@ private enum CanvasPalette {
 private struct CanvasPoint: Codable, Hashable {
     var x: CGFloat
     var y: CGFloat
+}
+
+private enum CanvasSelection: Hashable {
+    case sticker(UUID)
+    case note(UUID)
+
+    var icon: String {
+        switch self {
+        case .sticker: return "fork.knife"
+        case .note: return "face.smiling"
+        }
+    }
+}
+
+private enum CanvasLayerMove: Equatable {
+    case front, forward, backward, back
+}
+
+private struct CanvasLayerEntry {
+    let selection: CanvasSelection
+    let layer: Int
 }
 
 private enum CanvasBrushColor: String, CaseIterable, Identifiable, Codable {
@@ -822,6 +1021,7 @@ private struct CanvasSticker: Identifiable, Codable, Hashable {
     var rotationDegrees: Double
     var effect: CanvasEffect = .none
     var shapeIndex: Int = 0
+    var layer: Int = 0
 
     init(
         id: UUID = UUID(),
@@ -833,7 +1033,8 @@ private struct CanvasSticker: Identifiable, Codable, Hashable {
         scale: CGFloat = 1,
         rotationDegrees: Double = 0,
         effect: CanvasEffect = .none,
-        shapeIndex: Int = 0
+        shapeIndex: Int = 0,
+        layer: Int = 0
     ) {
         self.id = id
         self.mealDishID = mealDishID
@@ -845,6 +1046,26 @@ private struct CanvasSticker: Identifiable, Codable, Hashable {
         self.rotationDegrees = rotationDegrees
         self.effect = effect
         self.shapeIndex = shapeIndex
+        self.layer = layer
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, mealDishID, name, image, assetName, position, scale, rotationDegrees, effect, shapeIndex, layer
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        mealDishID = try container.decode(UInt.self, forKey: .mealDishID)
+        name = try container.decode(String.self, forKey: .name)
+        image = try container.decodeIfPresent(String.self, forKey: .image)
+        assetName = try container.decodeIfPresent(String.self, forKey: .assetName)
+        position = try container.decode(CanvasPoint.self, forKey: .position)
+        scale = try container.decodeIfPresent(CGFloat.self, forKey: .scale) ?? 1
+        rotationDegrees = try container.decodeIfPresent(Double.self, forKey: .rotationDegrees) ?? 0
+        effect = try container.decodeIfPresent(CanvasEffect.self, forKey: .effect) ?? .none
+        shapeIndex = try container.decodeIfPresent(Int.self, forKey: .shapeIndex) ?? 0
+        layer = try container.decodeIfPresent(Int.self, forKey: .layer) ?? 0
     }
 }
 
@@ -962,7 +1183,10 @@ private struct CanvasStickerView: View {
 
     private var magnifyGesture: some Gesture {
         MagnificationGesture()
-            .updating($pinch) { value, state, _ in state = value }
+            .updating($pinch) { value, state, _ in
+                onSelect()
+                state = value
+            }
             .onEnded { value in
                 sticker.scale = min(max(sticker.scale * value, 0.55), 1.75)
                 onChange()
@@ -971,7 +1195,10 @@ private struct CanvasStickerView: View {
 
     private var rotationGesture: some Gesture {
         RotationGesture()
-            .updating($twist) { value, state, _ in state = value }
+            .updating($twist) { value, state, _ in
+                onSelect()
+                state = value
+            }
             .onEnded { value in
                 sticker.rotationDegrees += value.degrees
                 onChange()
@@ -1062,21 +1289,54 @@ private struct CanvasNote: Identifiable, Codable, Hashable {
     var text: String
     var isEmoji: Bool
     var position: CanvasPoint
+    var scale: CGFloat
+    var rotationDegrees: Double
+    var layer: Int
 
-    init(id: UUID = UUID(), text: String, isEmoji: Bool, position: CanvasPoint) {
+    init(
+        id: UUID = UUID(),
+        text: String,
+        isEmoji: Bool,
+        position: CanvasPoint,
+        scale: CGFloat = 1,
+        rotationDegrees: Double = 0,
+        layer: Int = 0
+    ) {
         self.id = id
         self.text = text
         self.isEmoji = isEmoji
         self.position = position
+        self.scale = scale
+        self.rotationDegrees = rotationDegrees
+        self.layer = layer
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, text, isEmoji, position, scale, rotationDegrees, layer
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        text = try container.decode(String.self, forKey: .text)
+        isEmoji = try container.decode(Bool.self, forKey: .isEmoji)
+        position = try container.decode(CanvasPoint.self, forKey: .position)
+        scale = try container.decodeIfPresent(CGFloat.self, forKey: .scale) ?? 1
+        rotationDegrees = try container.decodeIfPresent(Double.self, forKey: .rotationDegrees) ?? 0
+        layer = try container.decodeIfPresent(Int.self, forKey: .layer) ?? 0
     }
 }
 
 private struct CanvasNoteView: View {
     @Binding var note: CanvasNote
     let canvasSize: CGSize
+    let isSelected: Bool
+    let onSelect: () -> Void
     let onChange: () -> Void
 
     @GestureState private var drag: CGSize = .zero
+    @GestureState private var pinch: CGFloat = 1
+    @GestureState private var twist: Angle = .zero
 
     var body: some View {
         Text(note.text)
@@ -1086,13 +1346,27 @@ private struct CanvasNoteView: View {
             .padding(.horizontal, note.isEmoji ? 0 : 10)
             .padding(.vertical, note.isEmoji ? 0 : 6)
             .background(note.isEmoji ? .clear : .black.opacity(0.20), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: note.isEmoji ? 18 : 9, style: .continuous)
+                        .stroke(.white.opacity(0.92), style: StrokeStyle(lineWidth: 1.6, dash: [4, 3]))
+                        .padding(note.isEmoji ? -6 : -3)
+                }
+            }
             .position(
                 x: canvasSize.width * note.position.x + drag.width,
                 y: canvasSize.height * note.position.y + drag.height
             )
+            .scaleEffect(note.scale * pinch)
+            .rotationEffect(.degrees(note.rotationDegrees) + twist)
+            .contentShape(Rectangle())
+            .onTapGesture { onSelect() }
             .simultaneousGesture(
                 DragGesture()
-                    .updating($drag) { value, state, _ in state = value.translation }
+                    .updating($drag) { value, state, _ in
+                        onSelect()
+                        state = value.translation
+                    }
                     .onEnded { value in
                         guard canvasSize.width > 0, canvasSize.height > 0 else { return }
                         note.position.x = min(max(note.position.x + value.translation.width / canvasSize.width, 0.08), 0.92)
@@ -1100,6 +1374,31 @@ private struct CanvasNoteView: View {
                         onChange()
                     }
             )
+            .simultaneousGesture(
+                MagnificationGesture()
+                    .updating($pinch) { value, state, _ in
+                        onSelect()
+                        state = value
+                    }
+                    .onEnded { value in
+                        note.scale = min(max(note.scale * value, 0.55), 1.75)
+                        onChange()
+                    }
+            )
+            .simultaneousGesture(
+                RotationGesture()
+                    .updating($twist) { value, state, _ in
+                        onSelect()
+                        state = value
+                    }
+                    .onEnded { value in
+                        note.rotationDegrees += value.degrees
+                        onChange()
+                    }
+            )
+            .accessibilityLabel(note.isEmoji ? "\(note.text)表情" : "画布文字")
+            .accessibilityHint("点按选中，拖动移动，双指缩放或旋转")
+            .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -1249,6 +1548,38 @@ private struct LiveControlButton: View {
         case "speaker.slash", "speaker.wave.2": return "声音"
         default: return "画布工具"
         }
+    }
+}
+
+private struct CanvasSelectionAction: View {
+    let title: String
+    let icon: String
+    var role: ButtonRole?
+    let action: () -> Void
+
+    init(title: String, icon: String, role: ButtonRole? = nil, action: @escaping () -> Void) {
+        self.title = title
+        self.icon = icon
+        self.role = role
+        self.action = action
+    }
+
+    var body: some View {
+        Button(role: role, action: action) {
+            VStack(spacing: 2) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 9, weight: .medium))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 38)
+            .foregroundStyle(role == .destructive ? CanvasPalette.coral : CanvasPalette.ink)
+            .background(CanvasPalette.page, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
     }
 }
 
