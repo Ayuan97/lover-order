@@ -61,7 +61,7 @@ final class MealNowViewModel: ObservableObject {
     }
 
     var mealReady: Bool {
-        meal != nil && !loadFailed
+        meal != nil
     }
 
     func load(scene: MealScene, mood: Mood) async {
@@ -69,25 +69,34 @@ final class MealNowViewModel: ObservableObject {
         let seq = loadSeq
         isLoading = true
         errorMessage = nil
-        loadFailed = false
         defer {
             if seq == loadSeq { isLoading = false }
         }
-        do {
-            async let current = mealService.current(scene: scene, mood: mood)
-            async let suggList = recipeService.list(.init(mood: mood, scene: scene, page: 1, pageSize: 3))
-            async let freqList = recipeService.list(.init(page: 1, pageSize: 4))
-            let (m, s, f) = try await (current, suggList, freqList)
-            guard seq == loadSeq else { return }
-            self.meal = m
-            self.suggestions = s.items
-            self.frequents = f.items
-            restorePendingReview()
-        } catch {
-            guard seq == loadSeq else { return }
-            loadFailed = true
-            errorMessage = error.localizedDescription
-            restorePendingReview()
+
+        // WHY: 三个接口绑死时 current 一挂整页空，菜谱其实已经回来了
+        let currentTask = Task { try await mealService.current(scene: scene, mood: mood) }
+        let suggTask = Task { try await recipeService.list(.init(mood: mood, scene: scene, page: 1, pageSize: 20)) }
+        let freqTask = Task { try await recipeService.list(.init(page: 1, pageSize: 20)) }
+
+        let currentRes = await currentTask.result
+        let suggRes = await suggTask.result
+        let freqRes = await freqTask.result
+        guard seq == loadSeq else { return }
+
+        switch currentRes {
+        case .success(let m):
+            meal = m
+            loadFailed = false
+        case .failure:
+            if meal == nil { loadFailed = true }
+        }
+        if case .success(let s) = suggRes { suggestions = s.items }
+        if case .success(let f) = freqRes { frequents = f.items }
+
+        restorePendingReview()
+        if case .failure(let err) = currentRes,
+           meal == nil, suggestions.isEmpty, frequents.isEmpty {
+            errorMessage = err.localizedDescription
         }
     }
 
@@ -211,8 +220,8 @@ final class MealNowViewModel: ObservableObject {
             }
         }
         do {
-            async let suggList = recipeService.list(.init(mood: mood, scene: scene, page: 1, pageSize: 3))
-            async let freqList = recipeService.list(.init(page: 1, pageSize: 4))
+            async let suggList = recipeService.list(.init(mood: mood, scene: scene, page: 1, pageSize: 20))
+            async let freqList = recipeService.list(.init(page: 1, pageSize: 20))
             let (s, f) = try await (suggList, freqList)
             guard seq == loadSeq else { return }
             suggestions = s.items
@@ -220,6 +229,18 @@ final class MealNowViewModel: ObservableObject {
         } catch {
             guard seq == loadSeq else { return }
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func refreshIdeas(scene: MealScene, mood: Mood) async {
+        do {
+            async let suggList = recipeService.list(.init(mood: mood, scene: scene, page: 1, pageSize: 20))
+            async let freqList = recipeService.list(.init(page: 1, pageSize: 20))
+            let (s, f) = try await (suggList, freqList)
+            suggestions = s.items
+            frequents = f.items
+        } catch {
+            // 桌上已经换过了，推荐刷新失败不挡加菜
         }
     }
 
@@ -236,6 +257,8 @@ final class MealNowViewModel: ObservableObject {
             _ = try await mealService.addDish(mealId: meal.id, dish: DishInput(recipeId: recipe.id))
             self.meal = try await mealService.detail(id: meal.id)
             Haptics.light()
+            // WHY: 加菜会改 last_used_at，不换一批的话「还可以试试」全是刚点的
+            await refreshIdeas(scene: meal.scene, mood: meal.mood)
         } catch {
             errorMessage = error.localizedDescription
         }

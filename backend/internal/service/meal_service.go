@@ -79,26 +79,34 @@ func (s *MealService) Current(householdID, userID uint, scene, mood string) (*mo
 		return nil, errors.New("mood 不合法")
 	}
 
-	// WHY: 同一 (household, scene) 的 find-or-create 必须串行；无唯一约束时并发会各插一行 planning 孤儿
-	var result *model.MealSession
-	err := model.DB.Connection(func(conn *gorm.DB) error {
+	var m model.MealSession
+	err := model.DB.Where("household_id = ? AND scene = ? AND status IN ?",
+		householdID, scene, []string{model.MealStatusPlanning, model.MealStatusConfirmed}).
+		Preload("Dishes.Adder").Order("id DESC").First(&m).Error
+	if err == nil {
+		return &m, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	// WHY: 只在没有进行中的顿时才加锁创建；首页每 4 秒读 current，全程 GET_LOCK 会排队超时
+	// WHY: 锁连接上 First 的 record not found 会粘在会话里，Create 会被 GORM 直接跳过；读写走默认连接
+	err = model.DB.Connection(func(lock *gorm.DB) error {
 		lockName := fmt.Sprintf("meal_current_%d_%s", householdID, scene)
 		var got int
-		if err := conn.Raw("SELECT GET_LOCK(?, 5)", lockName).Scan(&got).Error; err != nil {
+		if err := lock.Raw("SELECT GET_LOCK(?, 3)", lockName).Scan(&got).Error; err != nil {
 			return err
 		}
 		if got != 1 {
 			return errors.New("获取当前一顿繁忙 请稍后重试")
 		}
-		defer func() { _ = conn.Exec("SELECT RELEASE_LOCK(?)", lockName).Error }()
+		defer func() { _ = lock.Exec("SELECT RELEASE_LOCK(?)", lockName).Error }()
 
-		var m model.MealSession
-		err := conn.Where("household_id = ? AND scene = ? AND status IN ?",
+		err := model.DB.Where("household_id = ? AND scene = ? AND status IN ?",
 			householdID, scene, []string{model.MealStatusPlanning, model.MealStatusConfirmed}).
 			Preload("Dishes.Adder").Order("id DESC").First(&m).Error
 		if err == nil {
-			// 不静默把 confirmed 空菜降回 planning：否则等于没点「算了 重选」就撤销「就这些」
-			result = &m
 			return nil
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -112,16 +120,12 @@ func (s *MealService) Current(householdID, userID uint, scene, mood string) (*mo
 			HouseholdID: householdID,
 			CreatedBy:   userID,
 		}
-		if err := conn.Create(&m).Error; err != nil {
-			return err
-		}
-		result = &m
-		return nil
+		return model.DB.Create(&m).Error
 	})
 	if err != nil {
 		return nil, err
 	}
-	return result, nil
+	return &m, nil
 }
 
 // Create 显式创建一顿

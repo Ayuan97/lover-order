@@ -21,6 +21,7 @@ struct MoodChip: View {
             .background(isSelected ? Color.brandGreen : Color.cardBackground)
             .clipShape(Capsule(style: .continuous))
             .capsuleHairline(color: isSelected ? .clear : Color.dividerLine.opacity(0.7))
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
     }
