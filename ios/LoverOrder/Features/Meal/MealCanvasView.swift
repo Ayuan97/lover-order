@@ -96,11 +96,22 @@ struct MealCanvasView: View {
                 .presentationDetents([.medium])
         }
         .sheet(isPresented: $showEffectPicker) {
-            CanvasEffectPicker { effect in
-                applyEffect(effect)
-                showEffectPicker = false
+            switch selectedCanvasElement {
+            case .sticker:
+                CanvasEffectPicker { effect in
+                    applyEffect(effect)
+                    showEffectPicker = false
+                }
+                .presentationDetents([.height(300)])
+            case .note:
+                CanvasTextEffectPicker(selected: selectedTextEffect) { effect in
+                    applyTextEffect(effect)
+                    showEffectPicker = false
+                }
+                .presentationDetents([.height(340)])
+            case nil:
+                EmptyView()
             }
-            .presentationDetents([.height(300)])
         }
         .onAppear { restoreDocumentIfNeeded() }
         .onChange(of: vm.meal?.id) { _, _ in
@@ -294,7 +305,7 @@ struct MealCanvasView: View {
             LiveControlButton(title: "Aa", icon: nil) {
                 showInsertPicker = true
             }
-            LiveControlButton(title: nil, icon: "sparkles", isDisabled: selectedStickerID == nil) {
+            LiveControlButton(title: nil, icon: "sparkles", isDisabled: selectedCanvasElement == nil) {
                 showEffectPicker = true
             }
             LiveControlButton(title: nil, icon: "pencil.tip", isActive: drawingEnabled) {
@@ -340,6 +351,11 @@ struct MealCanvasView: View {
         case nil:
             return "画布元素"
         }
+    }
+
+    private var selectedTextEffect: CanvasTextEffect? {
+        guard case .note(let id) = selectedCanvasElement else { return nil }
+        return notes.first(where: { $0.id == id })?.textEffect
     }
 
     private var selectionTools: some View {
@@ -690,6 +706,13 @@ struct MealCanvasView: View {
         guard let selectedStickerID,
               let index = stickers.firstIndex(where: { $0.id == selectedStickerID }) else { return }
         stickers[index].effect = effect
+        saveDocument()
+    }
+
+    private func applyTextEffect(_ effect: CanvasTextEffect) {
+        guard let selectedNoteID,
+              let index = notes.firstIndex(where: { $0.id == selectedNoteID }) else { return }
+        notes[index].textEffect = effect
         saveDocument()
     }
 
@@ -1104,6 +1127,88 @@ private enum CanvasEffect: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+private enum CanvasTextEffect: String, CaseIterable, Identifiable, Codable {
+    case plain
+    case typewriter
+    case float
+    case distort
+    case fade
+    case bounce
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .plain: return "普通"
+        case .typewriter: return "打字"
+        case .float: return "漂浮"
+        case .distort: return "扭曲"
+        case .fade: return "浮现"
+        case .bounce: return "跳动"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .plain: return "textformat"
+        case .typewriter: return "keyboard"
+        case .float: return "arrow.up.and.down"
+        case .distort: return "scribble.variable"
+        case .fade: return "circle.lefthalf.filled"
+        case .bounce: return "arrow.up.and.down.circle"
+        }
+    }
+
+    func visibleText(_ text: String, time: TimeInterval, reduceMotion: Bool) -> String {
+        guard self == .typewriter, !reduceMotion else { return text }
+        let characters = Array(text)
+        guard !characters.isEmpty else { return text }
+        let cycle = 4.8
+        let elapsed = positiveRemainder(time, cycle: cycle)
+        let reveal = min(max((elapsed - 0.25) / 2.9, 0), 1)
+        let count = Int((Double(characters.count) * reveal).rounded(.down))
+        return String(characters.prefix(count))
+    }
+
+    func opacity(time: TimeInterval, reduceMotion: Bool) -> Double {
+        guard self == .fade, !reduceMotion else { return 1 }
+        let wave = (sin(time * 1.55 - .pi / 2) + 1) * 0.5
+        return 0.30 + wave * 0.70
+    }
+
+    func offset(time: TimeInterval, reduceMotion: Bool) -> CGSize {
+        guard !reduceMotion else { return .zero }
+        switch self {
+        case .float:
+            return CGSize(width: 0, height: sin(time * 1.25) * 6)
+        case .bounce:
+            return CGSize(width: 0, height: -abs(sin(time * 2.1)) * 5)
+        default:
+            return .zero
+        }
+    }
+
+    func scaleX(time: TimeInterval, reduceMotion: Bool) -> CGFloat {
+        guard self == .distort, !reduceMotion else { return 1 }
+        return CGFloat(1 + sin(time * 1.8) * 0.09)
+    }
+
+    func scaleY(time: TimeInterval, reduceMotion: Bool) -> CGFloat {
+        guard self == .distort, !reduceMotion else { return 1 }
+        return CGFloat(1 - sin(time * 1.8) * 0.06)
+    }
+
+    func rotation(time: TimeInterval, reduceMotion: Bool) -> Double {
+        guard self == .distort, !reduceMotion else { return 0 }
+        return sin(time * 1.8) * 4
+    }
+
+    private func positiveRemainder(_ value: TimeInterval, cycle: TimeInterval) -> TimeInterval {
+        let remainder = value.truncatingRemainder(dividingBy: cycle)
+        return remainder >= 0 ? remainder : remainder + cycle
+    }
+}
+
 private struct CanvasStickerView: View {
     @Binding var sticker: CanvasSticker
     let canvasSize: CGSize
@@ -1297,6 +1402,7 @@ private struct CanvasNote: Identifiable, Codable, Hashable {
     var scale: CGFloat
     var rotationDegrees: Double
     var layer: Int
+    var textEffect: CanvasTextEffect
 
     init(
         id: UUID = UUID(),
@@ -1305,7 +1411,8 @@ private struct CanvasNote: Identifiable, Codable, Hashable {
         position: CanvasPoint,
         scale: CGFloat = 1,
         rotationDegrees: Double = 0,
-        layer: Int = 0
+        layer: Int = 0,
+        textEffect: CanvasTextEffect = .plain
     ) {
         self.id = id
         self.text = text
@@ -1314,10 +1421,11 @@ private struct CanvasNote: Identifiable, Codable, Hashable {
         self.scale = scale
         self.rotationDegrees = rotationDegrees
         self.layer = layer
+        self.textEffect = textEffect
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, text, isEmoji, position, scale, rotationDegrees, layer
+        case id, text, isEmoji, position, scale, rotationDegrees, layer, textEffect
     }
 
     init(from decoder: Decoder) throws {
@@ -1329,6 +1437,7 @@ private struct CanvasNote: Identifiable, Codable, Hashable {
         scale = try container.decodeIfPresent(CGFloat.self, forKey: .scale) ?? 1
         rotationDegrees = try container.decodeIfPresent(Double.self, forKey: .rotationDegrees) ?? 0
         layer = try container.decodeIfPresent(Int.self, forKey: .layer) ?? 0
+        textEffect = try container.decodeIfPresent(CanvasTextEffect.self, forKey: .textEffect) ?? .plain
     }
 }
 
@@ -1339,71 +1448,84 @@ private struct CanvasNoteView: View {
     let onSelect: () -> Void
     let onChange: () -> Void
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     @GestureState private var drag: CGSize = .zero
     @GestureState private var pinch: CGFloat = 1
     @GestureState private var twist: Angle = .zero
 
     var body: some View {
-        Text(note.text)
-            .font(note.isEmoji ? .system(size: 38) : .system(size: 19, weight: .semibold))
-            .foregroundStyle(.white)
-            .shadow(color: .black.opacity(0.42), radius: 5, y: 3)
-            .padding(.horizontal, note.isEmoji ? 0 : 10)
-            .padding(.vertical, note.isEmoji ? 0 : 6)
-            .background(note.isEmoji ? .clear : .black.opacity(0.20), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .overlay {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: note.isEmoji ? 18 : 9, style: .continuous)
-                        .stroke(.white.opacity(0.92), style: StrokeStyle(lineWidth: 1.6, dash: [4, 3]))
-                        .padding(note.isEmoji ? -6 : -3)
+        TimelineView(.animation(minimumInterval: note.textEffect == .plain ? 1 : 1.0 / 24.0)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            Text(note.textEffect.visibleText(note.text, time: time, reduceMotion: reduceMotion))
+                .font(note.isEmoji ? .system(size: 38) : .system(size: 19, weight: .semibold))
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.42), radius: 5, y: 3)
+                .padding(.horizontal, note.isEmoji ? 0 : 10)
+                .padding(.vertical, note.isEmoji ? 0 : 6)
+                .background(note.isEmoji ? .clear : .black.opacity(0.20), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .overlay {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: note.isEmoji ? 18 : 9, style: .continuous)
+                            .stroke(.white.opacity(0.92), style: StrokeStyle(lineWidth: 1.6, dash: [4, 3]))
+                            .padding(note.isEmoji ? -6 : -3)
+                    }
                 }
-            }
-            .position(
-                x: canvasSize.width * note.position.x + drag.width,
-                y: canvasSize.height * note.position.y + drag.height
-            )
-            .scaleEffect(note.scale * pinch)
-            .rotationEffect(.degrees(note.rotationDegrees) + twist)
-            .contentShape(Rectangle())
-            .onTapGesture { onSelect() }
-            .simultaneousGesture(
-                DragGesture()
-                    .updating($drag) { value, state, _ in
-                        onSelect()
-                        state = value.translation
-                    }
-                    .onEnded { value in
-                        guard canvasSize.width > 0, canvasSize.height > 0 else { return }
-                        note.position.x = min(max(note.position.x + value.translation.width / canvasSize.width, 0.08), 0.92)
-                        note.position.y = min(max(note.position.y + value.translation.height / canvasSize.height, 0.08), 0.92)
-                        onChange()
-                    }
-            )
-            .simultaneousGesture(
-                MagnificationGesture()
-                    .updating($pinch) { value, state, _ in
-                        onSelect()
-                        state = value
-                    }
-                    .onEnded { value in
-                        note.scale = min(max(note.scale * value, 0.55), 1.75)
-                        onChange()
-                    }
-            )
-            .simultaneousGesture(
-                RotationGesture()
-                    .updating($twist) { value, state, _ in
-                        onSelect()
-                        state = value
-                    }
-                    .onEnded { value in
-                        note.rotationDegrees += value.degrees
-                        onChange()
-                    }
-            )
-            .accessibilityLabel(note.isEmoji ? "\(note.text)表情" : "画布文字")
-            .accessibilityHint("点按选中，拖动移动，双指缩放或旋转")
-            .accessibilityAddTraits(.isButton)
+                .opacity(note.textEffect.opacity(time: time, reduceMotion: reduceMotion))
+                .offset(note.textEffect.offset(time: time, reduceMotion: reduceMotion))
+                .scaleEffect(x: note.textEffect.scaleX(time: time, reduceMotion: reduceMotion), y: note.textEffect.scaleY(time: time, reduceMotion: reduceMotion))
+                .rotationEffect(.degrees(note.textEffect.rotation(time: time, reduceMotion: reduceMotion)))
+        }
+        // Typewriter starts with an empty prefix. Keep a stable hit target so
+        // the layer remains selectable while it is being revealed.
+        .frame(minWidth: note.isEmoji ? 46 : 104, minHeight: note.isEmoji ? 46 : 40)
+        .position(
+            x: canvasSize.width * note.position.x + drag.width,
+            y: canvasSize.height * note.position.y + drag.height
+        )
+        .scaleEffect(note.scale * pinch)
+        .rotationEffect(.degrees(note.rotationDegrees) + twist)
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect() }
+        .simultaneousGesture(
+            DragGesture()
+                .updating($drag) { value, state, _ in
+                    onSelect()
+                    state = value.translation
+                }
+                .onEnded { value in
+                    guard canvasSize.width > 0, canvasSize.height > 0 else { return }
+                    note.position.x = min(max(note.position.x + value.translation.width / canvasSize.width, 0.08), 0.92)
+                    note.position.y = min(max(note.position.y + value.translation.height / canvasSize.height, 0.08), 0.92)
+                    onChange()
+                }
+        )
+        .simultaneousGesture(
+            MagnificationGesture()
+                .updating($pinch) { value, state, _ in
+                    onSelect()
+                    state = value
+                }
+                .onEnded { value in
+                    note.scale = min(max(note.scale * value, 0.55), 1.75)
+                    onChange()
+                }
+        )
+        .simultaneousGesture(
+            RotationGesture()
+                .updating($twist) { value, state, _ in
+                    onSelect()
+                    state = value
+                }
+                .onEnded { value in
+                    note.rotationDegrees += value.degrees
+                    onChange()
+                }
+        )
+        .accessibilityLabel(note.isEmoji ? "\(note.text)表情" : "画布文字")
+        .accessibilityValue(note.textEffect.title)
+        .accessibilityHint("点按选中，拖动移动，双指缩放或旋转")
+        .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -1882,6 +2004,53 @@ private struct CanvasEffectPicker: View {
                         .background(effect == .none ? CanvasPalette.page : CanvasPalette.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                }
+            }
+            Spacer()
+        }
+        .padding(22)
+    }
+}
+
+private struct CanvasTextEffectPicker: View {
+    let selected: CanvasTextEffect?
+    let onSelect: (CanvasTextEffect) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("文字动效")
+                .font(.system(size: 21, weight: .semibold))
+                .foregroundStyle(CanvasPalette.ink)
+            Text("普通文字也可以变成实况里的小动画")
+                .font(.system(size: 12))
+                .foregroundStyle(CanvasPalette.muted)
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                ForEach(CanvasTextEffect.allCases) { effect in
+                    Button { onSelect(effect) } label: {
+                        VStack(spacing: 7) {
+                            Image(systemName: effect.icon)
+                                .font(.system(size: 17, weight: .semibold))
+                            Text(effect.title)
+                                .font(.system(size: 11, weight: .medium))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(CanvasPalette.ink)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 68)
+                        .background(
+                            selected == effect ? CanvasPalette.accent.opacity(0.18) : CanvasPalette.page,
+                            in: RoundedRectangle(cornerRadius: 15, style: .continuous)
+                        )
+                        .overlay {
+                            if selected == effect {
+                                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                                    .stroke(CanvasPalette.accent, lineWidth: 1.5)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(effect.title)
                 }
             }
             Spacer()
