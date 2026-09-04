@@ -87,14 +87,14 @@ struct AddDishView: View {
     private var header: some View {
         VStack(spacing: AppSpacing.xs) {
             HStack(spacing: 6) {
-                Text("加几道")
+                Text("从菜谱加菜")
                     .font(AppFont.title(26))
                     .foregroundStyle(Color.inkPrimary)
                 Image(systemName: "heart.fill")
                     .foregroundStyle(Color.accentWarm)
                     .font(.system(size: 13))
             }
-            Text("想吃啥就点进来")
+            Text("选中的菜会回到画布里")
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
         }

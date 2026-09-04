@@ -1,6 +1,6 @@
 import SwiftUI
 
-// 主框架 底部 4 个 tab 这一顿 / 菜单 / 记录 / 我的
+// 主框架 底部 4 个 tab 这一顿 / 菜谱 / 记录 / 我的
 struct MainTabView: View {
     @State private var selection: Tab = .meal
 
@@ -21,7 +21,7 @@ struct MainTabView: View {
 
             MenuView()
                 .tabItem {
-                    Label("菜单", systemImage: "book.closed")
+                    Label("菜谱", systemImage: "book.closed")
                 }
                 .tag(Tab.menu)
 

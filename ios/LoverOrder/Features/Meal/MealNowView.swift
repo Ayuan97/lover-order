@@ -20,76 +20,27 @@ struct MealNowView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                    .padding(.horizontal, AppSpacing.lg)
-                    .padding(.top, AppSpacing.md)
-                if vm.meal?.status != .confirmed {
-                    moodPicker
-                        .padding(.horizontal, AppSpacing.lg)
-                        .padding(.top, AppSpacing.sm)
-                        .padding(.bottom, AppSpacing.md)
-                }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: AppSpacing.lg) {
-                    if let promptId = vm.pendingReviewMealId {
-                        reviewPromptCard(promptId)
-                    }
-                    if vm.meal?.status == .confirmed {
-                        confirmedMealCard
+            MealCanvasView(
+                vm: vm,
+                pendingReviewMealId: vm.pendingReviewMealId,
+                onAddDish: { showAddDish = true },
+                onReview: { id in
+                    reviewMealId = id
+                    showReview = true
+                },
+                onConfirm: {
+                    if vm.dishCount == 0 && vm.meal?.status == .planning {
+                        showAddDish = true
                     } else {
-                        // 情侣日常主路径：一道没点过的推荐 → 已选 → 其余没点过的；聚会仍靠后
-                        if let hero = heroDish {
-                            heroCard(hero)
-                        }
-                        if !vm.dishes.isEmpty {
-                            currentMealCard
-                        }
-                        if showEmptyHint {
-                            if vm.loadFailed {
-                                LoadFailedView { await vm.load(scene: coupleScene, mood: appState.currentMood) }
-                            } else {
-                                EmptyMealHint(
-                                    onCreateRecipe: { showCreateRecipe = true },
-                                    onInvite: {
-                                        if appState.household != nil {
-                                            showInviteTicket = true
-                                        } else {
-                                            Task {
-                                                await appState.refreshHousehold()
-                                                if appState.household != nil {
-                                                    showInviteTicket = true
-                                                } else {
-                                                    vm.errorMessage = "家信息还没拉到，点一下再试"
-                                                }
-                                            }
-                                        }
-                                    },
-                                    inviteEnabled: appState.household != nil || appState.currentUser?.hasHousehold == true,
-                                    inviteHint: (appState.currentUser?.hasHousehold == true && appState.household == nil)
-                                        ? "家信息还没拉到，点一下再试" : nil
-                                )
-                            }
-                        } else {
-                            suggestionsSection
-                            frequentsSection
-                        }
-                        diningQuietEntry
+                        Task { await confirmAction() }
                     }
-                    Color.clear.frame(height: 80)
-                }
-                .padding(.horizontal, AppSpacing.lg)
-                .padding(.top, AppSpacing.sm)
-                .refreshable {
-                    await vm.load(scene: coupleScene, mood: appState.currentMood)
-                    await checkDining()
-                }
-                }
-            }
+                },
+                onShoppingList: { showShoppingList = true },
+                onDining: { showDiningHost = true },
+                onRetry: { await vm.load(scene: coupleScene, mood: appState.currentMood) }
+            )
+            .environmentObject(appState)
             .background(Color.appBackground.ignoresSafeArea())
-            .safeAreaInset(edge: .bottom) {
-                bottomBar
-            }
             .task {
                 // 首页只服务情侣日常我们这顿
                 if appState.currentScene != .pair {
@@ -934,7 +885,24 @@ private struct HomeMoodOption: View {
     }
 }
 
-// 圆角方形小图 用于首页"可能喜欢" 3 列推荐
+// 画布和点菜面板共用的透明菜品素材。没有对应抠图时才回退到用户上传的封面。
+enum DishArtwork {
+    static func assetName(for name: String) -> String? {
+        let normalized = name.lowercased()
+        if normalized.contains("虾") || normalized.contains("shrimp") { return "StickerShrimp" }
+        if normalized.contains("牛排") || normalized.contains("steak") { return "StickerSteak" }
+        if normalized.contains("三文鱼") || normalized.contains("寿司") || normalized.contains("丼") || normalized.contains("salmon") {
+            return "StickerSalmonBowl"
+        }
+        if normalized.contains("吐司") || normalized.contains("面包") || normalized.contains("toast") { return "StickerToast" }
+        if normalized.contains("意面") || normalized.contains("pasta") { return "StickerPasta" }
+        if normalized.contains("披萨") || normalized.contains("pizza") { return "StickerPizza" }
+        if normalized.contains("沙拉") || normalized.contains("拌饭") || normalized.contains("鸡蛋") { return "StickerSalad" }
+        return nil
+    }
+}
+
+// 圆角方形小图 用于点菜面板的推荐网格
 struct RecipeCircleCard: View {
     let recipe: Recipe
     var alreadyAdded: Bool = false
@@ -943,9 +911,7 @@ struct RecipeCircleCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: AppSpacing.sm) {
             ZStack(alignment: .bottomTrailing) {
-                AsyncImageView(url: recipe.coverImage, name: recipe.name)
-                    .aspectRatio(1, contentMode: .fill)
-                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
+                artwork
                 Button(action: onAdd) {
                     Image(systemName: alreadyAdded ? "checkmark" : "plus")
                         .font(.system(size: 11, weight: .bold))
@@ -956,6 +922,7 @@ struct RecipeCircleCard: View {
                 }
                 .padding(6)
             }
+            .frame(maxWidth: .infinity)
             Text(recipe.name)
                 .font(AppFont.body(13))
                 .foregroundStyle(Color.inkPrimary)
@@ -967,6 +934,28 @@ struct RecipeCircleCard: View {
                     .lineLimit(1)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var artwork: some View {
+        ZStack {
+            if let assetName = DishArtwork.assetName(for: recipe.name) {
+                LinearGradient(
+                    colors: [Color(red: 0.98, green: 0.96, blue: 0.88), Color(red: 0.90, green: 0.93, blue: 0.78)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                Image(assetName)
+                    .resizable()
+                    .scaledToFit()
+                    .padding(8)
+            } else {
+                AsyncImageView(url: recipe.coverImage, name: recipe.name)
+            }
+        }
+        .frame(height: 112)
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
     }
 }
 
@@ -1045,7 +1034,15 @@ struct DishThumb: View {
 
     var body: some View {
         Group {
-            if let url = APIConfig.imageURL(image) {
+            if let assetName = DishArtwork.assetName(for: name) {
+                ZStack {
+                    Color.appBackground
+                    Image(assetName)
+                        .resizable()
+                        .scaledToFit()
+                        .padding(5)
+                }
+            } else if let url = APIConfig.imageURL(image) {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case .success(let img):
