@@ -36,6 +36,7 @@ struct MealCanvasView: View {
     @State private var restoredMealID: UInt?
     @State private var liveDuration = 5
     @State private var isMuted = true
+    @State private var isEditing = false
 
     var body: some View {
         ZStack {
@@ -45,6 +46,9 @@ struct MealCanvasView: View {
                 VStack(spacing: 12) {
                     header
 
+                    if shouldShowActionBar {
+                        actionBar
+                    }
                     canvas
                     if selectedCanvasElement != nil {
                         selectionTools
@@ -52,7 +56,6 @@ struct MealCanvasView: View {
                     if selectedCanvasElement != nil {
                         transformBar
                     }
-                    actionBar
 
                     if vm.loadFailed && vm.meal == nil {
                         retryStrip
@@ -126,7 +129,13 @@ struct MealCanvasView: View {
             selectedStickerID = nil
             selectedNoteID = nil
             activeStroke.removeAll()
+            isEditing = false
             restoreDocumentIfNeeded()
+        }
+        .onChange(of: vm.meal?.status) { _, status in
+            if status == .confirmed || status == .completed {
+                finishEditing()
+            }
         }
         .onChange(of: vm.dishCount) { _, _ in syncStickers() }
         .onChange(of: background) { _, _ in saveDocument() }
@@ -157,6 +166,15 @@ struct MealCanvasView: View {
             Spacer(minLength: 8)
 
             Menu {
+                if isEditing {
+                    Button("完成编辑", systemImage: "checkmark") {
+                        finishEditing()
+                    }
+                } else {
+                    Button("编辑画布", systemImage: "pencil") {
+                        beginEditing()
+                    }
+                }
                 Button("买菜清单", systemImage: "cart") { onShoppingList() }
                 Button("邀请一起点", systemImage: "person.2") { onDining() }
                 if let pendingReviewMealId {
@@ -219,6 +237,7 @@ struct MealCanvasView: View {
                         isSelected: sticker.id == selectedStickerID,
                         reduceMotion: reduceMotion,
                         onSelect: {
+                            beginEditing()
                             selectedStickerID = sticker.id
                             selectedNoteID = nil
                         },
@@ -233,6 +252,7 @@ struct MealCanvasView: View {
                         canvasSize: proxy.size,
                         isSelected: note.id == selectedNoteID,
                         onSelect: {
+                            beginEditing()
                             selectedStickerID = nil
                             selectedNoteID = note.id
                         },
@@ -304,30 +324,39 @@ struct MealCanvasView: View {
         HStack(spacing: 7) {
             Menu {
                 ForEach([3, 5, 10], id: \.self) { seconds in
-                    Button("\(seconds)s") { liveDuration = seconds }
+                    Button("\(seconds)s") {
+                        beginEditing()
+                        liveDuration = seconds
+                    }
                 }
             } label: {
                 LiveControlLabel(title: "\(liveDuration)s", icon: "chevron.down")
             }
 
             LiveControlButton(title: "Aa", icon: nil) {
+                beginEditing()
                 showInsertPicker = true
             }
             LiveControlButton(title: nil, icon: "sparkles", isDisabled: selectedCanvasElement == nil) {
+                beginEditing()
                 showEffectPicker = true
             }
             LiveControlButton(title: nil, icon: "pencil.tip", isActive: drawingEnabled) {
+                beginEditing()
                 drawingEnabled.toggle()
             }
             if drawingEnabled {
                 LiveControlButton(title: nil, icon: "slider.horizontal.3") {
+                    beginEditing()
                     showBrushPicker = true
                 }
             }
             LiveControlButton(title: nil, icon: "photo") {
+                beginEditing()
                 showBackgroundPicker = true
             }
             LiveControlButton(title: nil, icon: isMuted ? "speaker.slash" : "speaker.wave.2") {
+                beginEditing()
                 isMuted.toggle()
             }
         }
@@ -550,9 +579,27 @@ struct MealCanvasView: View {
         saveDocument()
     }
 
+    private var shouldShowActionBar: Bool {
+        isEditing || vm.meal?.status == .planning
+    }
+
+    private func beginEditing() {
+        isEditing = true
+    }
+
+    private func finishEditing() {
+        isEditing = false
+        drawingEnabled = false
+        selectedStickerID = nil
+        selectedNoteID = nil
+    }
+
     private var actionBar: some View {
         HStack(spacing: 10) {
-            Button(action: onAddDish) {
+            Button {
+                beginEditing()
+                onAddDish()
+            } label: {
                 Label("从菜谱加菜", systemImage: "plus")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(CanvasPalette.ink)
@@ -563,11 +610,11 @@ struct MealCanvasView: View {
             }
             .buttonStyle(.plain)
 
-            Button(action: onConfirm) {
+            Button(action: actionBarConfirm) {
                 HStack(spacing: 7) {
-                    Image(systemName: confirmIcon)
+                    Image(systemName: actionBarConfirmIcon)
                         .font(.system(size: 15, weight: .bold))
-                    Text(confirmTitle)
+                    Text(actionBarConfirmTitle)
                         .font(.system(size: 14, weight: .semibold))
                 }
                 .foregroundStyle(.white)
@@ -577,8 +624,31 @@ struct MealCanvasView: View {
             }
             .buttonStyle(.plain)
             .disabled(vm.isActing)
-            .accessibilityLabel(confirmAccessibilityLabel)
+            .accessibilityLabel(actionBarConfirmAccessibilityLabel)
         }
+    }
+
+    private func actionBarConfirm() {
+        guard vm.meal?.status == .planning else {
+            finishEditing()
+            return
+        }
+        onConfirm()
+    }
+
+    private var actionBarConfirmIcon: String {
+        if isEditing && vm.meal?.status != .planning { return "checkmark" }
+        return confirmIcon
+    }
+
+    private var actionBarConfirmTitle: String {
+        if isEditing && vm.meal?.status != .planning { return "完成编辑" }
+        return confirmTitle
+    }
+
+    private var actionBarConfirmAccessibilityLabel: String {
+        if isEditing && vm.meal?.status != .planning { return "完成编辑" }
+        return confirmAccessibilityLabel
     }
 
     private var hasCanvasAdditions: Bool {
