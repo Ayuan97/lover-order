@@ -27,16 +27,15 @@ struct MealCanvasView: View {
     @State private var selectedStickerID: UUID?
     @State private var selectedNoteID: UUID?
     @State private var drawingEnabled = false
-    @State private var showBackgroundPicker = false
-    @State private var showInsertPicker = false
-    @State private var showTextComposer = false
-    @State private var showEmojiPicker = false
-    @State private var showBrushPicker = false
-    @State private var showEffectPicker = false
     @State private var restoredMealID: UInt?
     @State private var liveDuration = 5
     @State private var isMuted = true
     @State private var isEditing = false
+    @State private var activeEditor: CanvasEditorPanel?
+    @State private var insertMode: CanvasInsertItem?
+    @State private var draftText = "今晚吃点好的"
+    @State private var showColorPalette = false
+    @State private var backgroundPhotoItem: PhotosPickerItem?
 
     var body: some View {
         ZStack {
@@ -50,6 +49,9 @@ struct MealCanvasView: View {
                         actionBar
                     }
                     canvas
+                    if isEditing {
+                        inlineEditorPanel
+                    }
                     if selectedCanvasElement != nil {
                         selectionTools
                     }
@@ -67,69 +69,15 @@ struct MealCanvasView: View {
             }
             .scrollDisabled(drawingEnabled)
         }
-        .sheet(isPresented: $showBackgroundPicker) {
-            CanvasBackgroundPicker(
-                selection: $background,
-                blur: $blur,
-                customData: $customBackgroundData
-            )
-                .presentationDetents([.medium])
-        }
-        .sheet(isPresented: $showInsertPicker) {
-            CanvasInsertPicker { item in
-                if item == .emoji {
-                    showInsertPicker = false
-                    showEmojiPicker = true
-                } else {
-                    showInsertPicker = false
-                    showTextComposer = true
-                }
-            }
-                .presentationDetents([.height(250)])
-        }
-        .sheet(isPresented: $showTextComposer) {
-            CanvasTextComposer { text in
-                insertText(text)
-                showTextComposer = false
-            }
-            .presentationDetents([.height(270)])
-        }
-        .sheet(isPresented: $showEmojiPicker) {
-            CanvasEmojiPicker { emoji in
-                insertEmoji(emoji)
-                showInsertPicker = false
-                showEmojiPicker = false
-            }
-            .presentationDetents([.medium])
-        }
-        .sheet(isPresented: $showBrushPicker) {
-            CanvasBrushPicker(color: $brushColor, width: $brushWidth)
-                .presentationDetents([.medium])
-        }
-        .sheet(isPresented: $showEffectPicker) {
-            switch selectedCanvasElement {
-            case .sticker:
-                CanvasEffectPicker { effect in
-                    applyEffect(effect)
-                    showEffectPicker = false
-                }
-                .presentationDetents([.height(300)])
-            case .note:
-                CanvasTextEffectPicker(selected: selectedTextEffect) { effect in
-                    applyTextEffect(effect)
-                    showEffectPicker = false
-                }
-                .presentationDetents([.height(340)])
-            case nil:
-                EmptyView()
-            }
-        }
         .onAppear { restoreDocumentIfNeeded() }
         .onChange(of: vm.meal?.id) { _, _ in
             selectedStickerID = nil
             selectedNoteID = nil
             activeStroke.removeAll()
             isEditing = false
+            activeEditor = nil
+            insertMode = nil
+            showColorPalette = false
             restoreDocumentIfNeeded()
         }
         .onChange(of: vm.meal?.status) { _, status in
@@ -141,6 +89,19 @@ struct MealCanvasView: View {
         .onChange(of: background) { _, _ in saveDocument() }
         .onChange(of: blur) { _, _ in saveDocument() }
         .onChange(of: customBackgroundData) { _, _ in saveDocument() }
+        .onChange(of: backgroundPhotoItem) { _, item in
+            guard let item else { return }
+            Task {
+                guard let data = try? await item.loadTransferable(type: Data.self),
+                      let image = UIImage(data: data),
+                      let preview = image.canvasPreviewData else { return }
+                await MainActor.run {
+                    customBackgroundData = preview
+                    background = .custom
+                    backgroundPhotoItem = nil
+                }
+            }
+        }
     }
 
     private var header: some View {
@@ -309,17 +270,15 @@ struct MealCanvasView: View {
                 }
             }
         }
-        // Keep the canvas visually dominant on the home screen.  The previous
-        // 0.78 ratio left a large dead band between the canvas and the bottom
-        // actions on an iPhone-sized viewport; 0.68 gives the live scene the
-        // tall, poster-like presence of the reference while the surrounding
-        // controls still scroll naturally when an element is selected.
-        .aspectRatio(0.68, contentMode: .fit)
+        // Keep the canvas poster-like in view mode, but make room for the
+        // inline editor rail while editing so its tabs and cards stay visible
+        // above the system tab bar instead of being pushed below the fold.
+        .aspectRatio(isEditing ? 0.92 : 0.68, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .shadow(color: .black.opacity(0.13), radius: 18, y: 8)
     }
 
-    /// 画布内唯一的编辑工具条。加菜和提交动作放在画布外的 actionBar，避免和编辑工具混在一起。
+    /// 画布内唯一的编辑工具条。详细设置在画布下方的内嵌控制台展开。
     private var liveControls: some View {
         HStack(spacing: 7) {
             Menu {
@@ -334,26 +293,17 @@ struct MealCanvasView: View {
             }
 
             LiveControlButton(title: "Aa", icon: nil) {
-                beginEditing()
-                showInsertPicker = true
+                openEditor(.insert)
             }
             LiveControlButton(title: nil, icon: "sparkles", isDisabled: selectedCanvasElement == nil) {
-                beginEditing()
-                showEffectPicker = true
+                openEditor(.effects)
             }
             LiveControlButton(title: nil, icon: "pencil.tip", isActive: drawingEnabled) {
-                beginEditing()
+                openEditor(.brush)
                 drawingEnabled.toggle()
             }
-            if drawingEnabled {
-                LiveControlButton(title: nil, icon: "slider.horizontal.3") {
-                    beginEditing()
-                    showBrushPicker = true
-                }
-            }
             LiveControlButton(title: nil, icon: "photo") {
-                beginEditing()
-                showBackgroundPicker = true
+                openEditor(.background)
             }
             LiveControlButton(title: nil, icon: isMuted ? "speaker.slash" : "speaker.wave.2") {
                 beginEditing()
@@ -370,6 +320,315 @@ struct MealCanvasView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.black.opacity(0.22), in: Capsule())
         .foregroundStyle(.white)
+    }
+
+    @ViewBuilder
+    private var inlineEditorPanel: some View {
+        if let activeEditor {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(CanvasEditorPanel.allCases) { panel in
+                                Button {
+                                    self.activeEditor = panel
+                                    if panel != .insert { insertMode = nil }
+                                    showColorPalette = false
+                                } label: {
+                                    HStack(spacing: 5) {
+                                        Image(systemName: panel.icon)
+                                            .font(.system(size: 12, weight: .semibold))
+                                        Text(panel.title)
+                                            .font(.system(size: 13, weight: .semibold))
+                                    }
+                                    .foregroundStyle(activeEditor == panel ? CanvasPalette.accent : CanvasPalette.muted)
+                                    .padding(.horizontal, 10)
+                                    .frame(height: 32)
+                                    .background(
+                                        activeEditor == panel ? CanvasPalette.accent.opacity(0.12) : .clear,
+                                        in: Capsule()
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
+                    Button {
+                        showColorPalette.toggle()
+                    } label: {
+                        Circle()
+                            .fill(
+                                AngularGradient(
+                                    colors: [.red, .yellow, .green, .cyan, .blue, .purple, .red],
+                                    center: .center
+                                )
+                            )
+                            .frame(width: 27, height: 27)
+                            .overlay(Circle().stroke(CanvasPalette.ink.opacity(0.13), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("颜色")
+                }
+
+                if showColorPalette {
+                    colorPalette
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+
+                switch activeEditor {
+                case .insert:
+                    inlineInsertPanel
+                case .effects:
+                    inlineEffectsPanel
+                case .brush:
+                    inlineBrushPanel
+                case .background:
+                    inlineBackgroundPanel
+                }
+            }
+            .padding(12)
+            .background(CanvasPalette.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .stroke(CanvasPalette.ink.opacity(0.08), lineWidth: 1)
+            }
+        }
+    }
+
+    private var colorPalette: some View {
+        HStack(spacing: 12) {
+            ForEach(CanvasBrushColor.allCases) { item in
+                Button {
+                    brushColor = item
+                    showColorPalette = false
+                } label: {
+                    Circle()
+                        .fill(item.color)
+                        .frame(width: 26, height: 26)
+                        .overlay(Circle().stroke(.white, lineWidth: item == brushColor ? 3 : 1))
+                        .overlay(Circle().stroke(CanvasPalette.ink.opacity(0.20), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(item.title)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 38)
+        .background(CanvasPalette.page, in: Capsule())
+    }
+
+    private var inlineInsertPanel: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                CanvasInlineEditorCard(
+                    icon: "textformat",
+                    title: "文字",
+                    subtitle: "写一句",
+                    isSelected: insertMode == .text
+                ) {
+                    insertMode = .text
+                }
+                CanvasInlineEditorCard(
+                    icon: "face.smiling",
+                    title: "表情",
+                    subtitle: "放一个",
+                    isSelected: insertMode == .emoji
+                ) {
+                    insertMode = .emoji
+                }
+            }
+
+            if insertMode == .text {
+                HStack(spacing: 8) {
+                    TextField("例如：今晚吃点好的", text: $draftText, axis: .vertical)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(CanvasPalette.ink)
+                        .lineLimit(1...2)
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 40)
+                        .background(CanvasPalette.page, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .accessibilityLabel("画布文字内容")
+                    Button("放入") {
+                        commitDraftText()
+                    }
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .frame(height: 40)
+                    .background(CanvasPalette.accent, in: Capsule())
+                    .buttonStyle(.plain)
+                    .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            } else if insertMode == .emoji {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(CanvasEmojiCatalog.items, id: \.self) { emoji in
+                            Button {
+                                insertEmoji(emoji)
+                                insertMode = nil
+                            } label: {
+                                Text(emoji)
+                                    .font(.system(size: 24))
+                                    .frame(width: 42, height: 38)
+                                    .background(CanvasPalette.page, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var inlineEffectsPanel: some View {
+        switch selectedCanvasElement {
+        case .sticker:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("贴图动效")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(CanvasPalette.muted)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(CanvasEffect.allCases) { effect in
+                            CanvasInlineEditorCard(
+                                icon: effect.icon,
+                                title: effect.title,
+                                isSelected: selectedStickerEffect == effect
+                            ) {
+                                applyEffect(effect)
+                            }
+                        }
+                    }
+                }
+            }
+        case .note:
+            VStack(alignment: .leading, spacing: 8) {
+                Text("文字动效")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(CanvasPalette.muted)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(CanvasTextEffect.allCases) { effect in
+                            CanvasInlineEditorCard(
+                                icon: effect.icon,
+                                title: effect.title,
+                                isSelected: selectedTextEffect == effect
+                            ) {
+                                applyTextEffect(effect)
+                            }
+                        }
+                    }
+                }
+            }
+        case nil:
+            Text("先点一下画布里的菜品或文字，再选择动效")
+                .font(.system(size: 12))
+                .foregroundStyle(CanvasPalette.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var inlineBrushPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("画笔粗细")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(CanvasPalette.muted)
+                Spacer()
+                Text("\(Int(brushWidth)) pt")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(CanvasPalette.ink)
+            }
+            Slider(value: $brushWidth, in: 2...14, step: 1)
+                .tint(CanvasPalette.accent)
+                .accessibilityLabel("画笔粗细")
+            HStack(spacing: 7) {
+                ForEach([2.0, 4.0, 8.0, 14.0], id: \.self) { preset in
+                    Button {
+                        brushWidth = preset
+                    } label: {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(brushColor.color)
+                                .frame(width: preset + 8, height: preset + 8)
+                            Text("\(Int(preset))")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                        }
+                        .foregroundStyle(CanvasPalette.ink)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 32)
+                        .background(CanvasPalette.page, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(Int(preset)) 点")
+                }
+            }
+        }
+    }
+
+    private var inlineBackgroundPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(CanvasBackground.allCases) { item in
+                        Button {
+                            if item != .custom || customBackgroundData != nil {
+                                background = item
+                            }
+                        } label: {
+                            ZStack(alignment: .bottomLeading) {
+                                CanvasMediaBackground(source: item, blur: 0, reduceMotion: true, customData: customBackgroundData)
+                                Text(item.title)
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(6)
+                                if background == item {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .padding(5)
+                                        .background(CanvasPalette.accent, in: Circle())
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                                        .padding(5)
+                                }
+                            }
+                            .frame(width: 74, height: 62)
+                            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(item == .custom && customBackgroundData == nil)
+                    }
+
+                    PhotosPicker(selection: $backgroundPhotoItem, matching: .images, photoLibrary: .shared()) {
+                        VStack(spacing: 4) {
+                            Image(systemName: "photo.badge.plus")
+                                .font(.system(size: 16, weight: .semibold))
+                            Text("相册")
+                                .font(.system(size: 10, weight: .semibold))
+                        }
+                        .foregroundStyle(CanvasPalette.ink)
+                        .frame(width: 74, height: 62)
+                        .background(CanvasPalette.page, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Text("毛玻璃")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(CanvasPalette.muted)
+                Slider(value: $blur, in: 0...10)
+                    .tint(CanvasPalette.accent)
+                Text(blur == 0 ? "关" : "\(Int(blur))")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(CanvasPalette.ink)
+                    .frame(width: 22)
+            }
+        }
     }
 
     private var selectedCanvasElement: CanvasSelection? {
@@ -393,6 +652,11 @@ struct MealCanvasView: View {
     private var selectedTextEffect: CanvasTextEffect? {
         guard case .note(let id) = selectedCanvasElement else { return nil }
         return notes.first(where: { $0.id == id })?.textEffect
+    }
+
+    private var selectedStickerEffect: CanvasEffect? {
+        guard case .sticker(let id) = selectedCanvasElement else { return nil }
+        return stickers.first(where: { $0.id == id })?.effect
     }
 
     private var selectionTools: some View {
@@ -585,10 +849,23 @@ struct MealCanvasView: View {
 
     private func beginEditing() {
         isEditing = true
+        if activeEditor == nil {
+            activeEditor = .insert
+        }
+    }
+
+    private func openEditor(_ panel: CanvasEditorPanel) {
+        beginEditing()
+        activeEditor = panel
+        if panel != .insert { insertMode = nil }
+        showColorPalette = false
     }
 
     private func finishEditing() {
         isEditing = false
+        activeEditor = nil
+        insertMode = nil
+        showColorPalette = false
         drawingEnabled = false
         selectedStickerID = nil
         selectedNoteID = nil
@@ -726,6 +1003,13 @@ struct MealCanvasView: View {
         selectedStickerID = nil
         selectedNoteID = note.id
         saveDocument()
+    }
+
+    private func commitDraftText() {
+        let value = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        insertText(value)
+        insertMode = nil
     }
 
     private func insertEmoji(_ emoji: String) {
@@ -877,6 +1161,86 @@ private enum CanvasSelection: Hashable {
         case .sticker: return "fork.knife"
         case .note: return "face.smiling"
         }
+    }
+}
+
+private enum CanvasEditorPanel: String, CaseIterable, Identifiable {
+    case insert
+    case effects
+    case brush
+    case background
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .insert: return "添加"
+        case .effects: return "动效"
+        case .brush: return "画笔"
+        case .background: return "背景"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .insert: return "plus"
+        case .effects: return "sparkles"
+        case .brush: return "pencil.tip"
+        case .background: return "photo"
+        }
+    }
+}
+
+private enum CanvasEmojiCatalog {
+    static let items = [
+        "♥︎", "♡", "😊", "😍", "🥰", "😋", "🤤", "🫶",
+        "🍴", "✨", "🔥", "🌿", "🍓", "🍋", "🍕", "🍜",
+        "🍣", "🍰", "☕️", "🥂", "🌙", "⭐️", "🎉", "🐱"
+    ]
+}
+
+private struct CanvasInlineEditorCard: View {
+    let icon: String
+    let title: String
+    var subtitle: String?
+    var isSelected = false
+    let action: () -> Void
+
+    init(icon: String, title: String, subtitle: String? = nil, isSelected: Bool = false, action: @escaping () -> Void) {
+        self.icon = icon
+        self.title = title
+        self.subtitle = subtitle
+        self.isSelected = isSelected
+        self.action = action
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 15, weight: .semibold))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(isSelected ? CanvasPalette.accent : CanvasPalette.muted)
+                    }
+                }
+            }
+            .foregroundStyle(isSelected ? CanvasPalette.accent : CanvasPalette.ink)
+            .padding(.horizontal, 11)
+            .frame(minWidth: 82, minHeight: 43, alignment: .leading)
+            .background(isSelected ? CanvasPalette.accent.opacity(0.13) : CanvasPalette.page, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .stroke(CanvasPalette.accent, lineWidth: 1.3)
+                }
+            }
+        }
+        .buttonStyle(.plain)
     }
 }
 
