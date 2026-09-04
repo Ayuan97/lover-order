@@ -29,6 +29,7 @@ struct MealCanvasView: View {
     @State private var drawingEnabled = false
     @State private var showBackgroundPicker = false
     @State private var showInsertPicker = false
+    @State private var showTextComposer = false
     @State private var showEmojiPicker = false
     @State private var showBrushPicker = false
     @State private var showEffectPicker = false
@@ -77,11 +78,18 @@ struct MealCanvasView: View {
                     showInsertPicker = false
                     showEmojiPicker = true
                 } else {
-                    insert(item)
                     showInsertPicker = false
+                    showTextComposer = true
                 }
             }
                 .presentationDetents([.height(250)])
+        }
+        .sheet(isPresented: $showTextComposer) {
+            CanvasTextComposer { text in
+                insertText(text)
+                showTextComposer = false
+            }
+            .presentationDetents([.height(270)])
         }
         .sheet(isPresented: $showEmojiPicker) {
             CanvasEmojiPicker { emoji in
@@ -637,16 +645,16 @@ struct MealCanvasView: View {
         .buttonStyle(.plain)
     }
 
-    private func insert(_ item: CanvasInsertItem) {
-        switch item {
-        case .text:
-            let note = CanvasNote(text: "今晚吃点好的", isEmoji: false, position: CanvasPoint(x: 0.50, y: 0.22), layer: nextLayerIndex)
-            notes.append(note)
-            selectedStickerID = nil
-            selectedNoteID = note.id
-        case .emoji:
-            insertEmoji("♥︎")
-        }
+    private func insertText(_ text: String) {
+        let note = CanvasNote(
+            text: text,
+            isEmoji: false,
+            position: CanvasPoint(x: 0.50, y: 0.22),
+            layer: nextLayerIndex
+        )
+        notes.append(note)
+        selectedStickerID = nil
+        selectedNoteID = note.id
         saveDocument()
     }
 
@@ -1760,6 +1768,61 @@ private struct CanvasInsertPicker: View {
             Spacer()
         }
         .padding(22)
+    }
+}
+
+private struct CanvasTextComposer: View {
+    let onInsert: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = "今晚吃点好的"
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("写一句")
+                    .font(.system(size: 21, weight: .semibold))
+                    .foregroundStyle(CanvasPalette.ink)
+                Text("放入后可以在画布里拖动，也可以给它加上打字、漂浮或浮现效果。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(CanvasPalette.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                TextField("例如：今晚吃点好的", text: $text, axis: .vertical)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(CanvasPalette.ink)
+                    .lineLimit(1...3)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .background(CanvasPalette.page, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                    .accessibilityLabel("画布文字内容")
+
+                Button {
+                    let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !value.isEmpty else { return }
+                    onInsert(value)
+                    dismiss()
+                } label: {
+                    Text("放到画布")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .background(CanvasPalette.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                Spacer()
+            }
+            .padding(22)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                        .foregroundStyle(CanvasPalette.muted)
+                }
+            }
+        }
     }
 }
 
