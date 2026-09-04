@@ -270,7 +270,12 @@ struct MealCanvasView: View {
                 }
             }
         }
-        .aspectRatio(0.78, contentMode: .fit)
+        // Keep the canvas visually dominant on the home screen.  The previous
+        // 0.78 ratio left a large dead band between the canvas and the bottom
+        // actions on an iPhone-sized viewport; 0.68 gives the live scene the
+        // tall, poster-like presence of the reference while the surrounding
+        // controls still scroll naturally when an element is selected.
+        .aspectRatio(0.68, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .shadow(color: .black.opacity(0.13), radius: 18, y: 8)
     }
