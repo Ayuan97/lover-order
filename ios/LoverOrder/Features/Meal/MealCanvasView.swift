@@ -1,4 +1,6 @@
 import SwiftUI
+import PhotosUI
+import UIKit
 
 /// 首页的主画布。菜谱仍然由 AddDishView 负责，首页只负责把「这一顿」拼出来。
 /// 这是第一版可玩的画布：底图、贴纸、文字、涂鸦和轻量动效都在本地即时生效。
@@ -15,14 +17,19 @@ struct MealCanvasView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var background: CanvasBackground = .meadow
     @State private var blur: Double = 3.0
+    @State private var customBackgroundData: Data?
     @State private var stickers: [CanvasSticker] = []
     @State private var notes: [CanvasNote] = []
-    @State private var strokes: [[CGPoint]] = []
+    @State private var strokes: [CanvasStroke] = []
     @State private var activeStroke: [CGPoint] = []
+    @State private var brushColor: CanvasBrushColor = .white
+    @State private var brushWidth: CGFloat = 4
     @State private var selectedStickerID: UUID?
     @State private var drawingEnabled = false
     @State private var showBackgroundPicker = false
     @State private var showInsertPicker = false
+    @State private var showEmojiPicker = false
+    @State private var showBrushPicker = false
     @State private var showEffectPicker = false
     @State private var restoredMealID: UInt?
     @State private var liveDuration = 5
@@ -37,6 +44,9 @@ struct MealCanvasView: View {
                     header
 
                     canvas
+                    if selectedStickerID != nil {
+                        transformBar
+                    }
                     actionBar
 
                     if vm.loadFailed && vm.meal == nil {
@@ -50,15 +60,36 @@ struct MealCanvasView: View {
             .scrollDisabled(drawingEnabled)
         }
         .sheet(isPresented: $showBackgroundPicker) {
-            CanvasBackgroundPicker(selection: $background, blur: $blur)
+            CanvasBackgroundPicker(
+                selection: $background,
+                blur: $blur,
+                customData: $customBackgroundData
+            )
                 .presentationDetents([.medium])
         }
         .sheet(isPresented: $showInsertPicker) {
             CanvasInsertPicker { item in
-                insert(item)
-                showInsertPicker = false
+                if item == .emoji {
+                    showInsertPicker = false
+                    showEmojiPicker = true
+                } else {
+                    insert(item)
+                    showInsertPicker = false
+                }
             }
-            .presentationDetents([.height(250)])
+                .presentationDetents([.height(250)])
+        }
+        .sheet(isPresented: $showEmojiPicker) {
+            CanvasEmojiPicker { emoji in
+                insertEmoji(emoji)
+                showInsertPicker = false
+                showEmojiPicker = false
+            }
+            .presentationDetents([.medium])
+        }
+        .sheet(isPresented: $showBrushPicker) {
+            CanvasBrushPicker(color: $brushColor, width: $brushWidth)
+                .presentationDetents([.medium])
         }
         .sheet(isPresented: $showEffectPicker) {
             CanvasEffectPicker { effect in
@@ -76,6 +107,7 @@ struct MealCanvasView: View {
         .onChange(of: vm.dishCount) { _, _ in syncStickers() }
         .onChange(of: background) { _, _ in saveDocument() }
         .onChange(of: blur) { _, _ in saveDocument() }
+        .onChange(of: customBackgroundData) { _, _ in saveDocument() }
     }
 
     private var header: some View {
@@ -136,7 +168,8 @@ struct MealCanvasView: View {
                 CanvasMediaBackground(
                     source: background,
                     blur: blur,
-                    reduceMotion: reduceMotion
+                    reduceMotion: reduceMotion,
+                    customData: customBackgroundData
                 )
 
                 if stickers.isEmpty && notes.isEmpty && strokes.isEmpty {
@@ -178,6 +211,8 @@ struct MealCanvasView: View {
                     strokes: $strokes,
                     activeStroke: $activeStroke,
                     isEnabled: drawingEnabled,
+                    brush: brushColor,
+                    width: brushWidth,
                     onEnd: saveDocument
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)
@@ -242,6 +277,11 @@ struct MealCanvasView: View {
             LiveControlButton(title: nil, icon: "pencil.tip", isActive: drawingEnabled) {
                 drawingEnabled.toggle()
             }
+            if drawingEnabled {
+                LiveControlButton(title: nil, icon: "slider.horizontal.3") {
+                    showBrushPicker = true
+                }
+            }
             LiveControlButton(title: nil, icon: "photo") {
                 showBackgroundPicker = true
             }
@@ -259,6 +299,80 @@ struct MealCanvasView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.black.opacity(0.22), in: Capsule())
         .foregroundStyle(.white)
+    }
+
+    private var transformBar: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(CanvasPalette.accent)
+            Slider(value: selectedScaleBinding, in: 0.55...1.75)
+                .tint(CanvasPalette.accent)
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel("菜品大小")
+
+            Image(systemName: "rotate.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(CanvasPalette.accent)
+            Slider(value: selectedRotationBinding, in: -180...180)
+                .tint(CanvasPalette.accent)
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel("菜品旋转")
+
+            Button {
+                guard let selectedStickerID,
+                      let index = stickers.firstIndex(where: { $0.id == selectedStickerID }) else { return }
+                stickers[index].scale = 1
+                stickers[index].rotationDegrees = 0
+                saveDocument()
+            } label: {
+                Text("重置")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(CanvasPalette.ink)
+                    .padding(.horizontal, 10)
+                    .frame(height: 30)
+                    .background(CanvasPalette.page, in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 44)
+        .background(CanvasPalette.surface, in: Capsule())
+        .overlay(Capsule().stroke(CanvasPalette.ink.opacity(0.08), lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("调整选中的菜品")
+    }
+
+    private var selectedScaleBinding: Binding<CGFloat> {
+        Binding(
+            get: {
+                guard let selectedStickerID,
+                      let sticker = stickers.first(where: { $0.id == selectedStickerID }) else { return 1 }
+                return sticker.scale
+            },
+            set: { value in
+                guard let selectedStickerID,
+                      let index = stickers.firstIndex(where: { $0.id == selectedStickerID }) else { return }
+                stickers[index].scale = value
+                saveDocument()
+            }
+        )
+    }
+
+    private var selectedRotationBinding: Binding<Double> {
+        Binding(
+            get: {
+                guard let selectedStickerID,
+                      let sticker = stickers.first(where: { $0.id == selectedStickerID }) else { return 0 }
+                return sticker.rotationDegrees
+            },
+            set: { value in
+                guard let selectedStickerID,
+                      let index = stickers.firstIndex(where: { $0.id == selectedStickerID }) else { return }
+                stickers[index].rotationDegrees = value
+                saveDocument()
+            }
+        )
     }
 
     private var actionBar: some View {
@@ -355,8 +469,13 @@ struct MealCanvasView: View {
         case .text:
             notes.append(CanvasNote(text: "今晚吃点好的", isEmoji: false, position: CanvasPoint(x: 0.50, y: 0.22)))
         case .emoji:
-            notes.append(CanvasNote(text: "♥︎", isEmoji: true, position: CanvasPoint(x: 0.78, y: 0.73)))
+            insertEmoji("♥︎")
         }
+        saveDocument()
+    }
+
+    private func insertEmoji(_ emoji: String) {
+        notes.append(CanvasNote(text: emoji, isEmoji: true, position: CanvasPoint(x: 0.78, y: 0.73)))
         saveDocument()
     }
 
@@ -416,6 +535,7 @@ struct MealCanvasView: View {
         if let document = CanvasDocumentStore.load(mealID: mealID) {
             background = CanvasBackground(rawValue: document.background) ?? .meadow
             blur = document.blur
+            customBackgroundData = document.customBackgroundData
             stickers = document.stickers
             notes = document.notes
             strokes = document.strokes
@@ -423,6 +543,7 @@ struct MealCanvasView: View {
         } else {
             background = .meadow
             blur = 3.0
+            customBackgroundData = nil
             stickers = []
             notes = []
             strokes = []
@@ -438,6 +559,7 @@ struct MealCanvasView: View {
             CanvasDocument(
                 background: background.rawValue,
                 blur: blur,
+                customBackgroundData: customBackgroundData,
                 stickers: stickers,
                 notes: notes,
                 strokes: strokes
@@ -462,8 +584,48 @@ private struct CanvasPoint: Codable, Hashable {
     var y: CGFloat
 }
 
+private enum CanvasBrushColor: String, CaseIterable, Identifiable, Codable {
+    case white, butter, coral, sky, mint, ink
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .white: return "奶油白"
+        case .butter: return "黄油黄"
+        case .coral: return "番茄红"
+        case .sky: return "海盐蓝"
+        case .mint: return "薄荷绿"
+        case .ink: return "墨黑"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .white: return .white
+        case .butter: return Color(red: 0.98, green: 0.82, blue: 0.28)
+        case .coral: return Color(red: 0.95, green: 0.30, blue: 0.24)
+        case .sky: return Color(red: 0.32, green: 0.72, blue: 0.92)
+        case .mint: return Color(red: 0.48, green: 0.82, blue: 0.46)
+        case .ink: return Color(red: 0.10, green: 0.10, blue: 0.09)
+        }
+    }
+}
+
+private struct CanvasStroke: Codable, Hashable {
+    var points: [CGPoint]
+    var color: CanvasBrushColor
+    var width: CGFloat
+
+    init(points: [CGPoint], color: CanvasBrushColor = .white, width: CGFloat = 4) {
+        self.points = points
+        self.color = color
+        self.width = width
+    }
+}
+
 private enum CanvasBackground: String, CaseIterable, Identifiable {
-    case seaside, sunset, meadow, night
+    case seaside, sunset, meadow, night, custom
 
     var id: String { rawValue }
 
@@ -473,6 +635,7 @@ private enum CanvasBackground: String, CaseIterable, Identifiable {
         case .sunset: return "黄昏"
         case .meadow: return "草地"
         case .night: return "夜色"
+        case .custom: return "自定义"
         }
     }
 
@@ -488,6 +651,8 @@ private enum CanvasBackground: String, CaseIterable, Identifiable {
             raw = ""
         case .night:
             raw = "https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=1200&q=85"
+        case .custom:
+            raw = ""
         }
         return URL(string: raw)
     }
@@ -496,35 +661,45 @@ private enum CanvasBackground: String, CaseIterable, Identifiable {
 private struct CanvasDocument: Codable {
     var background: String
     var blur: Double
+    var customBackgroundData: Data?
     var stickers: [CanvasSticker]
     var notes: [CanvasNote]
-    var strokes: [[CGPoint]]
+    var strokes: [CanvasStroke]
 
     init(
         background: String,
         blur: Double,
+        customBackgroundData: Data? = nil,
         stickers: [CanvasSticker],
         notes: [CanvasNote],
-        strokes: [[CGPoint]] = []
+        strokes: [CanvasStroke] = []
     ) {
         self.background = background
         self.blur = blur
+        self.customBackgroundData = customBackgroundData
         self.stickers = stickers
         self.notes = notes
         self.strokes = strokes
     }
 
     private enum CodingKeys: String, CodingKey {
-        case background, blur, stickers, notes, strokes
+        case background, blur, customBackgroundData, stickers, notes, strokes
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         background = try container.decode(String.self, forKey: .background)
         blur = try container.decode(Double.self, forKey: .blur)
+        customBackgroundData = try container.decodeIfPresent(Data.self, forKey: .customBackgroundData)
         stickers = try container.decode([CanvasSticker].self, forKey: .stickers)
         notes = try container.decode([CanvasNote].self, forKey: .notes)
-        strokes = try container.decodeIfPresent([[CGPoint]].self, forKey: .strokes) ?? []
+        if let records = try? container.decode([CanvasStroke].self, forKey: .strokes) {
+            strokes = records
+        } else if let legacy = try? container.decode([[CGPoint]].self, forKey: .strokes) {
+            strokes = legacy.map { CanvasStroke(points: $0) }
+        } else {
+            strokes = []
+        }
     }
 }
 
@@ -546,10 +721,15 @@ private struct CanvasMediaBackground: View {
     let source: CanvasBackground
     let blur: Double
     let reduceMotion: Bool
+    let customData: Data?
 
     var body: some View {
         ZStack {
-            if source == .meadow {
+            if source == .custom, let customData, let image = UIImage(data: customData) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else if source == .meadow {
                 Image("CanvasMeadow")
                     .resizable()
                     .scaledToFill()
@@ -610,13 +790,24 @@ private struct CanvasMediaBackground: View {
             LinearGradient(
                 colors: source == .night
                     ? [Color(red: 0.07, green: 0.08, blue: 0.15), Color(red: 0.18, green: 0.12, blue: 0.24)]
-                    : source == .meadow
-                        ? [Color(red: 0.39, green: 0.54, blue: 0.55), Color(red: 0.33, green: 0.37, blue: 0.22)]
+                        : source == .meadow
+                            ? [Color(red: 0.39, green: 0.54, blue: 0.55), Color(red: 0.33, green: 0.37, blue: 0.22)]
+                            : source == .custom
+                                ? [Color(red: 0.46, green: 0.52, blue: 0.54), Color(red: 0.20, green: 0.25, blue: 0.26)]
                         : [Color(red: 0.16, green: 0.57, blue: 0.70), Color(red: 0.08, green: 0.22, blue: 0.35)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
         }
+    }
+}
+
+private extension UIImage {
+    /// Keep a selected photo small enough for the local canvas document while
+    /// preserving a crisp portrait preview.
+    var canvasPreviewData: Data? {
+        let preview = preparingThumbnail(of: CGSize(width: 1600, height: 1600)) ?? self
+        return preview.jpegData(compressionQuality: 0.84)
     }
 }
 
@@ -913,9 +1104,11 @@ private struct CanvasNoteView: View {
 }
 
 private struct CanvasDrawingView: View {
-    @Binding var strokes: [[CGPoint]]
+    @Binding var strokes: [CanvasStroke]
     @Binding var activeStroke: [CGPoint]
     let isEnabled: Bool
+    let brush: CanvasBrushColor
+    let width: CGFloat
     let onEnd: () -> Void
 
     var body: some View {
@@ -940,23 +1133,44 @@ private struct CanvasDrawingView: View {
     private var drawingSurface: some View {
         ZStack {
             Canvas { context, _ in
-                for stroke in strokes + (activeStroke.isEmpty ? [] : [activeStroke]) {
-                    guard let first = stroke.first else { continue }
-                    if stroke.count == 1 {
+                for stroke in strokes {
+                    let points = stroke.points
+                    let strokeColor = stroke.color.color
+                    let strokeWidth = stroke.width
+                    guard let first = points.first else { continue }
+                    if points.count == 1 {
                         context.fill(
-                            Path(ellipseIn: CGRect(x: first.x - 2, y: first.y - 2, width: 4, height: 4)),
-                            with: .color(.white.opacity(0.92))
+                            Path(ellipseIn: CGRect(x: first.x - strokeWidth / 2, y: first.y - strokeWidth / 2, width: strokeWidth, height: strokeWidth)),
+                            with: .color(strokeColor)
                         )
                         continue
                     }
                     var path = Path()
                     path.move(to: first)
-                    for point in stroke.dropFirst() { path.addLine(to: point) }
+                    for point in points.dropFirst() { path.addLine(to: point) }
                     context.stroke(
                         path,
-                        with: .color(.white.opacity(0.92)),
-                        style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round)
+                        with: .color(strokeColor),
+                        style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round, lineJoin: .round)
                     )
+                }
+
+                if let first = activeStroke.first {
+                    if activeStroke.count == 1 {
+                        context.fill(
+                            Path(ellipseIn: CGRect(x: first.x - width / 2, y: first.y - width / 2, width: width, height: width)),
+                            with: .color(brush.color)
+                        )
+                    } else {
+                        var path = Path()
+                        path.move(to: first)
+                        for point in activeStroke.dropFirst() { path.addLine(to: point) }
+                        context.stroke(
+                            path,
+                            with: .color(brush.color),
+                            style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round)
+                        )
+                    }
                 }
             }
         }
@@ -973,7 +1187,7 @@ private struct CanvasDrawingView: View {
             }
             .onEnded { _ in
                 guard !activeStroke.isEmpty else { return }
-                strokes.append(activeStroke)
+                strokes.append(CanvasStroke(points: activeStroke, color: brush, width: width))
                 activeStroke.removeAll()
                 onEnd()
             }
@@ -1091,9 +1305,129 @@ private struct CanvasInsertPicker: View {
     }
 }
 
+private struct CanvasEmojiPicker: View {
+    let onSelect: (String) -> Void
+
+    private let emojis = [
+        "♥︎", "♡", "😊", "😍", "🥰", "😋", "🤤", "🫶",
+        "🍴", "✨", "🔥", "🌿", "🍓", "🍋", "🍕", "🍜",
+        "🍣", "🍰", "☕️", "🥂", "🌙", "⭐️", "🎉", "🐱"
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("挑一个放到画布上")
+                .font(.system(size: 21, weight: .semibold))
+                .foregroundStyle(CanvasPalette.ink)
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 12) {
+                ForEach(emojis, id: \.self) { emoji in
+                    Button { onSelect(emoji) } label: {
+                        Text(emoji)
+                            .font(.system(size: 28))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 42)
+                            .background(CanvasPalette.page, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Spacer()
+        }
+        .padding(22)
+    }
+}
+
+private struct CanvasBrushPicker: View {
+    @Binding var color: CanvasBrushColor
+    @Binding var width: CGFloat
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("画笔设置")
+                    .font(.system(size: 23, weight: .semibold))
+                    .foregroundStyle(CanvasPalette.ink)
+
+                Text("颜色")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(CanvasPalette.muted)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 10) {
+                    ForEach(CanvasBrushColor.allCases) { item in
+                        Button {
+                            color = item
+                        } label: {
+                            VStack(spacing: 5) {
+                                Circle()
+                                    .fill(item.color)
+                                    .frame(width: 28, height: 28)
+                                    .overlay(Circle().stroke(CanvasPalette.ink.opacity(0.18), lineWidth: 1))
+                                Text(item.title)
+                                    .font(.system(size: 10, weight: .medium))
+                                    .foregroundStyle(CanvasPalette.ink)
+                                    .lineLimit(1)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 7)
+                            .background(color == item ? CanvasPalette.accent.opacity(0.14) : CanvasPalette.page, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                HStack {
+                    Text("粗细")
+                        .font(.system(size: 14, weight: .semibold))
+                    Spacer()
+                    Text("\(Int(width)) pt")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(CanvasPalette.muted)
+                }
+                Slider(value: $width, in: 2...14, step: 1)
+                    .tint(CanvasPalette.accent)
+                    .accessibilityLabel("画笔粗细")
+
+                HStack(spacing: 12) {
+                    ForEach([2.0, 4.0, 8.0, 14.0], id: \.self) { preset in
+                        Button {
+                            width = preset
+                        } label: {
+                            VStack(spacing: 2) {
+                                Circle()
+                                    .fill(color.color)
+                                    .frame(width: preset + 12, height: preset + 12)
+                                    .overlay(Circle().stroke(CanvasPalette.ink.opacity(0.18), lineWidth: 1))
+                                Text("\(Int(preset)) pt")
+                                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                                    .foregroundStyle(CanvasPalette.muted)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 52)
+                            .background(CanvasPalette.page, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(Int(preset)) 点")
+                    }
+                }
+                Spacer()
+            }
+            .padding(22)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                        .foregroundStyle(CanvasPalette.accent)
+                }
+            }
+        }
+    }
+}
+
 private struct CanvasBackgroundPicker: View {
     @Binding var selection: CanvasBackground
     @Binding var blur: Double
+    @Binding var customData: Data?
+    @State private var photoItem: PhotosPickerItem?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -1106,10 +1440,10 @@ private struct CanvasBackgroundPicker: View {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
                     ForEach(CanvasBackground.allCases) { item in
                         Button {
-                            selection = item
+                            if item != .custom || customData != nil { selection = item }
                         } label: {
                             ZStack(alignment: .bottomLeading) {
-                                CanvasMediaBackground(source: item, blur: 0, reduceMotion: true)
+                                CanvasMediaBackground(source: item, blur: 0, reduceMotion: true, customData: customData)
                                 Text(item.title)
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundStyle(.white)
@@ -1128,6 +1462,33 @@ private struct CanvasBackgroundPicker: View {
                             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         }
                         .buttonStyle(.plain)
+                        .disabled(item == .custom && customData == nil)
+                    }
+                }
+
+                PhotosPicker(
+                    selection: $photoItem,
+                    matching: .images,
+                    photoLibrary: .shared()
+                ) {
+                    Label("从相册选择底图", systemImage: "photo.badge.plus")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(CanvasPalette.ink)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 44)
+                        .background(CanvasPalette.page, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .onChange(of: photoItem) { _, item in
+                    guard let item else { return }
+                    Task {
+                        guard let data = try? await item.loadTransferable(type: Data.self),
+                              let image = UIImage(data: data),
+                              let jpeg = image.canvasPreviewData else { return }
+                        await MainActor.run {
+                            customData = jpeg
+                            selection = .custom
+                        }
                     }
                 }
 
@@ -1144,7 +1505,7 @@ private struct CanvasBackgroundPicker: View {
                         .tint(CanvasPalette.accent)
                 }
 
-                Text("底图支持照片、Live Photo 或短视频；当前用静态场景预览画布动效。")
+                Text("内置底图之外，也可以从相册选一张照片。Live Photo 和短视频的动态时间轴随后接入。")
                     .font(.system(size: 12))
                     .foregroundStyle(CanvasPalette.muted)
                     .fixedSize(horizontal: false, vertical: true)
