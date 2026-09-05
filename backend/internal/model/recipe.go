@@ -76,31 +76,31 @@ func (RecipeCategory) TableName() string {
 
 // Recipe 菜谱
 type Recipe struct {
-	ID            uint           `json:"id" gorm:"primaryKey"`
-	Name          string         `json:"name" gorm:"size:64;not null;comment:菜名"`
-	Description   string         `json:"description" gorm:"size:255;comment:简介"`
-	CoverImage    string         `json:"cover_image" gorm:"size:512;comment:封面图"`
-	Images        JSON           `json:"images" gorm:"type:json;comment:图集"`
-	CategoryID    *uint          `json:"category_id" gorm:"index;comment:分类"`
-	CookingTime   int            `json:"cooking_time" gorm:"default:0;comment:制作时间 分钟"`
-	Difficulty    string         `json:"difficulty" gorm:"type:enum('easy','medium','hard');default:'easy';comment:难度"`
-	Servings      int            `json:"servings" gorm:"default:2;comment:几人份"`
-	Ingredients   JSON           `json:"ingredients" gorm:"type:json;comment:食材清单"`
-	Steps         JSON           `json:"steps" gorm:"type:json;comment:做法步骤"`
-	Tips          string         `json:"tips" gorm:"type:text;comment:小贴士"`
-	Tags          JSON           `json:"tags" gorm:"type:json;comment:风味标签"`
-	MoodTags      JSON           `json:"mood_tags" gorm:"type:json;comment:适用心情 easy/normal/serious/change"`
-	SceneTags     JSON           `json:"scene_tags" gorm:"type:json;comment:适用标签 household/dining"`
-	HouseholdID   uint           `json:"household_id" gorm:"not null;index;comment:所属一个家"`
-	CreatedBy     uint           `json:"created_by" gorm:"not null;index;comment:创建者"`
-	IsArchived    bool           `json:"is_archived" gorm:"default:false;index;comment:是否归档"`
-	ViewCount     int            `json:"view_count" gorm:"default:0;comment:查看次数"`
-	UseCount      int            `json:"use_count" gorm:"default:0;comment:加入一顿次数"`
-	LastUsedAt    *time.Time     `json:"last_used_at" gorm:"comment:最近一次被吃"`
-	IsFavored     bool           `json:"is_favored" gorm:"-"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
-	DeletedAt     gorm.DeletedAt `json:"-" gorm:"index"`
+	ID          uint           `json:"id" gorm:"primaryKey"`
+	Name        string         `json:"name" gorm:"size:64;not null;comment:菜名"`
+	Description string         `json:"description" gorm:"size:255;comment:简介"`
+	CoverImage  string         `json:"cover_image" gorm:"size:512;comment:封面图"`
+	Images      JSON           `json:"images" gorm:"type:json;comment:图集"`
+	CategoryID  *uint          `json:"category_id" gorm:"index;comment:分类"`
+	CookingTime int            `json:"cooking_time" gorm:"default:0;comment:制作时间 分钟"`
+	Difficulty  string         `json:"difficulty" gorm:"type:enum('easy','medium','hard');default:'easy';comment:难度"`
+	Servings    int            `json:"servings" gorm:"default:2;comment:几人份"`
+	Ingredients JSON           `json:"ingredients" gorm:"type:json;comment:食材清单"`
+	Steps       JSON           `json:"steps" gorm:"type:json;comment:做法步骤"`
+	Tips        string         `json:"tips" gorm:"type:text;comment:小贴士"`
+	Tags        JSON           `json:"tags" gorm:"type:json;comment:风味标签"`
+	MoodTags    JSON           `json:"mood_tags" gorm:"type:json;comment:适用心情 easy/normal/serious/change"`
+	SceneTags   JSON           `json:"scene_tags" gorm:"type:json;comment:适用标签 household/dining"`
+	HouseholdID uint           `json:"household_id" gorm:"not null;index;comment:所属一个家"`
+	CreatedBy   uint           `json:"created_by" gorm:"not null;index;comment:创建者"`
+	IsArchived  bool           `json:"is_archived" gorm:"default:false;index;comment:是否归档"`
+	ViewCount   int            `json:"view_count" gorm:"default:0;comment:查看次数"`
+	UseCount    int            `json:"use_count" gorm:"default:0;comment:加入一顿次数"`
+	LastUsedAt  *time.Time     `json:"last_used_at" gorm:"comment:最近一次被吃"`
+	IsFavored   bool           `json:"is_favored" gorm:"-"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
 
 	Category *RecipeCategory `json:"category,omitempty" gorm:"foreignKey:CategoryID"`
 	Creator  *User           `json:"creator,omitempty" gorm:"foreignKey:CreatedBy"`

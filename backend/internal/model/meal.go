@@ -8,8 +8,8 @@ import (
 
 // Scene 数据标签：household=家庭；dining=聚餐。
 const (
-	SceneHousehold = "household"
-	SceneDining = "dining"
+	SceneHousehold = "pair"
+	SceneDining    = "family"
 )
 
 // 心情常量
