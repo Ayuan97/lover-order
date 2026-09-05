@@ -109,10 +109,18 @@ struct MealCanvasView: View {
                 inlineEditorPanel
                     .padding(.horizontal, 8)
                     .padding(.top, 8)
-                    .presentationDetents([.height(430), .large])
+                    .presentationDetents(editorDetents)
                     .presentationDragIndicator(.visible)
                     .presentationBackground(Color.white)
             }
+        }
+    }
+
+    private var editorDetents: Set<PresentationDetent> {
+        switch activeEditor {
+        case .emoji: return [.height(520), .large]
+        case .insert, .effects, .brush, .background: return [.height(430), .large]
+        case nil: return [.height(430)]
         }
     }
 
