@@ -65,8 +65,8 @@ enum MealScene: String, CaseIterable, Identifiable, Codable {
     /// 常用短名；历史详情页会用更完整的记录文案。
     var label: String {
         switch self {
-        case .household: return "我们这顿"
-        case .dining: return "朋友聚餐"
+        case .household: return "家庭"
+        case .dining: return "聚餐"
         }
     }
 

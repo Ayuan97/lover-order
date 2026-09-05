@@ -1,6 +1,6 @@
 import SwiftUI
 
-// 首页"我们这顿"
+// 首页家庭餐次
 struct MealNowView: View {
     @EnvironmentObject private var appState: AppState
     @StateObject private var vm = MealNowViewModel()
@@ -37,16 +37,16 @@ struct MealNowView: View {
                 },
                 onShoppingList: { showShoppingList = true },
                 onDining: { showDiningHost = true },
-                onRetry: { await vm.load(scene: coupleScene, mood: appState.currentMood) }
+                onRetry: { await vm.load(scene: householdScene, mood: appState.currentMood) }
             )
             .environmentObject(appState)
             .background(Color.appBackground.ignoresSafeArea())
             .task {
-                // 首页只服务家庭餐次我们这顿
+                // 首页只服务家庭餐次
                 if appState.currentScene != .household {
                     appState.currentScene = .household
                 }
-                await vm.load(scene: coupleScene, mood: appState.currentMood)
+                await vm.load(scene: householdScene, mood: appState.currentMood)
             }
             .task {
                 await checkDining()
@@ -57,7 +57,7 @@ struct MealNowView: View {
                     try? await Task.sleep(for: .seconds(4))
                     guard scenePhase == .active else { continue }
                     await vm.syncMeal(
-                        scene: coupleScene,
+                        scene: householdScene,
                         mood: appState.currentMood,
                         selfUserId: appState.currentUser?.id
                     )
@@ -68,20 +68,20 @@ struct MealNowView: View {
             .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
                 Task {
                     await vm.refreshMeal(
-                        scene: coupleScene,
+                        scene: householdScene,
                         mood: appState.currentMood,
                         selfUserId: appState.currentUser?.id
                     )
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
-                Task { await vm.load(scene: coupleScene, mood: appState.currentMood) }
+                Task { await vm.load(scene: householdScene, mood: appState.currentMood) }
             }
             .navigationBarHidden(true)
             .sheet(isPresented: $showAddDish) {
                 if let meal = vm.meal {
                     AddDishView(mealId: meal.id) {
-                        Task { await vm.load(scene: coupleScene, mood: appState.currentMood) }
+                        Task { await vm.load(scene: householdScene, mood: appState.currentMood) }
                     }
                     .environmentObject(appState)
                 }
@@ -104,7 +104,7 @@ struct MealNowView: View {
             }
             .sheet(isPresented: $showCreateRecipe) {
                 RecipeEditView(mode: .create) { _ in
-                    Task { await vm.load(scene: coupleScene, mood: appState.currentMood) }
+                    Task { await vm.load(scene: householdScene, mood: appState.currentMood) }
                 }
                 .environmentObject(appState)
             }
@@ -149,7 +149,7 @@ struct MealNowView: View {
             .sheet(isPresented: $showDiningHost, onDismiss: {
                 Task {
                     await vm.refreshMeal(
-                        scene: coupleScene,
+                        scene: householdScene,
                         mood: appState.currentMood,
                         selfUserId: appState.currentUser?.id
                     )
@@ -215,7 +215,7 @@ struct MealNowView: View {
     }
 
     // 首页只承载家庭餐次「我们这顿」
-    private var coupleScene: MealScene { .household }
+    private var householdScene: MealScene { .household }
 
     private var addedRecipeIds: Set<UInt> {
         Set(vm.dishes.compactMap(\.recipeId))
@@ -311,7 +311,7 @@ struct MealNowView: View {
                 HomeMoodOption(mood: m, isSelected: appState.currentMood == m) {
                     Task {
                         appState.currentMood = m
-                        await vm.applyMood(m, scene: coupleScene)
+                        await vm.applyMood(m, scene: householdScene)
                     }
                 }
             }
@@ -499,7 +499,7 @@ struct MealNowView: View {
         }
         .confirmationDialog("这顿不要了？", isPresented: $showCancelMeal) {
             Button("清空重来", role: .destructive) {
-                Task { await vm.cancelMeal(scene: coupleScene, mood: appState.currentMood) }
+                Task { await vm.cancelMeal(scene: householdScene, mood: appState.currentMood) }
             }
             Button("手滑了", role: .cancel) {}
         } message: {
@@ -764,7 +764,7 @@ struct MealNowView: View {
     }
 
     private func reloadCurrentMeal() async {
-        await vm.load(scene: coupleScene, mood: appState.currentMood)
+        await vm.load(scene: householdScene, mood: appState.currentMood)
     }
 
     private func clearFinishedMeal() {
@@ -799,7 +799,7 @@ struct MealNowView: View {
                 showReview = true
             }
         case .completed, .cancelled:
-            await vm.load(scene: coupleScene, mood: appState.currentMood)
+            await vm.load(scene: householdScene, mood: appState.currentMood)
         }
     }
 
