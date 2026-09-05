@@ -36,19 +36,17 @@ struct LoginView: View {
                     .frame(height: 52)
                     .clipShape(RoundedRectangle(cornerRadius: AppRadius.pill, style: .continuous))
 
-                #if DEBUG
                 Button {
                     showDevLogin = true
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "hammer")
-                        Text("开发模式登录")
+                        Text("测试登录")
                     }
                     .font(AppFont.caption(13))
                     .foregroundStyle(Color.inkSecondary)
                     .padding(.vertical, 6)
                 }
-                #endif
 
                 if let errorMessage {
                     Text(errorMessage)
