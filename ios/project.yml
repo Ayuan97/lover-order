@@ -43,7 +43,7 @@ targets:
           UIColorName: AppBackground
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
-        API_BASE_URL: http://180.110.203.208:8081
+        API_BASE_URL: http://192.168.1.162:8081
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         NSPhotoLibraryUsageDescription: 选择菜品照片和评价配图
