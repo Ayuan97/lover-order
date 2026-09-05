@@ -8,7 +8,7 @@ import (
 
 // Scene 数据标签：household=家庭；dining=聚餐。
 const (
-	SceneHousehold = "pair"
+	SceneHousehold = "household"
 	SceneDining    = "family"
 )
 
