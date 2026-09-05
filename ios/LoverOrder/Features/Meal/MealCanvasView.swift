@@ -2692,21 +2692,26 @@ private struct CanvasDrawingView: View {
     let onEnd: () -> Void
 
     var body: some View {
-        ZStack {
-            drawingSurface
+        GeometryReader { proxy in
+            ZStack(alignment: .topLeading) {
+                drawingSurface
+                    .frame(width: proxy.size.width, height: proxy.size.height)
 
-            // Canvas itself is a rendering surface, not a reliable hit target
-            // on every iOS version. Keep a transparent layer above it while
-            // drawing is enabled so a stroke cannot fall through to a sticker
-            // or the ScrollView underneath.
-            if isEnabled {
-                Rectangle()
-                    .fill(.black.opacity(0.001))
-                    .contentShape(Rectangle())
-                    .highPriorityGesture(drawGesture, including: .all)
+                // The hit layer must exactly cover the canvas. An unconstrained
+                // transparent Rectangle can collapse to the trailing side in a
+                // ScrollView and makes drawing appear offset or unavailable.
+                if isEnabled {
+                    Rectangle()
+                        .fill(.black.opacity(0.001))
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .contentShape(Rectangle())
+                        .highPriorityGesture(drawGesture, including: .all)
+                }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
         .allowsHitTesting(isEnabled)
     }
 
