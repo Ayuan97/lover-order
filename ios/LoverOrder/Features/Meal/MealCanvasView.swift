@@ -109,7 +109,7 @@ struct MealCanvasView: View {
                 inlineEditorPanel
                     .padding(.horizontal, 8)
                     .padding(.top, 8)
-                    .presentationDetents([.large])
+                    .presentationDetents([.height(430), .large])
                     .presentationDragIndicator(.visible)
                     .presentationBackground(Color.white)
             }
