@@ -119,7 +119,9 @@ struct MealCanvasView: View {
     private var editorDetents: Set<PresentationDetent> {
         switch activeEditor {
         case .emoji: return [.height(520), .large]
-        case .insert, .effects, .brush, .background: return [.height(430), .large]
+        case .brush: return [.height(560), .large]
+        case .effects: return [.height(360)]
+        case .insert, .background: return [.height(430), .large]
         case nil: return [.height(430)]
         }
     }
@@ -741,7 +743,7 @@ struct MealCanvasView: View {
                     }
                 }
                 }
-                .padding(.bottom, 8)
+                .padding(.bottom, 2)
             }
         }
     }
