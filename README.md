@@ -2,7 +2,7 @@
 
 “我们这顿”是给家庭成员一起决定吃什么的 iOS 应用。当前版本的主路径是：在“这一顿”里加菜 → 定下这一顿 → 吃完后记录。它不是商家点餐系统。
 
-当前可用行为、页面入口、状态和协作房间规则见[当前版本说明](docs/current-version.md)。首页画布的编辑交互见[首页画布说明](docs/features/home-canvas/feature.md)。
+当前可用行为、页面入口、状态和协作房间规则见[当前版本说明](docs/product-flow.md)。首页画布的编辑交互见[首页画布说明](docs/features/home-canvas/feature.md)。
 
 ## 项目结构
 
