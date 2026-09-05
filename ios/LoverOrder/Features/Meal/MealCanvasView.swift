@@ -740,7 +740,7 @@ struct MealCanvasView: View {
 
     private var brushEditorContent: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("颜色")
                     .font(.system(size: 12, weight: .semibold))
@@ -841,7 +841,7 @@ struct MealCanvasView: View {
             }
             .buttonStyle(CanvasPressStyle(scale: 0.96))
             }
-            .padding(.bottom, 8)
+             .padding(.bottom, 0)
         }
     }
 
