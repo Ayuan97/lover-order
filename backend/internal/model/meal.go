@@ -8,7 +8,7 @@ import (
 
 // Scene 数据标签：household=家庭；dining=聚餐。
 const (
-	SceneHousehold = "household"
+	SceneHousehold = "pair"
 	SceneDining    = "family"
 )
 
@@ -32,7 +32,7 @@ const (
 type MealSession struct {
 	ID            uint           `json:"id" gorm:"primaryKey"`
 	Title         string         `json:"title" gorm:"size:64;comment:可选的一顿标题"`
-	Scene         string         `json:"scene" gorm:"type:enum('household','dining');default:'household';index;comment:标签 household家庭 dining聚餐"`
+	Scene         string         `json:"scene" gorm:"type:enum('pair','family');default:'pair';index;comment:标签 household家庭 dining聚餐"`
 	Mood          string         `json:"mood" gorm:"type:enum('easy','normal','serious','change');default:'easy';comment:心情"`
 	PlannedAt     *time.Time     `json:"planned_at" gorm:"comment:打算吃的时间"`
 	ConfirmedAt   *time.Time     `json:"confirmed_at" gorm:"comment:定下来的时间"`
