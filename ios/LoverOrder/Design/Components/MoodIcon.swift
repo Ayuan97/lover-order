@@ -57,8 +57,8 @@ enum Mood: String, CaseIterable, Identifiable, Codable {
 // 餐次数据标签（非产品「模式」）。
 // household = 家庭；dining = 聚餐。
 enum MealScene: String, CaseIterable, Identifiable, Codable {
-    case household = "pair"
-    case dining = "family"
+    case household
+    case dining
 
     var id: String { rawValue }
 

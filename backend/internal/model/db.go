@@ -86,13 +86,6 @@ func AutoMigrate() error {
 		&MealParticipant{},
 	}
 
-	// 先扩展列的可接受值，再统一标签，最后由模型迁移收紧为两种场景。
-	if err := DB.Exec("ALTER TABLE meal_sessions MODIFY COLUMN scene varchar(16) NOT NULL DEFAULT 'pair'").Error; err != nil {
-		// 首次安装时表尚未创建，忽略该次预处理。
-		log.Printf("餐次标签预处理跳过：%v", err)
-	}
-	DB.Exec("UPDATE meal_sessions SET scene = CASE scene WHEN 'household' THEN 'pair' WHEN 'dining' THEN 'family' ELSE 'pair' END")
-
 	for _, t := range tables {
 		if err := DB.AutoMigrate(t); err != nil {
 			return fmt.Errorf("迁移 %T 失败：%w", t, err)

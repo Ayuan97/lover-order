@@ -5,7 +5,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"lover-order-backend/internal/middleware"
-	"lover-order-backend/internal/model"
 	"lover-order-backend/internal/service"
 )
 
@@ -23,7 +22,7 @@ func NewMealHandler() *MealHandler {
 func (h *MealHandler) Current(c *gin.Context) {
 	hid, _ := middleware.CurrentHouseholdID(c)
 	uid, _ := middleware.CurrentUserID(c)
-	scene := normalizeScene(c.Query("scene"))
+	scene := c.Query("scene")
 	mood := c.Query("mood")
 	item, err := h.svc.Current(hid, uid, scene, mood)
 	if err != nil {
@@ -237,15 +236,4 @@ func (h *MealHandler) Review(c *gin.Context) {
 		return
 	}
 	OK(c, item)
-}
-
-func normalizeScene(scene string) string {
-	switch scene {
-	case "pair":
-		return model.SceneHousehold
-	case "family":
-		return model.SceneDining
-	default:
-		return scene
-	}
 }
