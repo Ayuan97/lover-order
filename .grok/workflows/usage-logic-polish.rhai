@@ -1,6 +1,6 @@
 let meta = #{
     name: "usage-logic-polish",
-    description: "按情侣日常主路径走查使用逻辑与人话，核验后修复，并写入产品宪法要点",
+    description: "按家庭餐次主路径走查使用逻辑与人话，核验后修复，并写入产品宪法要点",
     when_to_use: "产品心智纠正后，冻结使用逻辑并打磨主路径/聚会弱入口",
     phases: [
         #{ title: "Walk", detail: "按使用任务走查代码路径" },
@@ -72,14 +72,14 @@ let report_schema = #{
     },
 };
 
-// 产品宪法（写入每个 agent，禁止再做成三场景）
+// 产品宪法（写入每个 agent，禁止再做成两种场景）
 let constitution = "";
 constitution += "lover-order 产品宪法：";
-constitution += "1) 主产品=情侣日常「我们这顿」，首页固定 pair，不做三场景并列切换。";
+constitution += "1) 主产品=家庭餐次「我们这顿」，首页固定 household，只保留家庭与聚餐两种场景。";
 constitution += "2) 主循环=点菜 → 就这些(confirm) → 吃完了(complete) → 可选写两句；禁止跳步；至少一道菜。";
 constitution += "3) 聚会=偶发「点菜房间」，弱入口，不是模式/场景；关房间≠吃完。";
 constitution += "4) 进家(餐券)≠进房间(房间号)；客人点菜不加入 household。";
-constitution += "5) 以后想吃/菜单/记录=支线，不上首页抢主路径。";
+constitution += "5) 聚餐/菜单/记录=支线，不上首页抢主路径。";
 constitution += "6) 文案要人话口语，禁止 AI 腔、说明书腔、教程式芯片。";
 constitution += "7) 技术：View 不直接请求；API 仅 GET/POST；注释只写 WHY；不写新 Markdown 文档除 CLAUDE.md。";
 
@@ -92,7 +92,7 @@ let tasks = [
         id: "T1",
         name: "进门与建家",
         paths: "ios/LoverOrder/App/RootView.swift AppState.swift Features/Auth/ Features/Profile/InviteTicketView.swift",
-        ask: "登录→无家→建家/进家→餐券→主页；半状态；蹭饭不建家。找走不通、逻辑错、仍像三场景/产品腔的文案。",
+        ask: "登录→无家→建家/进家→餐券→主页；半状态；蹭饭不建家。找走不通、逻辑错、仍像两种场景/产品腔的文案。",
     },
     #{
         id: "T2",
@@ -110,7 +110,7 @@ let tasks = [
         id: "T4",
         name: "支线不抢主",
         paths: "MainTabView ProfileView FuturePlansView MenuView HistoryView",
-        ask: "以后想吃/菜单/记录是否抢首页；相处模式是否还在；文案是否还在卖三场景。",
+        ask: "聚餐/菜单/记录是否抢首页；相处模式是否还在；文案是否还在卖两种场景。",
     },
 ];
 
@@ -276,7 +276,7 @@ if meal_ids.len() > 0 {
 phase("Constitution");
 let cp = "";
 cp += "更新 CLAUDE.md：在产品理念附近增加小节「产品宪法（使用逻辑）」，用短列表写清：";
-cp += "情侣日常主轴、主循环动词、聚会弱入口、进家≠进房间、支线不上首页、人话。";
+cp += "家庭餐次主轴、主循环动词、聚会弱入口、进家≠进房间、支线不上首页、人话。";
 cp += constitution;
 cp += " 不要删已有有用内容；不要写成长文。updated=true 当已写入。";
 let cr = agent(cp, #{ label: "constitution", capability_mode: "all", output_schema: constitution_schema });

@@ -346,7 +346,7 @@ struct AddDishView: View {
                 query.favorite = true
             case .all:
                 query.mood = appState.currentMood
-                query.scene = .pair
+                query.scene = .household
             case .recent:
                 break
             case .custom:

@@ -132,17 +132,15 @@ struct HistoryView: View {
 extension MealScene {
     var historyLabel: String {
         switch self {
-        case .pair: return "家人一起吃"
-        case .family: return "朋友聚餐"
-        case .future: return "以后想吃"
+        case .household: return "家人一起吃"
+        case .dining: return "朋友聚餐"
         }
     }
 
     var historyIcon: String {
         switch self {
-        case .pair: return "house.fill"
-        case .family: return "person.3.fill"
-        case .future: return "bookmark"
+        case .household: return "house.fill"
+        case .dining: return "person.3.fill"
         }
     }
 }
@@ -201,7 +199,7 @@ private struct HistoryCard: View {
     }
 
     private var badgeColor: Color {
-        switch meal.scene { case .pair: return Color.brandGreen; case .family: return Color.clay; case .future: return Color.inkMuted }
+        switch meal.scene { case .household: return Color.brandGreen; case .dining: return Color.clay }
     }
     private var placeholder: some View {
         ZStack { Color.paperGreen; Image(systemName: "leaf").foregroundStyle(Color.brandGreen.opacity(0.55)) }
@@ -237,8 +235,8 @@ final class HistoryViewModel: ObservableObject {
             q.status = .completed
             switch filter {
             case .all: break
-            case .home: q.scene = .pair
-            case .friends: q.scene = .family
+            case .home: q.scene = .household
+            case .friends: q.scene = .dining
             }
             let result = try await MealService.shared.list(q)
             meals = result.items

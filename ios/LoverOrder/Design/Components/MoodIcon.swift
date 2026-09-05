@@ -55,39 +55,35 @@ enum Mood: String, CaseIterable, Identifiable, Codable {
 }
 
 // 餐次数据标签（非产品「模式」）。
-// pair = 家里吃饭；family = 朋友聚餐；future = 支线以后想吃。
+// household = 家庭；dining = 聚餐。
 enum MealScene: String, CaseIterable, Identifiable, Codable {
-    case pair
-    case family
-    case future
+    case household
+    case dining
 
     var id: String { rawValue }
 
     /// 常用短名；历史详情页会用更完整的记录文案。
     var label: String {
         switch self {
-        case .pair: return "我们这顿"
-        case .family: return "朋友聚餐"
-        case .future: return "以后想吃"
+        case .household: return "我们这顿"
+        case .dining: return "朋友聚餐"
         }
     }
 
     var hint: String {
         switch self {
-        case .pair: return "今天想吃点什么"
-        case .family: return ""
-        case .future: return "先记下 不急着今天做"
+        case .household: return "今天想吃点什么"
+        case .dining: return ""
         }
     }
 
     var icon: String {
         switch self {
-        case .pair: return "heart.fill"
-        case .family: return "clock.arrow.circlepath"
-        case .future: return "moon.stars.fill"
+        case .household: return "heart.fill"
+        case .dining: return "clock.arrow.circlepath"
         }
     }
 
-    /// 用户可选标签（编辑菜谱等）；不含 family
-    static var productCases: [MealScene] { [.pair, .future] }
+    /// 用户可选标签（编辑菜谱等）。
+    static var productCases: [MealScene] { [.household] }
 }

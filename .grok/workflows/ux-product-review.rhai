@@ -52,9 +52,9 @@ let report_schema = #{
 
 // 产品背景（写入每个 prompt，子代理无会话上下文）
 let product_ctx = "";
-product_ctx += "产品：lover-order，情侣/家庭日常吃饭决策工具（非商家点餐）。";
+product_ctx += "产品：lover-order，家庭日常吃饭决策工具（非商家点餐）。";
 product_ctx += "核心动词：选菜 → 定下这一顿 → 做了 → 吃了 → 留下记录。";
-product_ctx += "概念：一个家(Household)、这一顿(MealSession)、场景 pair/family/future、心情 easy/normal/serious/change。";
+product_ctx += "概念：一个家(Household)、这一顿(MealSession)、场景 household/dining、心情 easy/normal/serious/change。";
 product_ctx += "状态机：planning → confirmed → completed（可 cancelled）。";
 product_ctx += "iOS 主 Tab：这一顿 / 菜单 / 记录 / 我的。代码在 ios/LoverOrder/。";
 product_ctx += "设计：日式侘寂、米白、墨绿。审查重点是「真实用户能不能走通」而非像素级美工。";

@@ -30,21 +30,21 @@ struct MenuView: View {
                 Color.appBackground.ignoresSafeArea()
             }
             .refreshable {
-                await vm.loadCurrentMeal(scene: .pair, mood: appState.currentMood)
+                await vm.loadCurrentMeal(scene: .household, mood: appState.currentMood)
                 await vm.loadRecipes()
             }
             .safeAreaInset(edge: .bottom) {
                 bottomBar
             }
             .task {
-                await vm.bootstrap(scene: .pair, mood: appState.currentMood)
+                await vm.bootstrap(scene: .household, mood: appState.currentMood)
             }
             .task {
                 // 与首页同款轮询 另一台手机加的菜自动出现在"已加入这一顿"
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(4))
                     guard scenePhase == .active else { continue }
-                    await vm.syncMeal(scene: .pair, mood: appState.currentMood)
+                    await vm.syncMeal(scene: .household, mood: appState.currentMood)
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
@@ -54,7 +54,7 @@ struct MenuView: View {
                 Task { await vm.loadCategories() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
-                Task { await vm.loadCurrentMeal(scene: .pair, mood: appState.currentMood) }
+                Task { await vm.loadCurrentMeal(scene: .household, mood: appState.currentMood) }
             }
             .navigationBarHidden(true)
             .sheet(isPresented: $showCreateRecipe) {

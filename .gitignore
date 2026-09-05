@@ -15,3 +15,8 @@ ios/build/
 ios/DerivedData/
 xcuserdata/
 *.xcuserstate
+
+# Local IDE / simulator verification artifacts
+.idea/
+.xcodebuildmcp/
+/*.png

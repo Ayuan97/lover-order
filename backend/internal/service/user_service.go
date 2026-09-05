@@ -166,8 +166,8 @@ func (s *UserService) UpdateProfile(userID uint, in UpdateProfileInput) (*model.
 		updates["gender"] = *in.Gender
 	}
 	if in.DefaultScene != nil {
-		// 产品只认日常 pair；future 可作偏好；family 禁止再写成默认
-		if *in.DefaultScene == model.SceneFamily || !isValidScene(*in.DefaultScene) {
+		// 默认餐次只允许日常 household。
+		if *in.DefaultScene == model.SceneDining || !isValidScene(*in.DefaultScene) {
 			return nil, errors.New("参数不合法")
 		}
 		updates["default_scene"] = *in.DefaultScene

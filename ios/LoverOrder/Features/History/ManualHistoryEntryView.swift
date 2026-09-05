@@ -5,7 +5,7 @@ struct ManualHistoryEntryView: View {
     let onSaved: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var scene: MealScene = .pair
+    @State private var scene: MealScene = .household
     @State private var title = ""
     @State private var dishesText = ""
     @State private var note = ""
@@ -65,8 +65,8 @@ struct ManualHistoryEntryView: View {
                 .font(AppFont.headline(15))
                 .foregroundStyle(Color.inkPrimary)
             Picker("和谁一起", selection: $scene) {
-                Text("家人一起吃").tag(MealScene.pair)
-                Text("朋友聚餐").tag(MealScene.family)
+                Text("家人一起吃").tag(MealScene.household)
+                Text("朋友聚餐").tag(MealScene.dining)
             }
             .pickerStyle(.segmented)
         }

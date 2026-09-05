@@ -6,7 +6,7 @@ import SwiftUI
 final class AppState: ObservableObject {
     @Published var currentUser: AppUser?
     @Published var household: Household?
-    @Published var currentScene: MealScene = .pair
+    @Published var currentScene: MealScene = .household
     @Published var currentMood: Mood = .easy
     @Published var isBootstrapping: Bool = true
     // 有 token 但 profile 临时失败：停在 Splash 可重试，不当成登出
@@ -45,8 +45,8 @@ final class AppState: ObservableObject {
             let user = try await AuthService.shared.profile()
             currentUser = user
             bootstrapFailed = false
-            // 产品主轴固定情侣日常我们这顿
-            currentScene = .pair
+            // 产品主轴固定家庭餐次我们这顿
+            currentScene = .household
             if let mood = user.defaultMood { currentMood = mood }
             if user.hasHousehold {
                 await loadHousehold(markFailure: true)
@@ -77,7 +77,7 @@ final class AppState: ObservableObject {
         TokenStorage.shared.refresh = result.refreshToken
         currentUser = result.user
         bootstrapFailed = false
-        currentScene = .pair
+        currentScene = .household
         if let mood = result.user.defaultMood { currentMood = mood }
         if result.user.hasHousehold {
             await loadHousehold(markFailure: true)

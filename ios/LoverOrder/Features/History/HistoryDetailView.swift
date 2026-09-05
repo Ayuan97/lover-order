@@ -146,7 +146,7 @@ struct HistoryDetailView: View {
 
     private func peopleFor(_ meal: MealSession) -> [AppUser] {
         var people: [AppUser] = (meal.participants ?? []).compactMap(\.user)
-        if meal.scene == .pair, let members = appState.household?.members, !members.isEmpty {
+        if meal.scene == .household, let members = appState.household?.members, !members.isEmpty {
             people = members
         }
         if let creator = meal.creator, !people.contains(where: { $0.id == creator.id }) {
@@ -377,7 +377,7 @@ struct HistoryDetailView: View {
         isRepeating = true
         defer { isRepeating = false }
         do {
-            let current = try await MealService.shared.current(scene: .pair, mood: appState.currentMood)
+            let current = try await MealService.shared.current(scene: .household, mood: appState.currentMood)
             let existingRecipeIds = Set((current.dishes ?? []).compactMap { $0.recipeId })
             let existingNames = Set((current.dishes ?? []).map { $0.recipeName })
             var added = 0

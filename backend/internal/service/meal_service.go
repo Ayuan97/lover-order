@@ -66,7 +66,7 @@ type MealList struct {
 // Current 取或创建当前的一顿；外食朋友聚餐不会进入这个首页入口。
 func (s *MealService) Current(householdID, userID uint, scene, mood string) (*model.MealSession, error) {
 	if scene == "" {
-		scene = model.SceneCouple
+		scene = model.SceneHousehold
 	}
 	if !isProductScene(scene) {
 		return nil, errors.New("scene 不合法")
@@ -127,13 +127,13 @@ func (s *MealService) Current(householdID, userID uint, scene, mood string) (*mo
 	return &m, nil
 }
 
-// Create 显式创建一顿；外食补录允许使用 family 表示朋友聚餐。
+// Create 显式创建一顿；外食补录允许使用 dining 表示聚餐。
 func (s *MealService) Create(householdID, userID uint, in MealInput) (*model.MealSession, error) {
 	scene := in.Scene
 	if scene == "" {
-		scene = model.SceneCouple
+		scene = model.SceneHousehold
 	}
-	// 首页仍只创建 pair/future；family 只由外食补录使用。
+	// 首页只创建 household；dining 由聚餐记录使用。
 	if !isCreateScene(scene) {
 		return nil, errors.New("scene 不合法")
 	}

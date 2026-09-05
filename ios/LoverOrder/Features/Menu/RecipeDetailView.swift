@@ -325,7 +325,7 @@ struct RecipeDetailView: View {
         defer { isLoading = false }
         do {
             async let detail = RecipeService.shared.detail(id: recipeId)
-            async let current = MealService.shared.current(scene: .pair, mood: appState.currentMood)
+            async let current = MealService.shared.current(scene: .household, mood: appState.currentMood)
             let (r, m) = try await (detail, current)
             self.recipe = r
             self.meal = m

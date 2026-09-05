@@ -36,23 +36,23 @@ func jsonMarshal(v any) (model.JSON, error) {
 	return model.JSON(data), nil
 }
 
-// isValidScene 接受家里吃饭、朋友聚餐和以后想吃三种标签。
+// isValidScene 接受家里吃饭和朋友聚餐两种标签。
 func isValidScene(s string) bool {
 	switch s {
-	case model.SceneCouple, model.SceneFamily, model.SceneFuture:
+	case model.SceneHousehold, model.SceneDining:
 		return true
 	}
 	return false
 }
 
-// isProductScene 用户可主动选择的餐次标签（日常 + 以后想吃）
+// isProductScene 首页和菜谱可主动选择的餐次标签。
 func isProductScene(s string) bool {
-	return s == model.SceneCouple || s == model.SceneFuture
+	return s == model.SceneHousehold
 }
 
-// 外食补录可以用 family 保存朋友聚餐；首页当前一顿仍只走 pair/future。
+// 外食补录可以用 dining 保存朋友聚餐；首页当前一顿只走 household。
 func isCreateScene(s string) bool {
-	return isProductScene(s) || s == model.SceneFamily
+	return isProductScene(s) || s == model.SceneDining
 }
 
 func isValidMood(s string) bool {

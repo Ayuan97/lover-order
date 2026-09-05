@@ -42,9 +42,9 @@ struct MealNowView: View {
             .environmentObject(appState)
             .background(Color.appBackground.ignoresSafeArea())
             .task {
-                // 首页只服务情侣日常我们这顿
-                if appState.currentScene != .pair {
-                    appState.currentScene = .pair
+                // 首页只服务家庭餐次我们这顿
+                if appState.currentScene != .household {
+                    appState.currentScene = .household
                 }
                 await vm.load(scene: coupleScene, mood: appState.currentMood)
             }
@@ -214,8 +214,8 @@ struct MealNowView: View {
         !vm.isLoading && vm.suggestions.isEmpty && vm.frequents.isEmpty && vm.dishes.isEmpty
     }
 
-    // 首页只承载情侣日常「我们这顿」
-    private var coupleScene: MealScene { .pair }
+    // 首页只承载家庭餐次「我们这顿」
+    private var coupleScene: MealScene { .household }
 
     private var addedRecipeIds: Set<UInt> {
         Set(vm.dishes.compactMap(\.recipeId))

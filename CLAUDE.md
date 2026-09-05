@@ -1,312 +1,59 @@
-# CLAUDE.md
+# lover-order 工程说明
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## 产品边界
 
-## 项目概述
+这是一个家庭成员共同决定吃什么的 iOS 应用，不是商家点餐系统。当前客户端有四个固定入口：`这一顿`、`菜谱`、`记录`、`我的`。
 
-lover-order 是一个面向情侣的日常吃饭决策工具，移动端原生应用。**先做 iOS（SwiftUI），后期做 Android（Jetpack Compose）。**
+首页固定使用家庭餐次餐次 `household`。用户从菜谱加入菜品，在首页画布编辑菜品、文字、表情、动效、画笔和背景，然后按“定下这一顿 → 记录吃完”的顺序完成餐次。记录页支持历史筛选、详情、购物清单、评价和手动补录。朋友聚餐使用临时点菜房间或历史补录，不是首页场景切换。
 
-**产品理念：**
-- 解决日常痛点：情侣「今天吃什么」；极少情况家里来客一起点
-- 不是商家点餐 App，而是两个人之间的菜单共享与决策
-- 核心动词：**点菜 → 就这些 → 吃完了 →（可选）写两句**
+当前行为说明以 [`docs/current-version.md`](docs/current-version.md) 为准；画布交互以 [`docs/features/home-canvas/feature.md`](docs/features/home-canvas/feature.md) 为准；遗留代码和文档冲突见 [`docs/audits/2026-09-current-version.md`](docs/audits/2026-09-current-version.md)。
 
-**产品宪法（使用逻辑）：**
-- **情侣日常主轴**：主产品是情侣日常「我们这顿」；首页固定 pair，不做三场景并列切换
-- **主循环动词**：点菜 → 就这些（confirm）→ 吃完了（complete）→ 可选写两句；禁止跳步；至少一道菜
-- **聚会弱入口**：聚会是偶发「点菜房间」，弱入口，不是模式/场景；关房间 ≠ 吃完
-- **进家 ≠ 进房间**：进家靠餐券，进房间靠房间号；客人点菜不加入 household
-- **支线不上首页**：「以后想吃 / 菜单 / 记录」是支线，不上首页抢主路径
-- **文案要人话**：口语自然；禁止 AI 腔、说明书腔、教程式芯片
-- **技术底线**：View 不直接请求；API 仅 GET/POST；注释只写 WHY；不写新 Markdown 文档（除 CLAUDE.md）
+## 技术结构
 
-**核心概念：**
-- **一个家（Household）**：情侣（及家人）共享同一份菜单库
-- **这一顿（MealSession）**：一次吃饭的载体；从「点菜」到「吃完」；日常固定为「我们这顿」（pair）
-- **点菜房间（偶发）**：亲戚朋友来做客时临时开房一起点菜；不是并列「场景模式」
-- **心情（Mood）**：`轻松点` / `正常吃` / `认真吃` / `换换口味`（怎么吃，不是场景切换）
-- **以后想吃**：支线清单，不上首页主路径
+- iOS：SwiftUI、Combine、AuthenticationServices、PhotosUI、AVFoundation、CoreImage。
+- 后端：Go、Gin、GORM、MySQL。
+- 认证：Sign in with Apple 换取自签 access/refresh JWT。
+- 工程：`ios/project.yml` 使用 XcodeGen 生成 Xcode 工程。
+- API：当前路由使用 GET/POST，统一前缀 `/api/v1`。
 
-**视觉风格：**
-- 日式侘寂、米白背景、墨绿主色（#516B4A）
-- 大留白、细圆角、衬线大标题
-- 设计稿位于 `love/` 目录
+目录职责：
 
-## 技术栈
-
-| 层 | 技术 |
-|---|---|
-| iOS 客户端 | Swift 5.10 + SwiftUI + Combine |
-| iOS 登录 | Sign in with Apple |
-| iOS 项目工程 | XcodeGen（通过 project.yml 生成 .xcodeproj） |
-| 后端 | Go + Gin + GORM |
-| 数据库 | MySQL 8.0+ |
-| 认证 | Apple identity_token 验签 + 自签 JWT（HS256，access + refresh） |
-| 接口风格 | 仅 GET / POST，路径风格如 `/recipes/:id/update` |
-
-## 仓库结构
-
-```
-lover-order/
-├── backend/                    # Go 后端
-│   ├── cmd/
-│   │   ├── server/main.go     # HTTP 服务入口（端口 8081）
-│   │   └── force_migrate/     # 清库重建（开发用）
-│   ├── config.yaml            # 后端配置
-│   ├── internal/
-│   │   ├── api/               # HTTP handler
-│   │   ├── service/           # 业务层
-│   │   ├── model/             # GORM 模型 + DB 初始化
-│   │   ├── middleware/        # JWT / 家庭中间件
-│   │   └── config/            # Viper 配置加载
-│   └── pkg/
-│       ├── jwt/               # 签发/解析自签 JWT
-│       └── apple/             # Apple identity_token JWKS 验签
-├── ios/                        # iOS 原生工程
-│   ├── project.yml            # XcodeGen 配置
-│   └── LoverOrder/
-│       ├── App/               # @main、AppState、根视图、TabBar
-│       ├── Design/            # 颜色 / 字体 / 间距 / 通用组件
-│       ├── Models/            # 领域模型 与后端字段一一对应
-│       ├── Network/           # APIClient + 各 Service
-│       ├── Features/          # Auth / Meal / Menu / History / Profile
-│       └── Resources/         # Assets.xcassets / Info.plist / entitlements
-├── love/                       # 设计稿 PNG（不要删）
-├── Brewfile                    # Homebrew 工具链（go / mysql@8.0 / xcodegen）
-└── CLAUDE.md
+```text
+backend/internal/api/          HTTP handler
+backend/internal/service/      业务规则
+backend/internal/model/        GORM 模型与数据库
+backend/internal/middleware/   JWT 与家庭权限
+backend/pkg/                   Apple 验签与 JWT
+ios/LoverOrder/App/            启动、登录态、TabBar
+ios/LoverOrder/Design/         颜色、字体、通用组件
+ios/LoverOrder/Models/         客户端领域模型
+ios/LoverOrder/Network/        API client 与 service
+ios/LoverOrder/Features/       Auth、Meal、Menu、History、Profile
 ```
 
-## 构建安装依赖
+## 本地运行
 
-无 Node / Java / Redis / Docker / CocoaPods / SPM 第三方包。配置只读 `backend/config.yaml`，无环境变量。必须在 `backend/` 目录启动服务，否则找不到配置文件。
+后端配置在 `backend/config.yaml`，服务默认监听 `8081`；从 `backend/` 目录运行 `go run ./cmd/server`。服务启动时执行 GORM AutoMigrate，但不会自动创建数据库。`GET /health` 用于探活。
 
-仓库根一键装 Homebrew 项：
-
-```bash
-brew bundle
-```
-
-### 系统工具链
-
-| 用途 | 包 / 软件 | 最低版本 | 安装 |
-|---|---|---|---|
-| 包管理 | Homebrew | 任意近期 | https://brew.sh |
-| 后端语言 | `go` | 1.24.4 | `brew install go` |
-| 数据库 | `mysql@8.0` | 8.0+ | `brew install mysql@8.0` 后 `brew services start mysql@8.0` |
-| iOS 工程生成 | `xcodegen` | 2.x | `brew install xcodegen` |
-| iOS 编译 / 模拟器 | **Xcode**（完整 IDE，不是 Command Line Tools） | 含 iOS 17 SDK | App Store，然后 `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer` |
-| iOS 真机签名 | Apple 开发者账号 | Team `7QFF99S2V4` 已写在 `ios/project.yml` | Xcode Automatic signing |
-
-### 后端 Go 直接依赖（`backend/go.mod`）
-
-`cd backend && go mod tidy` 拉齐即可，不用手装。
-
-- `github.com/gin-gonic/gin` v1.10.1
-- `github.com/golang-jwt/jwt/v4` v4.5.2
-- `github.com/spf13/viper` v1.20.1
-- `gorm.io/gorm` v1.30.0
-- `gorm.io/driver/mysql` v1.6.0
-
-间接关键：`github.com/go-sql-driver/mysql` v1.8.1。
-
-AutoMigrate **不建库**。先建库再启服务（账号密码以 `config.yaml` 为准，默认 `root` / `root`）：
-
-```bash
-mysql -u root -proot -e "CREATE DATABASE IF NOT EXISTS lover_order CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-cd backend && go run ./cmd/server
-```
-
-服务监听 `:8081`。`GET /health` 探活。开发登录 `POST /api/v1/auth/dev` 仅非 release。
-
-### iOS（无第三方包）
-
-系统框架（`import`，不用声明）：SwiftUI、Combine、AuthenticationServices、Security、PhotosUI、AVFoundation、CoreImage。
-
-```bash
-cd ios && xcodegen generate && open LoverOrder.xcodeproj
-```
-
-模拟器打 `http://localhost:8081/api/v1`；真机打 `Info.plist` 的 `API_BASE_URL`。
-
-`ios/LoverOrder/Resources/LoverOrder.entitlements` 有 Sign in with Apple，但 `ios/project.yml` 未挂 `CODE_SIGN_ENTITLEMENTS`，`xcodegen generate` 后能力不会自动进工程。
-
-### 启动顺序
-
-1. `brew services start mysql@8.0`（或确认 mysqld 已在跑）
-2. 建库 `lover_order`（若尚未创建）
-3. `cd backend && go run ./cmd/server`
-4. 装好完整 Xcode 后：`cd ios && xcodegen generate && open LoverOrder.xcodeproj`
-
-### 开发机核对（2026-09-03）
-
-已齐：Homebrew、Go 1.25.1（满足 go.mod 1.24.4）、MySQL 8.0.46（库 `lover_order` 已存在）、XcodeGen 2.45.4。
-
-缺口：没有完整 Xcode（`xcode-select` 只指向 Command Line Tools）→ iOS 编不了。工作区若缺 `LoverOrderApp.swift` / `RootView.swift` / `MainTabView.swift`，没有 `@main`，装了 Xcode 也编不过。
-
-## 常用命令
-
-### 后端
-
-```bash
-cd backend
-
-# 安装依赖
-go mod tidy
-
-# 启动服务（端口 8081）
-go run ./cmd/server
-
-# 重建所有表（清空数据）
-go run ./cmd/force_migrate
-
-# 编译验证
-go build ./...
-go vet ./...
-```
-
-### iOS
-
-iOS 工程通过 **XcodeGen** 生成 .xcodeproj，源代码就是事实，避免 .xcodeproj 进 git 后冲突。
+iOS 首次构建需要完整 Xcode 和 XcodeGen：
 
 ```bash
 cd ios
-
-# 首次：安装 XcodeGen（一次性）
-brew install xcodegen
-
-# 生成 / 更新 .xcodeproj
 xcodegen generate
-
-# 打开
-open LoverOrder.xcodeproj
+xcodebuild -project LoverOrder.xcodeproj -scheme LoverOrder -sdk iphonesimulator -configuration Debug build CODE_SIGNING_ALLOWED=NO
 ```
 
-修改 `ios/project.yml` 或新增 .swift 文件后，需要重新跑 `xcodegen generate`。
+模拟器使用 `http://localhost:8081/api/v1`，真机使用 `Info.plist` 的 `API_BASE_URL`。正式构建需要 Apple 开发者签名；开发登录只在非 release 模式注册。
 
-### 数据库
+## 修改规则
 
-```bash
-mysql -u root -p -e "CREATE DATABASE lover_order CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-```
+- View 不直接发网络请求；通过 ViewModel 或 Network Service。
+- 修改 `project.yml` 或新增 Swift 文件后重新运行 `xcodegen generate`。
+- 注释解释原因，不重复代码本身。
+- 修改功能行为时同步更新 `docs/` 中对应说明。
+- 不把截图、模拟器缓存、`.idea/`、`.xcodebuildmcp/` 等本地产物提交到仓库。
+- 删除 Swift 页面前先确认它不在已生成的 Xcode 工程输入中，再重新生成工程并编译。
 
-服务启动会自动 GORM AutoMigrate。
+## 开发维护命令
 
-## 数据模型（后端 GORM）
-
-| 表 | 含义 | 备注 |
-|---|---|---|
-| `households` | 一个家 | 1-N 成员共用一份菜单 |
-| `users` | 用户 | 绑定一个家 |
-| `household_invites` | 临时邀请码 | 支持过期 + 限次 |
-| `recipe_categories` | 菜谱分类 | 属于一个家 |
-| `recipes` | 菜谱 | 含 `mood_tags` / `scene_tags` 让首页可按心情/场景推荐 |
-| `favorites` | 收藏 | 用户对菜谱 |
-| `meal_sessions` | 这一顿 | scene + mood + status |
-| `meal_dishes` | 一顿里的菜 | 保留菜名/图快照，菜谱删除不丢失记录 |
-| `meal_reviews` | 一顿的评价 | 吃完后留下评分/留言/照片 |
-
-**一顿状态机：** `planning → confirmed → completed`（可任意状态 `cancelled`）
-
-## API 路由
-
-所有路径以 `/api/v1` 开头，方法仅 `POST` / `GET`。
-
-| 类别 | 路径 | 方法 | 说明 |
-|---|---|---|---|
-| 登录 | `/auth/apple` | POST | Apple 登录或注册 |
-| | `/auth/refresh` | POST | 刷新 access token |
-| | `/auth/logout` | POST | 登出 |
-| | `/auth/dev` | POST | 开发登录（仅非 release 模式启用，真机/模拟器未配 Apple 时用） |
-| 用户 | `/user/profile` | GET / POST | 资料读 / 写 |
-| 上传 | `/upload/image` | POST | 上传图片（multipart/form-data，返回 url + path） |
-| 家 | `/household/create` | POST | 创建并自动加入 |
-| | `/household/info` | GET | 当前家详情含成员 |
-| | `/household/join` | POST | 邀请码加入 |
-| | `/household/leave` | POST | 退出 |
-| | `/household/invite` | POST | 生成临时邀请码 |
-| | `/household/invitations` | GET | 邀请记录 |
-| 分类 | `/categories/list` | GET | |
-| | `/categories/create` | POST | |
-| | `/categories/:id/update` | POST | |
-| | `/categories/:id/delete` | POST | |
-| 菜谱 | `/recipes/list` | GET | 支持 mood / scene / keyword / category_id / favorite 过滤 |
-| | `/recipes/:id` | GET | 详情 |
-| | `/recipes/create` | POST | |
-| | `/recipes/:id/update` | POST | |
-| | `/recipes/:id/delete` | POST | |
-| | `/recipes/:id/favorite` | POST | 切换收藏 |
-| 一顿 | `/meals/current` | GET | 拿当前规划中的一顿，没有就创建 |
-| | `/meals/list` | GET | 历史列表 支持 status / scene |
-| | `/meals/stats` | GET | 家庭统计（总顿数 / 总菜数 / 近 30 天 / 高频菜 / 餐次标签分布） |
-| | `/meals/:id` | GET | 详情含菜与评价 |
-| | `/meals/create` | POST | 显式新建 |
-| | `/meals/:id/update` | POST | 改场景 / 心情 / 备注 |
-| | `/meals/:id/confirm` | POST | 定下这一顿 |
-| | `/meals/:id/complete` | POST | 标记吃完 |
-| | `/meals/:id/cancel` | POST | 取消 |
-| | `/meals/:id/review` | POST | 留下评价 |
-| | `/meals/:id/dishes/add` | POST | 加菜 |
-| | `/meals/:id/dishes/:dish_id/remove` | POST | 移除 |
-| | `/meals/:id/shopping-list` | GET | 这一顿的购物清单（按食材聚合） |
-
-统一响应体：`{ "code": 0, "message": "ok", "data": ... }`。`code != 0` 表示业务错误，HTTP 状态码与之对齐。
-
-## Apple Sign In 接入要点
-
-后端：`backend/pkg/apple/apple.go`
-- 拉取 `https://appleid.apple.com/auth/keys` JWKS，缓存 1 小时
-- 用 `kid` 找对应 RSA 公钥校验 identity_token 签名
-- 校验 `iss = https://appleid.apple.com` 与 `aud = config.apple.client_id`
-
-iOS：`ios/LoverOrder/Features/Auth/LoginView.swift`
-- 使用 `AuthenticationServices.SignInWithAppleButton`
-- 拿到 `identityToken` 后调用 `/auth/apple` 换 access + refresh
-- 令牌存 Keychain（`TokenStorage`）
-
-**生产前需配置**：在 `backend/config.yaml` 的 `apple` 段填好 `client_id`（App Bundle ID）等字段。
-
-## iOS 设计 token
-
-定义在 `ios/LoverOrder/Design/`：
-
-| 颜色资源 | 用途 |
-|---|---|
-| `AppBackground` | 主背景暖米白 #F7F1E4 |
-| `CardBackground` | 卡片暖白 #FFFDF8 |
-| `BrandGreen` | 主色墨绿 #496C43 |
-| `AccentWarm` | 柿子色点缀 #C96843（收藏心、加菜按钮、今日推荐标签等小面积食欲暖色） |
-| `AccentInk` | 深墨绿强调 #495F42 |
-| `InkPrimary` / `InkSecondary` / `InkMuted` | 文本灰阶 |
-| `Divider` | 分割线 |
-| `ErrorInk` | 错误陶土红 #B0584E |
-
-字体：`AppFont.title/headline/body/caption/mono`。标题衬线用宋体 `STSongti-SC-Bold`（注意：`Font.system(design: .serif)` 对中文无效，中文衬线必须显式指定宋体）。
-
-## 编码规则（必须遵守）
-
-- 接口方法只允许 GET / POST
-- 所有回复使用中文
-- 严格按用户要求执行，不要过度设计
-- 不生成测试数据 / 演示内容 / 占位符
-- 不留 TODO，缺少能力先问
-- 注释只解释 WHY，不重复 WHAT
-- 不写 Markdown 文档（除已存在的 CLAUDE.md）
-- 不在代码里放个人信息或署名
-- 不要自动重启程序
-- iOS 代码风格：SwiftUI 优先，避免 ViewController；View 层不直接发请求，过 ViewModel 或 Service
-
-## 回答规范
-
-每次回答结尾添加：
-
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🤖 模型：[模型名称]
-
-📋 当前问题：
-[项目问题描述]
-
-💡 解决方案：
-[解决办法说明]
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
+`backend/cmd/force_migrate` 会重建数据库表，`backend/cmd/cleanup_dirty` 会清理历史脏数据。它们是开发维护工具，不是用户功能，运行前需要确认数据环境。
