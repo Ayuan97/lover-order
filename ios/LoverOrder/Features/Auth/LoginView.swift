@@ -1,7 +1,7 @@
 import AuthenticationServices
 import SwiftUI
 
-// 登录页 Apple Sign In + DEBUG 时支持开发登录
+// 登录页 Apple Sign In，同时提供服务器开发登录用于测试包
 struct LoginView: View {
     @EnvironmentObject private var appState: AppState
     @State private var isLoading = false
@@ -80,7 +80,7 @@ struct LoginView: View {
             }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("跳过 Apple Sign In 用昵称作为身份，仅用于调试")
+            Text("使用昵称登录测试服务器，不需要 Apple 账号")
         }
     }
 
