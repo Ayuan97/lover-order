@@ -91,7 +91,7 @@ func AutoMigrate() error {
 		// 首次安装时表尚未创建，忽略该次预处理。
 		log.Printf("餐次标签预处理跳过：%v", err)
 	}
-	DB.Exec("UPDATE meal_sessions SET scene = CASE scene WHEN 'pair' THEN 'household' WHEN 'family' THEN 'dining' ELSE scene END WHERE scene IN ('pair','family')")
+	DB.Exec("UPDATE meal_sessions SET scene = CASE scene WHEN 'pair' THEN 'household' WHEN 'family' THEN 'dining' ELSE 'household' END")
 
 	for _, t := range tables {
 		if err := DB.AutoMigrate(t); err != nil {
