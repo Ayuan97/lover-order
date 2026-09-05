@@ -190,11 +190,11 @@ struct MealNowView: View {
         } label: {
             HStack(spacing: 5) {
                 Circle()
-                    .fill(Color.brandGreen)
+                    .fill(Color.liveOlive)
                     .frame(width: 7, height: 7)
                 Text("在点菜")
                     .font(AppFont.caption(12))
-                    .foregroundStyle(Color.brandGreen)
+                    .foregroundStyle(Color.liveOlive)
             }
             .padding(.horizontal, AppSpacing.md)
             .frame(height: 36)
@@ -890,7 +890,7 @@ enum DishArtwork {
     static func assetName(for name: String) -> String? {
         let normalized = name.lowercased()
         if normalized.contains("虾") || normalized.contains("shrimp") { return "StickerShrimp" }
-        if normalized.contains("牛排") || normalized.contains("steak") { return "StickerSteak" }
+        if normalized.contains("牛排") || normalized.contains("牛腩") || normalized.contains("steak") { return "StickerSteak" }
         if normalized.contains("三文鱼") || normalized.contains("寿司") || normalized.contains("丼") || normalized.contains("salmon") {
             return "StickerSalmonBowl"
         }
@@ -942,7 +942,7 @@ struct RecipeCircleCard: View {
         ZStack {
             if let assetName = DishArtwork.assetName(for: recipe.name) {
                 LinearGradient(
-                    colors: [Color(red: 0.98, green: 0.96, blue: 0.88), Color(red: 0.90, green: 0.93, blue: 0.78)],
+                    colors: [Color.paperWarm, Color.paperGreen],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )

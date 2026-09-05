@@ -18,7 +18,7 @@ struct MoodChip: View {
             .padding(.horizontal, AppSpacing.md)
             .padding(.vertical, 9)
             .foregroundStyle(isSelected ? .white : Color.inkSecondary)
-            .background(isSelected ? Color.brandGreen : Color.cardBackground)
+            .background(isSelected ? Color.dopaminePink : Color.cardBackground)
             .clipShape(Capsule(style: .continuous))
             .capsuleHairline(color: isSelected ? .clear : Color.dividerLine.opacity(0.7))
             .contentShape(Capsule())
@@ -55,7 +55,7 @@ enum Mood: String, CaseIterable, Identifiable, Codable {
 }
 
 // 餐次数据标签（非产品「模式」）。
-// pair = 日常我们这顿；future = 支线以后想吃；family = 仅解码历史行，无入口可选。
+// pair = 家里吃饭；family = 朋友聚餐；future = 支线以后想吃。
 enum MealScene: String, CaseIterable, Identifiable, Codable {
     case pair
     case family
@@ -63,11 +63,11 @@ enum MealScene: String, CaseIterable, Identifiable, Codable {
 
     var id: String { rawValue }
 
-    /// 用户可见短名：family 只作历史展示，不暗示可选模式
+    /// 常用短名；历史详情页会用更完整的记录文案。
     var label: String {
         switch self {
         case .pair: return "我们这顿"
-        case .family: return "历史记录"
+        case .family: return "朋友聚餐"
         case .future: return "以后想吃"
         }
     }

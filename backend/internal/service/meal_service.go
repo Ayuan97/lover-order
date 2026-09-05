@@ -63,8 +63,7 @@ type MealList struct {
 	Items []model.MealSession `json:"items"`
 }
 
-// Current 取或创建当前规划中的一顿；仅 pair/future（产品标签），禁止 family 再被 find-or-create
-// 历史 family 行仍可通过 Get 按 id 加载
+// Current 取或创建当前的一顿；外食朋友聚餐不会进入这个首页入口。
 func (s *MealService) Current(householdID, userID uint, scene, mood string) (*model.MealSession, error) {
 	if scene == "" {
 		scene = model.SceneCouple
@@ -128,14 +127,14 @@ func (s *MealService) Current(householdID, userID uint, scene, mood string) (*mo
 	return &m, nil
 }
 
-// Create 显式创建一顿
+// Create 显式创建一顿；外食补录允许使用 family 表示朋友聚餐。
 func (s *MealService) Create(householdID, userID uint, in MealInput) (*model.MealSession, error) {
 	scene := in.Scene
 	if scene == "" {
 		scene = model.SceneCouple
 	}
-	// 新建只允许产品标签 pair/future，禁止再开 family「模式」
-	if !isProductScene(scene) {
+	// 首页仍只创建 pair/future；family 只由外食补录使用。
+	if !isCreateScene(scene) {
 		return nil, errors.New("scene 不合法")
 	}
 	mood := in.Mood
@@ -400,7 +399,7 @@ func (s *MealService) List(householdID uint, q MealListQuery) (*MealList, error)
 	}
 
 	var items []model.MealSession
-	if err := tx.Preload("Dishes").Preload("Creator").
+	if err := tx.Preload("Dishes").Preload("Creator").Preload("Reviews.User").Preload("Reviews.DishReviews").
 		Order("COALESCE(completed_at, confirmed_at, planned_at, created_at) DESC").
 		Offset((q.Page - 1) * q.PageSize).Limit(q.PageSize).
 		Find(&items).Error; err != nil {

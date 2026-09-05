@@ -20,13 +20,38 @@ enum AppRadius {
 }
 
 enum AppShadow {
-    // 极轻投影 让白卡片在暖纸背景上浮起一点 不抢戏
+    // 纸片只离开背景一点点，保留手账的轻盈感。
     static let card = ShadowStyle(
-        color: Color(red: 0.34, green: 0.30, blue: 0.22).opacity(0.05),
-        radius: 10,
+        color: Color(red: 0.34, green: 0.27, blue: 0.18).opacity(0.10),
+        radius: 12,
         x: 0,
-        y: 4
+        y: 5
     )
+}
+
+/// 全局极轻纸张颗粒。它放在内容上方但不接收触摸，让每个页面都有实体纸张的触感。
+struct PaperGrainOverlay: View {
+    var body: some View {
+        Canvas { context, size in
+            let step: CGFloat = 26
+            var index = 0
+            for y in stride(from: 0, through: size.height, by: step) {
+                for x in stride(from: 0, through: size.width, by: step) {
+                    let n = CGFloat((index * 31) % 17) / 17
+                    let dot = Path(ellipseIn: CGRect(
+                        x: x + n * 7,
+                        y: y + CGFloat((index * 13) % 9),
+                        width: 0.45 + n * 0.8,
+                        height: 0.45 + n * 0.8
+                    ))
+                    context.fill(dot, with: .color(Color.accentInk.opacity(0.010 + n * 0.008)))
+                    index += 1
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
 }
 
 struct ShadowStyle {

@@ -19,7 +19,8 @@ struct HistoryDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppSpacing.lg) {
                 if let meal {
-                    headerCard(meal)
+                    titleBlock(meal)
+                    peopleCard(meal)
                     dishesCard(meal)
                     reviewsCard(meal)
                     Color.clear.frame(height: 80)
@@ -43,7 +44,7 @@ struct HistoryDetailView: View {
         .task {
             await load()
         }
-        .navigationTitle("这一顿的记录")
+        .navigationTitle("这顿饭")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showReview) {
             if let mid = meal?.id {
@@ -69,48 +70,89 @@ struct HistoryDetailView: View {
         }
     }
 
-    private func headerCard(_ meal: MealSession) -> some View {
-        SectionCard {
-            HStack(alignment: .top, spacing: AppSpacing.md) {
-                VStack(spacing: AppSpacing.xs) {
-                    Image(systemName: meal.scene.icon)
-                        .font(.system(size: 18))
-                        .foregroundStyle(.white)
-                        .frame(width: 44, height: 44)
-                        .background(Color.brandGreen)
-                        .clipShape(Circle())
-                    Text(meal.scene.label)
-                        .font(AppFont.caption(11))
-                        .foregroundStyle(Color.inkMuted)
+    private func titleBlock(_ meal: MealSession) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(meal.title?.isEmpty == false ? meal.title! : meal.scene.historyLabel)
+                .font(AppFont.title(24))
+                .foregroundStyle(Color.inkPrimary)
+            HStack(spacing: 8) {
+                Text(meal.scene.historyLabel)
+                if let when = meal.completedAt ?? meal.confirmedAt ?? meal.createdAt {
+                    Text("·")
+                    Text(RelativeDateFormatter.format(when))
                 }
-                VStack(alignment: .leading, spacing: AppSpacing.xs) {
-                    Text(meal.title?.isEmpty == false ? meal.title! : "这一顿")
-                        .font(AppFont.title(20))
+            }
+            .font(AppFont.caption(12))
+            .foregroundStyle(Color.inkMuted)
+            if let note = meal.note, !note.isEmpty {
+                Text(note)
+                    .font(AppFont.caption(13))
+                    .foregroundStyle(Color.inkSecondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func peopleCard(_ meal: MealSession) -> some View {
+        let people = peopleFor(meal)
+        return SectionCard {
+            HStack(alignment: .center, spacing: 14) {
+                avatarMosaic(people)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("一起吃饭的人")
+                        .font(AppFont.headline(15))
                         .foregroundStyle(Color.inkPrimary)
-                    HStack(spacing: AppSpacing.sm) {
-                        infoChip(icon: meal.mood.icon, text: meal.mood.label)
-                        infoChip(icon: "fork.knife", text: "\((meal.dishes ?? []).count) 道")
-                    }
-                    if let when = meal.completedAt ?? meal.confirmedAt ?? meal.createdAt {
-                        HStack(spacing: 4) {
-                            Image(systemName: "clock").font(.system(size: 11))
-                            Text(RelativeDateFormatter.format(when))
-                        }
-                        .font(AppFont.caption())
-                        .foregroundStyle(Color.inkMuted)
-                    }
-                    if let note = meal.note, !note.isEmpty {
-                        Text(note)
-                            .font(AppFont.caption())
-                            .foregroundStyle(Color.inkSecondary)
+                    if people.isEmpty {
+                        Text("还没记同行的人")
+                            .font(AppFont.caption(12))
+                            .foregroundStyle(Color.inkMuted)
+                    } else {
+                        Text(people.prefix(4).map(\.displayName).joined(separator: "、") + (people.count > 4 ? " 等" : ""))
+                            .font(AppFont.caption(12))
+                            .foregroundStyle(Color.inkMuted)
+                        Text("共 \(people.count) 人")
+                            .font(AppFont.caption(11))
+                            .foregroundStyle(Color.brandGreen)
                     }
                 }
+                Spacer(minLength: 0)
             }
         }
     }
 
-    private func infoChip(icon: String, text: String) -> some View {
-        TagChip(text: text, icon: icon, compact: true)
+    private func avatarMosaic(_ people: [AppUser]) -> some View {
+        let positions: [(CGFloat, CGFloat)] = [(0, 0), (31, -13), (34, 20), (-27, 18), (-30, -15), (2, 31)]
+        return ZStack {
+            ForEach(Array(people.prefix(6).enumerated()), id: \.offset) { index, person in
+                AvatarView(user: person, size: index == 0 ? 52 : 42, ring: true)
+                    .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                    .offset(x: positions[index].0, y: positions[index].1)
+                    .zIndex(Double(people.count - index))
+            }
+            if people.count > 6 {
+                Text("+\(people.count - 6)")
+                    .font(AppFont.caption(12))
+                    .foregroundStyle(Color.inkSecondary)
+                    .frame(width: 42, height: 42)
+                    .background(Color.appBackground)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color.white, lineWidth: 2))
+                    .offset(x: 28, y: 25)
+            }
+        }
+        .frame(width: 116, height: 88)
+    }
+
+    private func peopleFor(_ meal: MealSession) -> [AppUser] {
+        var people: [AppUser] = (meal.participants ?? []).compactMap(\.user)
+        if meal.scene == .pair, let members = appState.household?.members, !members.isEmpty {
+            people = members
+        }
+        if let creator = meal.creator, !people.contains(where: { $0.id == creator.id }) {
+            people.insert(creator, at: 0)
+        }
+        return people
     }
 
     private func dishesCard(_ meal: MealSession) -> some View {
@@ -126,7 +168,7 @@ struct HistoryDetailView: View {
             }
             let dishes = meal.dishes ?? []
             if dishes.isEmpty {
-                Text("这顿什么都没选")
+                Text("还没记菜")
                     .font(AppFont.caption())
                     .foregroundStyle(Color.inkMuted)
             } else {
@@ -155,7 +197,7 @@ struct HistoryDetailView: View {
         let reviews = meal.reviews ?? []
         SectionCard {
             HStack {
-                Text("感受")
+                Text("留言")
                     .font(AppFont.headline(15))
                     .foregroundStyle(Color.inkPrimary)
                 Spacer()
@@ -163,14 +205,14 @@ struct HistoryDetailView: View {
                     Button {
                         showReview = true
                     } label: {
-                        Label("补一份", systemImage: "plus.circle")
+                        Label("留言和照片", systemImage: "plus.circle")
                             .font(AppFont.caption(13))
                             .foregroundStyle(Color.brandGreen)
                     }
                 }
             }
             if reviews.isEmpty {
-                Text(meal.status == .completed ? "还没人留下感受" : "等吃完再来留")
+                Text("还没人留言")
                     .font(AppFont.caption())
                     .foregroundStyle(Color.inkMuted)
             } else {
@@ -245,18 +287,79 @@ struct HistoryDetailView: View {
             }
             HStack(spacing: AppSpacing.md) {
                 if meal.status == .completed && (meal.reviews ?? []).isEmpty {
-                    SecondaryButton(title: "留下感受", icon: "leaf") {
+                    historyAction(
+                        title: "写留言",
+                        subtitle: "补一句话或加照片",
+                        icon: "square.and.pencil",
+                        tint: Color.brandGreen
+                    ) {
                         showReview = true
                     }
                 }
-                PrimaryButton(title: isRepeating ? "复制中" : "再来一次", icon: "arrow.clockwise", isLoading: isRepeating) {
+                historyAction(
+                    title: isRepeating ? "正在添加" : "把菜加到这一顿",
+                    subtitle: "下次继续吃",
+                    icon: "arrow.clockwise",
+                    tint: Color.actionInk,
+                    isLoading: isRepeating
+                ) {
                     Task { await repeatMeal(meal) }
                 }
             }
         }
         .padding(.horizontal, AppSpacing.lg)
-        .padding(.vertical, AppSpacing.sm)
+        .padding(.top, 12)
+        .padding(.bottom, 76)
         .background(Color.appBackground)
+    }
+
+    private func historyAction(
+        title: String,
+        subtitle: String,
+        icon: String,
+        tint: Color,
+        isLoading: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Group {
+                    if isLoading {
+                        ProgressView().tint(tint)
+                    } else {
+                        Image(systemName: icon)
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(tint)
+                    }
+                }
+                .frame(width: 34, height: 34)
+                .background(tint.opacity(0.11), in: Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(AppFont.headline(14))
+                        .foregroundStyle(Color.inkPrimary)
+                        .lineLimit(1)
+                    Text(subtitle)
+                        .font(AppFont.caption(10))
+                        .foregroundStyle(Color.inkMuted)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.inkMuted)
+            }
+            .padding(.horizontal, 11)
+            .frame(maxWidth: .infinity, minHeight: 62)
+            .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(tint.opacity(0.18), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoading)
     }
 
     private func load() async {
@@ -290,7 +393,7 @@ struct HistoryDetailView: View {
                 }
             }
             // 再来一次始终打进日常我们这顿
-            repeatedToast = "已复制 \(added) 道到我们这顿"
+            repeatedToast = "已加 \(added) 道菜到这一顿"
         } catch {
             errorMessage = error.localizedDescription
         }

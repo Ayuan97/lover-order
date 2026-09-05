@@ -47,3 +47,14 @@ func TestErrIfCannotRemoveDish(t *testing.T) {
 		t.Fatal("completed cannot remove")
 	}
 }
+
+func TestCreateScene(t *testing.T) {
+	for _, scene := range []string{model.SceneCouple, model.SceneFuture, model.SceneFamily} {
+		if !isCreateScene(scene) {
+			t.Fatalf("%s should be accepted when creating an explicit record", scene)
+		}
+	}
+	if isProductScene(model.SceneFamily) {
+		t.Fatal("family must remain outside the current-meal entry")
+	}
+}

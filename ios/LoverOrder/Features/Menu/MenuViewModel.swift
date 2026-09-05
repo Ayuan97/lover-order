@@ -1,20 +1,16 @@
 import Foundation
 
-// 菜单页虚拟筛选 与设计稿四档对齐
+// 菜单页快捷筛选：只保留真实有用的最近使用。
 enum MenuFilter: String, CaseIterable, Identifiable {
     case all
-    case loved
     case recent
-    case filling
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
-        case .all: return "全部"
-        case .loved: return "我们都爱吃"
+        case .all: return "全部菜谱"
         case .recent: return "最近做过"
-        case .filling: return "人多管饱"
         }
     }
 }
@@ -112,9 +108,6 @@ final class MenuViewModel: ObservableObject {
             page: page,
             pageSize: 50
         )
-        if quickFilter == .loved {
-            query.favorite = true
-        }
         return query
     }
 
@@ -123,10 +116,6 @@ final class MenuViewModel: ObservableObject {
         case .recent:
             return items.sorted { lhs, rhs in
                 (lhs.lastUsedAt ?? .distantPast) > (rhs.lastUsedAt ?? .distantPast)
-            }
-        case .filling:
-            return items.sorted { lhs, rhs in
-                (lhs.servings ?? 0) > (rhs.servings ?? 0)
             }
         default:
             return items
@@ -140,6 +129,12 @@ final class MenuViewModel: ObservableObject {
 
     func selectFilter(_ f: MenuFilter) async {
         quickFilter = f
+        await loadRecipes()
+    }
+
+    func clearFilters() async {
+        selectedCategoryId = nil
+        quickFilter = .all
         await loadRecipes()
     }
 

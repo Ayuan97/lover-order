@@ -8,6 +8,8 @@ struct RootView: View {
         ZStack {
             Color.appBackground.ignoresSafeArea()
             content
+            PaperGrainOverlay()
+                .ignoresSafeArea()
         }
         .preferredColorScheme(.light)
         // 建家餐券挂在根上：Setup 切走后仍能展示，关票只 refresh

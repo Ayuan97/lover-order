@@ -201,14 +201,14 @@ struct RecipeEditView: View {
                         if isCreatingCategory {
                             ProgressView().tint(.white)
                                 .frame(width: 36, height: 36)
-                                .background(Color.brandGreen)
+                                .background(Color.actionInk)
                                 .clipShape(Circle())
                         } else {
                             Image(systemName: "checkmark")
                                 .font(.system(size: 14, weight: .bold))
                                 .frame(width: 36, height: 36)
                                 .foregroundStyle(.white)
-                                .background(Color.brandGreen)
+                                .background(Color.actionInk)
                                 .clipShape(Circle())
                         }
                     }
@@ -331,24 +331,34 @@ struct RecipeEditView: View {
                     .foregroundStyle(Color.inkMuted)
             } else {
                 ForEach($steps) { $step in
-                    HStack(alignment: .top, spacing: AppSpacing.sm) {
-                        Text("\(step.index)")
-                            .font(AppFont.headline(14))
-                            .frame(width: 26, height: 26)
-                            .foregroundStyle(.white)
-                            .background(Color.brandGreen)
-                            .clipShape(Circle())
-                        TextField("这一步要做啥", text: $step.text, axis: .vertical)
-                            .lineLimit(1...3)
-                            .padding(AppSpacing.sm)
-                            .background(Color.appBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous))
-                        Button {
-                            removeStep(step)
-                        } label: {
-                            Image(systemName: "minus.circle")
-                                .foregroundStyle(Color.inkMuted)
+                    VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                        HStack(alignment: .top, spacing: AppSpacing.sm) {
+                            Text("\(step.index)")
+                                .font(AppFont.headline(14))
+                                .frame(width: 26, height: 26)
+                                .foregroundStyle(.white)
+                                .background(Color.actionInk)
+                                .clipShape(Circle())
+                            TextField("这一步要做啥", text: $step.text, axis: .vertical)
+                                .lineLimit(1...3)
+                                .padding(AppSpacing.sm)
+                                .background(Color.appBackground)
+                                .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous))
+                            Button {
+                                removeStep(step)
+                            } label: {
+                                Image(systemName: "minus.circle")
+                                    .foregroundStyle(Color.inkMuted)
+                            }
                         }
+                        PhotoPickerField(
+                            imageURL: Binding(
+                                get: { step.image ?? "" },
+                                set: { step.image = $0.isEmpty ? nil : $0 }
+                            ),
+                            label: "添加这一步的图片",
+                            height: 104
+                        )
                     }
                 }
             }
@@ -382,7 +392,7 @@ struct RecipeEditView: View {
                 .padding(.horizontal, AppSpacing.md)
                 .padding(.vertical, 8)
                 .foregroundStyle(isSelected ? .white : Color.inkPrimary)
-                .background(isSelected ? Color.brandGreen : Color.appBackground)
+                .background(isSelected ? Color.dopaminePink : Color.appBackground)
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)

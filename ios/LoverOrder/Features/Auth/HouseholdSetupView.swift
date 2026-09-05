@@ -141,7 +141,7 @@ struct HouseholdSetupView: View {
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, AppSpacing.md)
-                .background(Color.brandGreen)
+                .background(Color.actionInk)
                 .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
             }
             Text("或手输邀请码")

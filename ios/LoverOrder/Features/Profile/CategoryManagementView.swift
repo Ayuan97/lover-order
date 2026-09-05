@@ -69,7 +69,7 @@ struct CategoryManagementView: View {
                         .font(.system(size: 14, weight: .bold))
                         .frame(width: 36, height: 36)
                         .foregroundStyle(.white)
-                        .background(Color.brandGreen)
+                        .background(Color.actionInk)
                         .clipShape(Circle())
                 }
             }

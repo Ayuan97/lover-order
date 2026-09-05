@@ -1,6 +1,6 @@
 import SwiftUI
 
-// 菜品详情：大图 + 简介 + 标签 + 食材 + 做法步骤 + 底部加入按钮
+// 菜品详情：图片画廊 + 简介 + 食材 + 做法 + 评价记录
 struct RecipeDetailView: View {
     let recipeId: UInt
 
@@ -10,36 +10,32 @@ struct RecipeDetailView: View {
     @State private var recipe: Recipe?
     @State private var meal: MealSession?
     @State private var isFavored: Bool = false
-    @State private var related: [Recipe] = []
+    @State private var reviewMeals: [MealSession] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
-    @State private var showSteps: Bool = false
     @State private var showEdit: Bool = false
     @State private var confirmDelete: Bool = false
-    @State private var saveToFutureNote: String = ""
-    @State private var showSaveToFuture: Bool = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppSpacing.lg) {
-                heroImage
+                heroGallery
                 if let recipe {
-                    titleSection(recipe)
-                    metricsGrid(recipe)
-                    tagsRow(recipe)
-                    ingredientsSection(recipe)
-                    stepsToggle(recipe)
-                    if let tips = recipe.tips, !tips.isEmpty {
-                        tipsSection(tips)
+                    VStack(alignment: .leading, spacing: AppSpacing.lg) {
+                        titleSection(recipe)
+                        ingredientsSection(recipe)
+                        stepsToggle(recipe)
+                        if let tips = recipe.tips, !tips.isEmpty { tipsSection(tips) }
+                        reviewsSection(recipe)
                     }
-                    relatedSection
+                    .padding(.horizontal, AppSpacing.lg)
                 }
-                Color.clear.frame(height: 80)
             }
-            .padding(.horizontal, AppSpacing.lg)
-            .padding(.top, AppSpacing.sm)
+            .padding(.top, 0)
         }
-        .background(Color.appBackground.ignoresSafeArea())
+        .background {
+            Color.appBackground.ignoresSafeArea()
+        }
         .safeAreaInset(edge: .bottom) {
             bottomBar
         }
@@ -91,21 +87,43 @@ struct RecipeDetailView: View {
         } message: {
             Text("删除后这道菜不会再出现在菜单里 但已经记下的历史不受影响")
         }
-        .alert("已记到以后想吃", isPresented: $showSaveToFuture) {
-            Button("好") {}
-        } message: {
-            Text("可以在「以后想吃」里找到它")
+    }
+
+    private var heroGallery: some View {
+        let images = galleryImages
+        return TabView {
+            ForEach(Array(images.enumerated()), id: \.offset) { _, image in
+                AsyncImageView(url: image, name: recipe?.name ?? "菜品")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 300)
+                    .clipped()
+            }
+        }
+        .frame(height: 300)
+        .tabViewStyle(.page(indexDisplayMode: images.count > 1 ? .automatic : .never))
+        .overlay(alignment: .bottomLeading) {
+            LinearGradient(colors: [.clear, .black.opacity(0.32)], startPoint: .top, endPoint: .bottom)
+                .frame(height: 90)
+                .allowsHitTesting(false)
         }
     }
 
-    private var heroImage: some View {
-        AsyncImageView(url: recipe?.coverImage, name: recipe?.name ?? "")
-            .frame(height: 220)
-            .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
+    private var galleryImages: [String?] {
+        guard let recipe else { return [nil] }
+        var result: [String?] = []
+        if recipe.coverImage != nil { result.append(recipe.coverImage) }
+        for image in recipe.images ?? [] where !image.isEmpty {
+            if image != recipe.coverImage { result.append(image) }
+        }
+        return result.isEmpty ? [nil] : result
     }
 
     private func titleSection(_ r: Recipe) -> some View {
         VStack(alignment: .leading, spacing: AppSpacing.sm) {
+            Text("菜谱详情")
+                .font(AppFont.caption(10))
+                .tracking(1.1)
+                .foregroundStyle(Color.accentWarm)
             Text(r.name)
                 .font(AppFont.title(26))
                 .foregroundStyle(Color.inkPrimary)
@@ -113,116 +131,6 @@ struct RecipeDetailView: View {
                 Text(desc)
                     .font(AppFont.body())
                     .foregroundStyle(Color.inkSecondary)
-            }
-        }
-    }
-
-    // metrics 4 个气质标签 横向排开 描述这道菜的气质
-    private func metricsGrid(_ r: Recipe) -> some View {
-        let items = buildMetrics(r)
-        return HStack(alignment: .top, spacing: AppSpacing.sm) {
-            ForEach(items, id: \.label) { item in
-                VStack(spacing: AppSpacing.xs) {
-                    Image(systemName: item.icon)
-                        .font(.system(size: 18, weight: .light))
-                        .foregroundStyle(Color.brandGreen)
-                    Text(item.label)
-                        .font(AppFont.caption(11))
-                        .foregroundStyle(Color.inkMuted)
-                    Text(item.value)
-                        .font(AppFont.body(13))
-                        .foregroundStyle(Color.inkPrimary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-            }
-        }
-    }
-
-    private struct MetricItem {
-        let icon: String
-        let label: String
-        let value: String
-    }
-
-    private func buildMetrics(_ r: Recipe) -> [MetricItem] {
-        [
-            .init(icon: "heart", label: "什么口味", value: flavorPhrase(r)),
-            .init(icon: "leaf", label: "适合一顿", value: feelPhrase(r)),
-            .init(icon: "person.2", label: "适合多人", value: peoplePhrase(r)),
-            .init(icon: "calendar", label: "工作日做饭", value: timePhrase(r)),
-        ]
-    }
-
-    // 风味短语：优先取标签首项 否则按难度推断
-    private func flavorPhrase(_ r: Recipe) -> String {
-        if let tags = r.tags, let first = tags.first { return first }
-        switch r.difficulty {
-        case .easy: return "简单家常"
-        case .medium: return "有点讲究"
-        case .hard: return "下点功夫"
-        case nil: return "随心而做"
-        }
-    }
-
-    // 情绪短语：按 moodTags 推断
-    private func feelPhrase(_ r: Recipe) -> String {
-        guard let moods = r.moodTags, let m = moods.first else {
-            return "怎么吃都好"
-        }
-        switch m {
-        case .easy: return "不想费脑筋"
-        case .normal: return "正常吃一顿"
-        case .serious: return "想吃得好一些"
-        case .change: return "想换换口味"
-        }
-    }
-
-    // 适合人份
-    private func peoplePhrase(_ r: Recipe) -> String {
-        switch r.servings ?? 0 {
-        case 0: return "几个人都行"
-        case 1: return "一个人吃"
-        case 2: return "两个人一起吃"
-        case 3...4: return "三四个人合适"
-        default: return "招呼客人也够"
-        }
-    }
-
-    // 是否适合工作日
-    private func timePhrase(_ r: Recipe) -> String {
-        switch r.cookingTime ?? 0 {
-        case 0: return "看心情"
-        case 1...15: return "15 分钟搞定"
-        case 16...30: return "半小时左右"
-        case 31...60: return "正经做一顿"
-        default: return "周末慢慢做"
-        }
-    }
-
-    private func tagsRow(_ r: Recipe) -> some View {
-        VStack(alignment: .leading, spacing: AppSpacing.sm) {
-            if let moods = r.moodTags, !moods.isEmpty {
-                tagGroup(label: "适合心情", tags: moods.map { $0.label })
-            }
-            if let scenes = r.sceneTags, !scenes.isEmpty {
-                tagGroup(label: "什么时候吃", tags: scenes.map { $0.label })
-            }
-            if let flavors = r.tags, !flavors.isEmpty {
-                tagGroup(label: "风味", tags: flavors)
-            }
-        }
-    }
-
-    private func tagGroup(label: String, tags: [String]) -> some View {
-        VStack(alignment: .leading, spacing: AppSpacing.xs) {
-            Text(label)
-                .font(AppFont.caption())
-                .foregroundStyle(Color.inkMuted)
-            FlowLayout(spacing: AppSpacing.sm) {
-                ForEach(tags, id: \.self) { t in
-                    TagChip(text: t)
-                }
             }
         }
     }
@@ -288,8 +196,9 @@ struct RecipeDetailView: View {
                     .foregroundStyle(Color.inkMuted)
             }
             .padding(AppSpacing.lg)
-            .background(Color.cardBackground)
-            .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
+            .background(Color.cardBackground.opacity(0.9))
+            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.accentWarm.opacity(0.18), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
@@ -305,37 +214,105 @@ struct RecipeDetailView: View {
         }
     }
 
-    @ViewBuilder
-    private var relatedSection: some View {
-        if !related.isEmpty {
-            VStack(alignment: .leading, spacing: AppSpacing.md) {
-                Text("可以怎么吃")
-                    .font(AppFont.headline(15))
+    private func reviewsSection(_ r: Recipe) -> some View {
+        VStack(alignment: .leading, spacing: AppSpacing.md) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("评价记录")
+                    .font(AppFont.title(20))
                     .foregroundStyle(Color.inkPrimary)
-                let columns = Array(repeating: GridItem(.flexible(), spacing: AppSpacing.md), count: 3)
-                LazyVGrid(columns: columns, spacing: AppSpacing.md) {
-                    ForEach(related.prefix(3)) { r in
-                        RecipeCircleCard(recipe: r) {
-                            Task { await quickAdd(r) }
-                        }
+                Spacer()
+                Text("\(recipeReviews(r).count) 条")
+                    .font(AppFont.caption())
+                    .foregroundStyle(Color.inkMuted)
+            }
+            let reviews = recipeReviews(r)
+            if reviews.isEmpty {
+                Text("还没有这道菜的评价")
+                    .font(AppFont.body(14))
+                    .foregroundStyle(Color.inkMuted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, AppSpacing.lg)
+            } else {
+                VStack(spacing: AppSpacing.sm) {
+                    ForEach(reviews) { review in
+                        reviewRow(review)
                     }
                 }
             }
         }
     }
 
-    private var bottomBar: some View {
-        HStack(spacing: AppSpacing.md) {
-            SecondaryButton(title: "以后想吃", icon: "calendar") {
-                Task { await saveToFuture() }
+    private struct RecipeReviewItem: Identifiable {
+        let id: String
+        let user: AppUser?
+        let rating: Int
+        let comment: String?
+        let createdAt: Date?
+    }
+
+    private func recipeReviews(_ r: Recipe) -> [RecipeReviewItem] {
+        var result: [RecipeReviewItem] = []
+        for meal in reviewMeals {
+            guard let dish = meal.dishes?.first(where: { $0.recipeId == r.id }) else { continue }
+            for review in meal.reviews ?? [] {
+                let dishReview = review.dishReviews?.first(where: { item in item.mealDishId == dish.id })
+                result.append(RecipeReviewItem(
+                    id: "\(review.id)-\(dish.id)",
+                    user: review.user ?? meal.creator,
+                    rating: dishReview?.rating ?? review.rating,
+                    comment: dishReview?.comment ?? review.comment,
+                    createdAt: dishReview?.createdAt ?? review.createdAt
+                ))
             }
-            PrimaryButton(title: alreadyAdded ? "已加入" : "加入这一顿", isLoading: isLoading) {
+        }
+        return result.sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
+    }
+
+    private func reviewRow(_ review: RecipeReviewItem) -> some View {
+        HStack(alignment: .top, spacing: AppSpacing.md) {
+            AvatarView(user: review.user, size: 34)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text(review.user?.displayName ?? "家人")
+                        .font(AppFont.body(14))
+                        .foregroundStyle(Color.inkPrimary)
+                    Spacer()
+                    if let date = review.createdAt {
+                        Text(RelativeDateFormatter.format(date))
+                            .font(AppFont.caption(10))
+                            .foregroundStyle(Color.inkMuted)
+                    }
+                }
+                HStack(spacing: 2) {
+                    ForEach(1...5, id: \.self) { star in
+                        Image(systemName: star <= review.rating ? "star.fill" : "star")
+                            .font(.system(size: 11))
+                            .foregroundStyle(star <= review.rating ? Color.accentWarm : Color.dividerLine)
+                    }
+                }
+                if let comment = review.comment, !comment.isEmpty {
+                    Text(comment)
+                        .font(AppFont.body(13))
+                        .foregroundStyle(Color.inkSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(AppSpacing.md)
+        .background(Color.cardBackground.opacity(0.84))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.inkPrimary.opacity(0.08), lineWidth: 1))
+    }
+
+    private var bottomBar: some View {
+        HStack {
+            PrimaryButton(title: alreadyAdded ? "已加入这一顿" : "加入这一顿", isLoading: isLoading) {
                 Task { await addToMeal() }
             }
         }
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, AppSpacing.sm)
-        .background(Color.appBackground)
+        .background(Color.cardBackground)
     }
 
     private var alreadyAdded: Bool {
@@ -353,37 +330,23 @@ struct RecipeDetailView: View {
             self.recipe = r
             self.meal = m
             self.isFavored = r.isFavored ?? false
-            await loadRelated(r)
+            await loadReviews()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    private func loadRelated(_ r: Recipe) async {
-        var query = RecipeListQuery(page: 1, pageSize: 6)
-        if let cid = r.categoryId {
-            query.categoryId = cid
-        }
-        do {
-            let result = try await RecipeService.shared.list(query)
-            related = result.items.filter { $0.id != r.id }
-        } catch {}
+    private func loadReviews() async {
+        var query = MealListQuery()
+        query.status = .completed
+        query.pageSize = 100
+        reviewMeals = (try? await MealService.shared.list(query).items) ?? []
     }
 
     private func toggleFavor() async {
         guard let recipe else { return }
         do {
             isFavored = try await RecipeService.shared.toggleFavorite(id: recipe.id)
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func quickAdd(_ r: Recipe) async {
-        guard let meal else { return }
-        do {
-            _ = try await MealService.shared.addDish(mealId: meal.id, dish: DishInput(recipeId: r.id))
-            self.meal = try await MealService.shared.detail(id: meal.id)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -413,16 +376,6 @@ struct RecipeDetailView: View {
         }
     }
 
-    private func saveToFuture() async {
-        guard let recipe else { return }
-        do {
-            let future = try await MealService.shared.current(scene: .future, mood: appState.currentMood)
-            _ = try await MealService.shared.addDish(mealId: future.id, dish: DishInput(recipeId: recipe.id))
-            showSaveToFuture = true
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
 }
 
 // 简易流式布局

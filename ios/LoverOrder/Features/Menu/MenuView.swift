@@ -19,16 +19,16 @@ struct MenuView: View {
                 VStack(spacing: AppSpacing.lg) {
                     header
                     searchBar
-                    quickFilterChips
-                    categoryChips
+                    filterPanel
                     grid_section
                     pinnedSection
-                    Color.clear.frame(height: 60)
                 }
                 .padding(.horizontal, AppSpacing.lg)
                 .padding(.top, AppSpacing.md)
             }
-            .background(Color.appBackground.ignoresSafeArea())
+            .background {
+                Color.appBackground.ignoresSafeArea()
+            }
             .refreshable {
                 await vm.loadCurrentMeal(scene: .pair, mood: appState.currentMood)
                 await vm.loadRecipes()
@@ -68,45 +68,83 @@ struct MenuView: View {
     }
 
     private var header: some View {
-        VStack(spacing: AppSpacing.xs) {
-            HStack(spacing: 6) {
-                Text("菜单")
-                    .font(AppFont.title(30))
+        HStack(alignment: .bottom) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("今日菜谱")
+                    .font(AppFont.title(31))
                     .foregroundStyle(Color.inkPrimary)
-                Image(systemName: "heart.fill")
-                    .foregroundStyle(Color.accentWarm)
-                    .font(.system(size: 14))
-            }
-            Text("把这一顿想选的菜放在这里")
-                .font(AppFont.body())
+                Text("选择菜品加入今天的菜单")
+                .font(AppFont.body(13))
                 .foregroundStyle(Color.inkMuted)
-        }
-        .frame(maxWidth: .infinity)
-        .overlay(alignment: .topTrailing) {
+            }
+            Spacer()
             Button {
                 showCreateRecipe = true
             } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 36, height: 36)
-                    .foregroundStyle(.white)
-                    .background(Color.brandGreen)
-                    .clipShape(Circle())
+                VStack(spacing: 2) {
+                    Image(systemName: "pencil.tip")
+                        .font(.system(size: 16, weight: .medium))
+                    Text("记一道")
+                        .font(AppFont.caption(10))
+                }
+                .foregroundStyle(Color.brandGreen)
+                .frame(width: 48, height: 48)
+                .background(Color.paperGreen)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(Color.brandGreen.opacity(0.25), lineWidth: 1))
             }
         }
-        .padding(.vertical, AppSpacing.sm)
+        .padding(.top, AppSpacing.sm)
     }
 
-    private var quickFilterChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+    private var filterPanel: some View {
+        VStack(alignment: .leading, spacing: AppSpacing.md) {
             HStack(spacing: AppSpacing.sm) {
-                ForEach(MenuFilter.allCases) { f in
-                    CategoryChip(title: f.label, isSelected: vm.quickFilter == f) {
-                        Task { await vm.selectFilter(f) }
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .foregroundStyle(Color.brandGreen)
+                Text("筛选")
+                    .font(AppFont.headline(15))
+                    .foregroundStyle(Color.inkPrimary)
+                Spacer()
+                if vm.selectedCategoryId != nil || vm.quickFilter != .all {
+                    Text("已筛选")
+                        .font(AppFont.caption(11))
+                        .foregroundStyle(Color.accentWarm)
+                    Button("清除") {
+                        Task { await vm.clearFilters() }
+                    }
+                    .font(AppFont.caption(11))
+                    .foregroundStyle(Color.inkMuted)
+                }
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: AppSpacing.sm) {
+                    CategoryChip(title: MenuFilter.recent.label, isSelected: vm.quickFilter == .recent) {
+                        Task { await vm.selectFilter(vm.quickFilter == .recent ? .all : .recent) }
+                    }
+                }
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: AppSpacing.sm) {
+                    ForEach(visibleCategories) { category in
+                        CategoryChip(title: category.name, isSelected: vm.selectedCategoryId == category.id) {
+                            Task { await vm.selectCategory(category.id) }
+                        }
                     }
                 }
             }
         }
+        .padding(AppSpacing.md)
+        .background(Color.cardBackground.opacity(0.92))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.inkPrimary.opacity(0.055), lineWidth: 1))
+        .shadow(color: Color.inkPrimary.opacity(0.035), radius: 14, y: 5)
+    }
+
+    /// 后端分类允许用户自定义；如果有人把“最近做过”之类的快捷筛选也建成分类，页面只展示一次。
+    private var visibleCategories: [RecipeCategory] {
+        let quickLabels = Set(MenuFilter.allCases.map(\.label))
+        return vm.categories.filter { !quickLabels.contains($0.name) }
     }
 
     private var searchBar: some View {
@@ -129,24 +167,13 @@ struct MenuView: View {
             }
         }
         .padding(.horizontal, AppSpacing.md)
-        .padding(.vertical, AppSpacing.sm)
-        .background(Color.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.pill, style: .continuous))
-        .capsuleHairline()
-    }
-
-    private var categoryChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: AppSpacing.sm) {
-                CategoryChip(title: "全部", isSelected: vm.selectedCategoryId == nil) {
-                    Task { await vm.selectCategory(nil) }
-                }
-                ForEach(vm.categories) { cat in
-                    CategoryChip(title: cat.name, isSelected: vm.selectedCategoryId == cat.id) {
-                        Task { await vm.selectCategory(cat.id) }
-                    }
-                }
-            }
+        .padding(.vertical, 11)
+        .background(Color.cardBackground.opacity(0.9))
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(Color.inkPrimary.opacity(0.055), lineWidth: 1))
+        .overlay(alignment: .bottom) {
+            Capsule().fill(Color.brandGreen.opacity(0.42)).frame(width: 38, height: 2)
+                .padding(.bottom, 3)
         }
     }
 
@@ -204,10 +231,10 @@ struct MenuView: View {
     private var pinnedSection: some View {
         Group {
             if !vm.pinnedDishes.isEmpty {
-                SectionCard {
+                SectionCard(padding: AppSpacing.lg, radius: 6) {
                     HStack {
-                        Text("已加入这一顿")
-                            .font(AppFont.headline(15))
+                        Text("已选菜品")
+                            .font(AppFont.title(19))
                             .foregroundStyle(Color.inkPrimary)
                         Spacer()
                         Text("\(vm.pinnedDishes.count) 道")
@@ -232,9 +259,12 @@ struct MenuView: View {
                                     }
                                 }
                             }
+                            Divider().overlay(Color.brandGreen.opacity(0.12))
                         }
                     }
                 }
+                .background(Color.paperWarm.opacity(0.82))
+                .rotationEffect(.degrees(0.5))
             }
         }
     }
@@ -247,7 +277,7 @@ struct MenuView: View {
                     Text("\(vm.pinnedDishes.count) 道菜")
                         .font(AppFont.headline(15))
                         .foregroundStyle(Color.inkPrimary)
-                    Text("我们这顿 · " + appState.currentMood.label)
+                    Text("今天的菜单 · " + appState.currentMood.label)
                         .font(AppFont.caption())
                         .foregroundStyle(Color.inkMuted)
                 }
@@ -262,7 +292,7 @@ struct MenuView: View {
             .padding(.horizontal, AppSpacing.lg)
             .padding(.vertical, AppSpacing.sm)
         }
-        .background(Color.appBackground)
+        .background(Color.cardBackground)
     }
 
     private func alreadyAdded(_ recipe: Recipe) -> Bool {
@@ -277,10 +307,10 @@ struct MenuView: View {
     }
 
     private var confirmTitle: String {
-        guard let meal = vm.meal else { return "就这些" }
+        guard let meal = vm.meal else { return "确认菜单" }
         switch meal.status {
-        case .planning: return "就这些"
-        case .confirmed: return "已定下"
+        case .planning: return "确认菜单"
+        case .confirmed: return "已确认"
         case .completed: return "已完成"
         case .cancelled: return "已取消"
         }
@@ -297,13 +327,25 @@ private struct CategoryChip: View {
         Button(action: action) {
             Text(title)
                 .font(AppFont.body(14))
-                .padding(.horizontal, AppSpacing.lg)
-                .padding(.vertical, 10)
-                .foregroundStyle(isSelected ? .white : Color.inkSecondary)
-                .background(isSelected ? Color.brandGreen : Color.cardBackground)
-                .clipShape(Capsule(style: .continuous))
-                .capsuleHairline(color: isSelected ? .clear : Color.dividerLine.opacity(0.7))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .foregroundStyle(isSelected ? Color.inkPrimary : Color.inkSecondary)
+                .background(isSelected ? Color.brandGreen.opacity(0.14) : Color.cardBackground.opacity(0.88))
+                .clipShape(Capsule())
+                .overlay {
+                    Capsule()
+                        .stroke(isSelected ? Color.brandGreen.opacity(0.28) : Color.inkPrimary.opacity(0.07), lineWidth: 1)
+                }
+                .overlay(alignment: .topTrailing) {
+                    if isSelected {
+                        Circle()
+                            .fill(Color.liveOlive)
+                            .frame(width: 5, height: 5)
+                            .offset(x: -4, y: 3)
+                    }
+                }
         }
+        .buttonStyle(.plain)
     }
 }
 
@@ -317,9 +359,15 @@ private struct MenuRecipeCard: View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomTrailing) {
                 AsyncImageView(url: recipe.coverImage, name: recipe.name)
-                    .frame(height: 132)
+                    .frame(height: 142)
                     .frame(maxWidth: .infinity)
                     .clipped()
+                    .overlay(alignment: .topTrailing) {
+                        Text("✦")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Color.dopaminePink.opacity(0.9))
+                            .padding(8)
+                    }
                     .overlay(alignment: .topLeading) {
                         if let time = recipe.cookingTime, time > 0 {
                             HStack(spacing: 2) {
@@ -328,8 +376,8 @@ private struct MenuRecipeCard: View {
                             }
                             .padding(.horizontal, AppSpacing.sm)
                             .padding(.vertical, 4)
-                            .background(.ultraThinMaterial)
-                            .clipShape(Capsule())
+                            .background(Color.cardBackground.opacity(0.78))
+                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
                             .foregroundStyle(Color.inkPrimary)
                             .padding(AppSpacing.sm)
                         }
@@ -342,6 +390,7 @@ private struct MenuRecipeCard: View {
                         .frame(width: 28, height: 28)
                         .background(alreadyAdded ? Color.inkMuted : Color.accentWarm)
                         .clipShape(Circle())
+                        .overlay(Circle().stroke(Color.white.opacity(0.8), lineWidth: 2))
                 }
                 .padding(AppSpacing.sm)
             }
@@ -377,12 +426,65 @@ private struct MenuRecipeCard: View {
             }
             .padding(.horizontal, AppSpacing.md)
             .padding(.top, AppSpacing.sm)
-            .padding(.bottom, AppSpacing.md)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .background(Color.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
-        .hairline(AppRadius.lg)
+                .padding(.bottom, AppSpacing.md)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        .background(Color.cardBackground.opacity(0.88))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.inkPrimary.opacity(0.07), lineWidth: 1))
         .appCardShadow()
+        .rotationEffect(.degrees(recipe.id.isMultiple(of: 2) ? -0.35 : 0.35))
     }
+}
+
+// 菜谱页用的极轻纸张底和几笔手绘装饰，保持白色为主，颜色只做小面积提示。
+struct HandmadePaper<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        ZStack {
+            Color.appBackground
+            Canvas { context, size in
+                let step: CGFloat = 22
+                var index = 0
+                for y in stride(from: 0, through: size.height, by: step) {
+                    for x in stride(from: 0, through: size.width, by: step) {
+                        let n = CGFloat((index * 29) % 13) / 13
+                        let dot = Path(ellipseIn: CGRect(x: x + n * 6, y: y + CGFloat((index * 7) % 5), width: 0.5 + n, height: 0.5 + n))
+                        context.fill(dot, with: .color(Color.inkPrimary.opacity(0.004 + n * 0.005)))
+                        index += 1
+                    }
+                }
+            }
+            .allowsHitTesting(false)
+            content()
+        }
+    }
+}
+
+struct HandDrawnUnderline: View {
+    var color: Color = Color.brandGreen
+    var body: some View {
+        Canvas { context, size in
+            var path = Path()
+            path.move(to: CGPoint(x: 1, y: size.height * 0.45))
+            path.addCurve(to: CGPoint(x: size.width - 1, y: size.height * 0.58), control1: CGPoint(x: size.width * 0.28, y: size.height * 0.08), control2: CGPoint(x: size.width * 0.68, y: size.height * 0.92))
+            context.stroke(path, with: .color(color.opacity(0.7)), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+        }
+        .frame(height: 7)
+    }
+}
+
+struct DoodleSprig: View {
+    var body: some View {
+        Image(systemName: "leaf.fill")
+            .font(.system(size: 22, weight: .light))
+            .foregroundStyle(Color.brandGreen.opacity(0.5))
+            .rotationEffect(.degrees(-22))
+            .allowsHitTesting(false)
+    }
+}
+
+struct NotebookRule: View {
+    var body: some View { Rectangle().fill(Color.brandGreen.opacity(0.11)).frame(height: 1) }
 }

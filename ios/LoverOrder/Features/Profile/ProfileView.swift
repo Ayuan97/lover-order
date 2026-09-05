@@ -1,13 +1,13 @@
 import SwiftUI
 import UIKit
+import PhotosUI
 
-// "我的"页：用户卡 + 5 个偏好分组 + 家的设置 + 退出
+// "我的"页：资料、常用工具、家庭设置和退出。
 struct ProfileView: View {
     @EnvironmentObject private var appState: AppState
+    // 封面要承担页面第一视觉，不能只像一条横幅。
+    private let profileHeroHeight: CGFloat = 300
 
-    // 后端持久化字段
-    @State private var selectedTastes: Set<String> = []
-    @State private var isSavingTastes = false
     @State private var inviteCode: String?
 
     @State private var showCategoryManagement: Bool = false
@@ -18,29 +18,31 @@ struct ProfileView: View {
     @State private var showInvite: Bool = false
     // 客人扫/输房间号 放在「我的」次要区 不抢首页主路径
     @State private var showJoinDining: Bool = false
+    @State private var profileBackgroundItem: PhotosPickerItem?
+    @State private var profileBackgroundData: Data?
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: AppSpacing.lg) {
-                    header
-                    userCard
+                    profileHero
                     if let stats {
                         StatsCard(stats: stats)
                     }
-                    moodPicker
-                    tastesCard
                     toolsCard
                     householdCard
                     actionsCard
                     Color.clear.frame(height: 40)
                 }
                 .padding(.horizontal, AppSpacing.lg)
-                .padding(.top, AppSpacing.md)
+                .padding(.top, 0)
             }
             .background(Color.appBackground.ignoresSafeArea())
+            // 封面是页面的沉浸式背景，允许它延伸到刘海屏后面。
+            .ignoresSafeArea(edges: .top)
+            .scrollIndicators(.hidden)
             .task {
-                selectedTastes = Set(appState.currentUser?.tastePrefs ?? [])
+                profileBackgroundData = ProfileHeaderImageStore.load()
                 await appState.refreshHousehold()
                 await loadStats()
             }
@@ -75,29 +77,24 @@ struct ProfileView: View {
             HStack(spacing: AppSpacing.sm) {
                 Image(systemName: "square.grid.2x2")
                     .foregroundStyle(Color.brandGreen)
-                Text("整理一下")
+                Text("常用工具")
                     .font(AppFont.headline(16))
                     .foregroundStyle(Color.inkPrimary)
                 Spacer()
             }
-            NavigationLink {
-                FuturePlansView()
-                    .environmentObject(appState)
-            } label: {
-                navRow(title: "以后想吃", subtitle: "先记下 不急着今天做", icon: "moon.stars")
-            }
-            .buttonStyle(.plain)
             Button {
                 showCategoryManagement = true
             } label: {
-                navRow(title: "管理菜谱分类", subtitle: "新建 改名 删除", icon: "square.grid.2x2")
+                navRow(title: "管理菜谱分类", subtitle: "新建、改名、删除", icon: "square.grid.2x2")
             }
             .buttonStyle(.plain)
+            Divider()
+                .padding(.leading, 48)
             // 聚会弱入口：进房(房间号)≠进家(餐券)；客人点菜不加入 household
             Button {
                 showJoinDining = true
             } label: {
-                navRow(title: "去朋友家蹭一顿", subtitle: "扫/输房间号 不进他们家", icon: "qrcode.viewfinder")
+                navRow(title: "去朋友那儿点菜", subtitle: "扫码或输入房间号，临时一起吃饭", icon: "qrcode.viewfinder")
             }
             .buttonStyle(.plain)
         }
@@ -106,8 +103,11 @@ struct ProfileView: View {
     private func navRow(title: String, subtitle: String, icon: String) -> some View {
         HStack(spacing: AppSpacing.md) {
             Image(systemName: icon)
-                .foregroundStyle(Color.brandGreen)
-                .frame(width: 22)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Color.actionInk)
+                .frame(width: 32, height: 32)
+                .background(icon == "qrcode.viewfinder" ? Color.dopaminePink.opacity(0.28) : Color.dopamineYellow.opacity(0.42))
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(AppFont.body(15))
@@ -118,102 +118,103 @@ struct ProfileView: View {
             }
             Spacer()
             Image(systemName: "chevron.right")
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color.inkMuted)
         }
-        .padding(AppSpacing.md)
-        .background(Color.appBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
-    }
-
-    private var header: some View {
-        VStack(spacing: AppSpacing.xs) {
-            HStack(spacing: 6) {
-                Text("我的")
-                    .font(AppFont.title(30))
-                    .foregroundStyle(Color.inkPrimary)
-                Image(systemName: "heart.fill")
-                    .foregroundStyle(Color.accentWarm)
-                    .font(.system(size: 14))
-            }
-            Text("把这里调成你喜欢的样子")
-                .font(AppFont.body())
-                .foregroundStyle(Color.inkMuted)
-        }
-        .frame(maxWidth: .infinity)
         .padding(.vertical, AppSpacing.sm)
+        .contentShape(Rectangle())
     }
 
-    private var userCard: some View {
-        SectionCard {
-            HStack(spacing: AppSpacing.md) {
-                AvatarView(user: appState.currentUser, size: 56, ring: true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(appState.currentUser?.displayName ?? "美食家")
-                        .font(AppFont.headline(18))
-                        .foregroundStyle(Color.inkPrimary)
-                    Text(householdSubtitle)
-                        .font(AppFont.caption())
-                        .foregroundStyle(Color.inkMuted)
-                }
-                Spacer()
-                Button {
-                    showEditProfile = true
-                } label: {
-                    Text("编辑")
-                        .font(AppFont.caption(13))
-                        .padding(.horizontal, AppSpacing.md)
-                        .padding(.vertical, 6)
-                        .foregroundStyle(Color.brandGreen)
-                        .background(Color.brandGreen.opacity(0.1))
-                        .clipShape(Capsule())
-                }
-            }
-        }
-    }
-
-    private var moodPicker: some View {
-        SectionCard {
-            NumberedSectionTitle(index: 1, title: "默认心情", hint: "打开 App 时想怎么吃")
-            FlowLayout(spacing: AppSpacing.sm) {
-                ForEach(Mood.allCases) { mood in
-                    MoodChip(mood: mood, isSelected: appState.currentMood == mood) {
-                        Task { await updateMood(mood) }
+    private var profileHero: some View {
+        ZStack(alignment: .bottomLeading) {
+            Group {
+                if let data = profileBackgroundData, let image = UIImage(data: data) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    LinearGradient(
+                        colors: [Color.dopamineYellow.opacity(0.72), Color.dopaminePink.opacity(0.36), Color.appBackground],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 54, weight: .light))
+                            .foregroundStyle(.white.opacity(0.62))
+                            .rotationEffect(.degrees(12))
+                            .padding(28)
                     }
                 }
             }
-        }
-    }
+            .frame(maxWidth: .infinity)
+            .frame(height: profileHeroHeight)
+            .clipped()
 
-    private var tastesCard: some View {
-        SectionCard {
-            NumberedSectionTitle(index: 2, title: "口味偏好", hint: "多选 推荐时会偏向这些口味")
-            FlowLayout(spacing: AppSpacing.sm) {
-                ForEach(TastePresets.all, id: \.self) { taste in
-                    Button {
-                        toggleTaste(taste)
-                    } label: {
-                        Text(taste)
-                            .font(AppFont.body(13))
-                            .padding(.horizontal, AppSpacing.md)
-                            .padding(.vertical, 8)
-                            .foregroundStyle(selectedTastes.contains(taste) ? .white : Color.inkPrimary)
-                            .background(selectedTastes.contains(taste) ? Color.brandGreen : Color.appBackground)
-                            .clipShape(Capsule())
-                            .capsuleHairline(color: selectedTastes.contains(taste) ? .clear : Color.dividerLine.opacity(0.7))
+            LinearGradient(
+                colors: [.black.opacity(0.04), .black.opacity(0.62)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+
+            VStack(alignment: .leading, spacing: AppSpacing.md) {
+                HStack(alignment: .top) {
+                    Spacer()
+                    HStack(spacing: 8) {
+                        PhotosPicker(selection: $profileBackgroundItem, matching: .images) {
+                            Image(systemName: "photo.on.rectangle.angled")
+                                .font(.system(size: 14, weight: .semibold))
+                                .frame(width: 34, height: 34)
+                        }
+                        Button {
+                            showEditProfile = true
+                        } label: {
+                            Text("编辑")
+                                .font(AppFont.caption(13))
+                                .padding(.horizontal, 12)
+                                .frame(height: 34)
+                        }
                     }
-                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.actionInk)
+                    .background(.white.opacity(0.90), in: Capsule())
+                }
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: AppSpacing.md) {
+                    AvatarView(user: appState.currentUser, size: 76, ring: true)
+                        .overlay {
+                            Circle()
+                                .stroke(.white.opacity(0.78), lineWidth: 2)
+                        }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(appState.currentUser?.displayName ?? "美食家")
+                            .font(AppFont.title(24))
+                            .foregroundStyle(.white)
+                            .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
+                        HStack(spacing: 5) {
+                            Image(systemName: "house.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text(householdSubtitle)
+                                .font(AppFont.caption(12))
+                        }
+                        .foregroundStyle(.white.opacity(0.9))
+                    }
                 }
             }
-            HStack {
-                Spacer()
-                Button {
-                    Task { await saveTastes() }
-                } label: {
-                    Text(isSavingTastes ? "保存中" : "保存口味")
-                        .font(AppFont.caption(13))
-                        .foregroundStyle(Color.brandGreen)
-                }
-            }
+            .padding(.horizontal, AppSpacing.lg)
+            .padding(.top, 54)
+            .padding(.bottom, AppSpacing.lg)
+        }
+        .frame(height: profileHeroHeight)
+        // 沉浸式封面是页面背景，不做卡片式底部收口或阴影。
+        .padding(.horizontal, -AppSpacing.lg)
+        .task(id: profileBackgroundItem) {
+            guard let item = profileBackgroundItem,
+                  let data = try? await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data),
+                  let compressed = ProfileHeaderImageStore.save(image: image) else { return }
+            profileBackgroundData = compressed
         }
     }
 
@@ -222,7 +223,7 @@ struct ProfileView: View {
             HStack(spacing: AppSpacing.sm) {
                 Image(systemName: "house.fill")
                     .foregroundStyle(Color.brandGreen)
-                Text("家的设置")
+                Text("我们的家")
                     .font(AppFont.headline(16))
                     .foregroundStyle(Color.inkPrimary)
                 Spacer()
@@ -294,50 +295,35 @@ struct ProfileView: View {
     private var householdSubtitle: String {
         if let name = appState.household?.name { return name }
         if appState.currentUser?.hasHousehold == true {
-            return appState.householdLoadFailed ? "家信息还没拉到" : "家里…"
+            return appState.householdLoadFailed ? "家信息还没拉到" : "正在加载家庭信息"
         }
         return "未加入家"
     }
 
     private var actionsCard: some View {
-        VStack(spacing: AppSpacing.md) {
-            SecondaryButton(title: "退出登录", icon: "rectangle.portrait.and.arrow.right") {
-                Task { await appState.didLogout() }
+        Button {
+            Task { await appState.didLogout() }
+        } label: {
+            HStack(spacing: AppSpacing.sm) {
+                Image(systemName: "rectangle.portrait.and.arrow.right")
+                Text("退出登录")
+                    .font(AppFont.body(14))
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(Color.errorInk)
+            .padding(.horizontal, AppSpacing.lg)
+            .frame(height: 48)
+            .background(Color.cardBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .stroke(Color.errorInk.opacity(0.18), lineWidth: 1)
             }
         }
-    }
-
-    private func updateMood(_ mood: Mood) async {
-        appState.currentMood = mood
-        do {
-            let user = try await AuthService.shared.updateProfile(UpdateProfileRequest(defaultMood: mood))
-            appState.currentUser = user
-            Haptics.light()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
-    private func toggleTaste(_ taste: String) {
-        if selectedTastes.contains(taste) {
-            selectedTastes.remove(taste)
-        } else {
-            selectedTastes.insert(taste)
-        }
-    }
-
-    private func saveTastes() async {
-        isSavingTastes = true
-        defer { isSavingTastes = false }
-        do {
-            let user = try await AuthService.shared.updateProfile(
-                UpdateProfileRequest(tastePrefs: Array(selectedTastes))
-            )
-            appState.currentUser = user
-            errorMessage = "口味偏好已保存"
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("退出登录")
     }
 
     private func refreshInvite() async {
@@ -422,26 +408,32 @@ private struct StatsCard: View {
     }
 
     private var numbersRow: some View {
-        HStack(spacing: AppSpacing.md) {
-            statBox(value: "\(stats.totalMeals)", label: "一共吃过这么多顿")
-            statBox(value: "\(stats.totalDishes)", label: "一共下肚这么多道")
-            statBox(value: "\(stats.recentMeals)", label: "最近 30 天")
+        HStack(spacing: 0) {
+            statBox(value: "\(stats.totalMeals)", label: "累计餐次", accent: Color.dopaminePink, divider: true)
+            statBox(value: "\(stats.totalDishes)", label: "累计菜品", accent: Color.brandGreen, divider: true)
+            statBox(value: "\(stats.recentMeals)", label: "近 30 天", accent: Color.accentWarm, divider: false)
         }
     }
 
-    private func statBox(value: String, label: String) -> some View {
+    private func statBox(value: String, label: String, accent: Color, divider: Bool) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(value)
                 .font(AppFont.title(22))
-                .foregroundStyle(Color.brandGreen)
+                .foregroundStyle(accent)
             Text(label)
                 .font(AppFont.caption(11))
                 .foregroundStyle(Color.inkMuted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(AppSpacing.md)
-        .background(Color.appBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+        .padding(.horizontal, AppSpacing.sm)
+        .padding(.vertical, AppSpacing.xs)
+        .overlay(alignment: .trailing) {
+            if divider {
+                Rectangle()
+                    .fill(Color.dividerLine.opacity(0.8))
+                    .frame(width: 1, height: 34)
+            }
+        }
     }
 
     private var topDishesView: some View {
@@ -491,8 +483,27 @@ private struct StatsCard: View {
     }
 }
 
-// 常见口味预设
-enum TastePresets {
-    static let all = ["麻辣", "清淡", "酸甜", "咸鲜", "海鲜", "烧烤", "凉拌", "蒸煮", "炖煮", "面食", "米饭", "汤水"]
-}
+private enum ProfileHeaderImageStore {
+    private static var url: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("profile-header.jpg")
+    }
 
+    static func load() -> Data? {
+        try? Data(contentsOf: url)
+    }
+
+    static func save(image: UIImage) -> Data? {
+        guard let data = image.jpegData(compressionQuality: 0.78) else { return nil }
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: url, options: .atomic)
+            return data
+        } catch {
+            return nil
+        }
+    }
+}

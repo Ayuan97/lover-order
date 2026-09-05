@@ -1,6 +1,6 @@
 import SwiftUI
 
-// 主操作按钮 墨绿大圆角 用于"一起选好了"等关键动作
+// 主操作按钮：像手账贴纸一样有温度，不使用工业感过强的纯色大胶囊。
 struct PrimaryButton: View {
     let title: String
     var icon: String? = nil
@@ -19,10 +19,15 @@ struct PrimaryButton: View {
                     .font(AppFont.headline(17))
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 52)
+            .frame(height: 50)
             .foregroundStyle(.white)
-            .background(Color.brandGreen)
-            .clipShape(RoundedRectangle(cornerRadius: AppRadius.pill, style: .continuous))
+            .background(Color.actionInk)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
+            }
+            .appCardShadow()
         }
         .disabled(isLoading)
     }
@@ -51,7 +56,7 @@ struct SecondaryButton: View {
                 RoundedRectangle(cornerRadius: AppRadius.pill, style: .continuous)
                     .stroke(Color.brandGreen.opacity(0.2), lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: AppRadius.pill, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
     }
 }

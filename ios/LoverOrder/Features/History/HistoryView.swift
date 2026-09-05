@@ -1,92 +1,95 @@
 import SwiftUI
 
-// 记录页 按时间倒序展示已完成的"一顿"
+// 已完成用餐记录列表。
 struct HistoryView: View {
     @StateObject private var vm = HistoryViewModel()
-    @State private var filter: Filter = .recent
+    @State private var filter: Filter = .all
+    @State private var showManualEntry = false
 
     enum Filter: String, CaseIterable, Identifiable {
-        case recent
-        case completed
-        case thisMonth
-
+        case all, home, friends
         var id: String { rawValue }
-
         var label: String {
             switch self {
-            case .recent: return "最近"
-            case .completed: return "已尝过"
-            case .thisMonth: return "本月"
+            case .all: return "全部"
+            case .home: return "家里吃饭"
+            case .friends: return "朋友聚餐"
             }
         }
     }
 
-    @EnvironmentObject private var appState: AppState
-
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: AppSpacing.lg) {
+                VStack(spacing: 22) {
                     header
                     filterChips
                     listContent
                 }
-                .padding(.horizontal, AppSpacing.lg)
-                .padding(.top, AppSpacing.md)
+                .padding(.horizontal, 18)
+                .padding(.top, 30)
+                .padding(.bottom, 28)
             }
             .background(Color.appBackground.ignoresSafeArea())
-            .refreshable {
-                await vm.load(filter: filter)
-            }
-            .task {
-                await vm.load(filter: filter)
-            }
-            .onChange(of: filter) { _, newValue in
-                Task { await vm.load(filter: newValue) }
-            }
+            .refreshable { await vm.load(filter: filter) }
+            .task { await vm.load(filter: filter) }
+            .onChange(of: filter) { _, value in Task { await vm.load(filter: value) } }
             .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
                 Task { await vm.load(filter: filter) }
             }
             .navigationBarHidden(true)
             .toast($vm.errorMessage)
+            .sheet(isPresented: $showManualEntry) {
+                ManualHistoryEntryView {
+                    Task { await vm.load(filter: filter) }
+                }
+            }
         }
     }
 
     private var header: some View {
-        VStack(spacing: AppSpacing.xs) {
-            HStack(spacing: 6) {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 7) {
                 Text("记录")
-                    .font(AppFont.title(30))
+                    .font(AppFont.title(34))
                     .foregroundStyle(Color.inkPrimary)
-                Image(systemName: "heart.fill")
-                    .foregroundStyle(Color.accentWarm)
-                    .font(.system(size: 14))
+                Text("记下和家人、朋友吃过的饭")
+                    .font(AppFont.body(15))
+                    .foregroundStyle(Color.inkMuted)
             }
-            Text("把每一顿吃过的留下来")
-                .font(AppFont.body())
-                .foregroundStyle(Color.inkMuted)
+            Spacer()
+            Button {
+                showManualEntry = true
+            } label: {
+                Label("记一顿", systemImage: "plus")
+                    .font(AppFont.body(13))
+                    .foregroundStyle(Color.brandGreen)
+                    .padding(.horizontal, 12)
+                    .frame(height: 38)
+                    .background(Color.paperGreen)
+                    .clipShape(Capsule())
+            }
+            .accessibilityLabel("记一顿")
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, AppSpacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var filterChips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: AppSpacing.sm) {
-                ForEach(Filter.allCases) { f in
-                    Button {
-                        filter = f
-                    } label: {
-                        Text(f.label)
-                            .font(AppFont.body(14))
-                            .padding(.horizontal, AppSpacing.lg)
-                            .padding(.vertical, 10)
-                            .foregroundStyle(filter == f ? .white : Color.inkSecondary)
-                            .background(filter == f ? Color.brandGreen : Color.cardBackground)
-                            .clipShape(Capsule(style: .continuous))
-                            .capsuleHairline(color: filter == f ? .clear : Color.dividerLine.opacity(0.7))
-                    }
+        HStack(spacing: 8) {
+            ForEach(Filter.allCases) { item in
+                Button { filter = item } label: {
+                    Text(item.label)
+                        .font(AppFont.body(12))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.78)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .foregroundStyle(filter == item ? Color.white : Color.inkSecondary)
+                    .background(filter == item ? Color.brandGreen : Color.cardBackground)
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(filter == item ? Color.clear : Color.black.opacity(0.09), lineWidth: 1))
                 }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -94,28 +97,29 @@ struct HistoryView: View {
     @ViewBuilder
     private var listContent: some View {
         if vm.isLoading && vm.meals.isEmpty {
-            ProgressView().tint(Color.brandGreen).padding(.top, 60)
+            ProgressView().tint(Color.brandGreen).padding(.top, 54)
         } else if vm.meals.isEmpty {
             if vm.loadFailed {
                 LoadFailedView { await vm.load(filter: filter) }
             } else {
-                VStack(spacing: AppSpacing.md) {
-                    Image(systemName: "tray")
-                        .font(.system(size: 36))
+                VStack(spacing: 10) {
+                    Image(systemName: "note.text")
+                        .font(.system(size: 31, weight: .light))
                         .foregroundStyle(Color.inkMuted)
                     Text("还没有记录")
-                        .font(AppFont.body())
+                        .font(AppFont.body(15))
                         .foregroundStyle(Color.inkMuted)
+                    Text("点右上角“记一顿”")
+                        .font(AppFont.caption(12))
+                        .foregroundStyle(Color.inkMuted.opacity(0.78))
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, AppSpacing.xxxl)
+                .padding(.vertical, 66)
             }
         } else {
-            VStack(spacing: AppSpacing.md) {
+            VStack(spacing: 14) {
                 ForEach(vm.meals) { meal in
-                    NavigationLink {
-                        HistoryDetailView(mealId: meal.id)
-                    } label: {
+                    NavigationLink { HistoryDetailView(mealId: meal.id) } label: {
                         HistoryCard(meal: meal)
                     }
                     .buttonStyle(.plain)
@@ -125,165 +129,122 @@ struct HistoryView: View {
     }
 }
 
-// 历史卡片：左侧类型标记 + 文字 + 菜品缩略图
-private struct HistoryCard: View {
-    let meal: MealSession
-
-    private let thumbSize: CGFloat = 56
-
-    var body: some View {
-        SectionCard {
-            VStack(alignment: .leading, spacing: AppSpacing.sm) {
-                HStack(spacing: AppSpacing.sm) {
-                    sceneBadge
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 4) {
-                            Text(meal.scene.label)
-                                .font(AppFont.headline(15))
-                                .foregroundStyle(Color.inkPrimary)
-                            Text("·")
-                                .foregroundStyle(Color.inkMuted)
-                            Text(formatDate(meal.completedAt ?? meal.confirmedAt ?? meal.createdAt))
-                                .font(AppFont.caption(12))
-                                .foregroundStyle(Color.inkMuted)
-                        }
-                        HStack(spacing: 4) {
-                            Image(systemName: "person.2")
-                                .font(.system(size: 10))
-                            Text(peopleHint)
-                            Text("·")
-                            Text(meal.mood.label)
-                        }
-                        .font(AppFont.caption(11))
-                        .foregroundStyle(Color.inkMuted)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                        .foregroundStyle(Color.inkMuted)
-                }
-
-                if let comment = meal.reviews?.first?.comment, !comment.isEmpty {
-                    Text("\u{201C}\(comment)\u{201D}")
-                        .font(AppFont.caption(12))
-                        .foregroundStyle(Color.inkSecondary)
-                }
-
-                if let dishes = meal.dishes, !dishes.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: AppSpacing.sm) {
-                            ForEach(dishes.prefix(4)) { dish in
-                                DishThumb(name: dish.recipeName, image: dish.recipeImage, size: thumbSize, radius: AppRadius.md)
-                            }
-                            if dishes.count > 4 {
-                                Text("+\(dishes.count - 4)")
-                                    .font(AppFont.caption(12))
-                                    .frame(width: thumbSize, height: thumbSize)
-                                    .background(Color.appBackground)
-                                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
-                                    .foregroundStyle(Color.inkMuted)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private var sceneBadge: some View {
-        ZStack {
-            Color.brandGreen.opacity(0.12)
-            Image(systemName: meal.scene.icon)
-                .font(.system(size: 14))
-                .foregroundStyle(Color.brandGreen)
-        }
-        .frame(width: 36, height: 36)
-        .clipShape(Circle())
-    }
-
-    private var peopleHint: String {
-        switch meal.scene {
-        case .pair: return "两个人"
-        case .family: return "更早"
+extension MealScene {
+    var historyLabel: String {
+        switch self {
+        case .pair: return "家人一起吃"
+        case .family: return "朋友聚餐"
         case .future: return "以后想吃"
         }
     }
 
-    private func formatDate(_ date: Date?) -> String {
-        guard let date else { return "" }
-        return RelativeDateFormatter.format(date)
+    var historyIcon: String {
+        switch self {
+        case .pair: return "house.fill"
+        case .family: return "person.3.fill"
+        case .future: return "bookmark"
+        }
     }
 }
 
-// 相对时间格式化 今天/昨天 HH:mm 其他显示 M月d日 HH:mm
+private struct HistoryCard: View {
+    let meal: MealSession
+    private let thumbSize: CGFloat = 74
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 11) {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(badgeColor)
+                        .frame(width: 7, height: 7)
+                    Text(meal.scene.historyLabel)
+                        .font(AppFont.body(13))
+                }
+                .foregroundStyle(Color.inkPrimary)
+
+                Text(formatDate(meal.completedAt ?? meal.confirmedAt ?? meal.createdAt))
+                    .font(AppFont.caption(12))
+                    .foregroundStyle(Color.inkMuted)
+
+                if let dishes = meal.dishes, !dishes.isEmpty {
+                    Text("\(dishes.count) 道菜")
+                        .font(AppFont.caption(11))
+                        .foregroundStyle(Color.inkMuted)
+                }
+
+                if let comment = meal.reviews?.first?.comment, !comment.isEmpty {
+                    Text(comment)
+                        .font(AppFont.caption(12))
+                        .foregroundStyle(Color.inkSecondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+            HStack(spacing: 6) {
+                ForEach((meal.dishes ?? []).prefix(2)) { dish in
+                    DishThumb(name: dish.recipeName, image: dish.recipeImage, size: thumbSize, radius: 12)
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white, lineWidth: 1.5))
+                }
+                if (meal.dishes ?? []).isEmpty { placeholder }
+            }
+            Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color.inkMuted.opacity(0.8))
+                .padding(.top, 38)
+        }
+        .padding(14)
+        .background(Color.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.black.opacity(0.075), lineWidth: 1))
+        .shadow(color: Color.black.opacity(0.045), radius: 8, y: 3)
+    }
+
+    private var badgeColor: Color {
+        switch meal.scene { case .pair: return Color.brandGreen; case .family: return Color.clay; case .future: return Color.inkMuted }
+    }
+    private var placeholder: some View {
+        ZStack { Color.paperGreen; Image(systemName: "leaf").foregroundStyle(Color.brandGreen.opacity(0.55)) }
+            .frame(width: thumbSize, height: thumbSize).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+    private func formatDate(_ date: Date?) -> String { guard let date else { return "" }; return RelativeDateFormatter.format(date) }
+}
+
 enum RelativeDateFormatter {
     static func format(_ date: Date) -> String {
         let cal = Calendar.current
-        let now = Date()
-        let timeFormatter = DateFormatter()
-        timeFormatter.locale = Locale(identifier: "zh_CN")
-        timeFormatter.dateFormat = "HH:mm"
+        let timeFormatter = DateFormatter(); timeFormatter.locale = Locale(identifier: "zh_CN"); timeFormatter.dateFormat = "HH:mm"
         let time = timeFormatter.string(from: date)
-
-        if cal.isDateInToday(date) {
-            return "今天 \(time)"
-        }
-        if cal.isDateInYesterday(date) {
-            return "昨天 \(time)"
-        }
-        let dayDiff = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: now)).day ?? 0
-        if dayDiff > 0 && dayDiff <= 6 {
-            let weekday = DateFormatter()
-            weekday.locale = Locale(identifier: "zh_CN")
-            weekday.dateFormat = "EEEE"
-            return "\(weekday.string(from: date)) \(time)"
-        }
-        let absolute = DateFormatter()
-        absolute.locale = Locale(identifier: "zh_CN")
-        absolute.dateFormat = "M月d日 HH:mm"
-        return absolute.string(from: date)
+        if cal.isDateInToday(date) { return "今天 \(time)" }
+        if cal.isDateInYesterday(date) { return "昨天 \(time)" }
+        let dayDiff = cal.dateComponents([.day], from: cal.startOfDay(for: date), to: cal.startOfDay(for: Date())).day ?? 0
+        if dayDiff > 0 && dayDiff <= 6 { let weekday = DateFormatter(); weekday.locale = Locale(identifier: "zh_CN"); weekday.dateFormat = "EEEE"; return "\(weekday.string(from: date)) \(time)" }
+        let absolute = DateFormatter(); absolute.locale = Locale(identifier: "zh_CN"); absolute.dateFormat = "M月d日 HH:mm"; return absolute.string(from: date)
     }
 }
 
 @MainActor
 final class HistoryViewModel: ObservableObject {
     @Published var meals: [MealSession] = []
-    @Published var isLoading: Bool = false
-    @Published var loadFailed: Bool = false
+    @Published var isLoading = false
+    @Published var loadFailed = false
     @Published var errorMessage: String?
 
     func load(filter: HistoryView.Filter) async {
-        isLoading = true
-        loadFailed = false
-        defer { isLoading = false }
+        isLoading = true; loadFailed = false; defer { isLoading = false }
         do {
-            var q = MealListQuery()
-            q.pageSize = 50
+            var q = MealListQuery(); q.pageSize = 50
+            q.status = .completed
             switch filter {
-            case .recent:
-                break
-            case .completed:
-                q.status = .completed
-            case .thisMonth:
-                q.status = .completed
+            case .all: break
+            case .home: q.scene = .pair
+            case .friends: q.scene = .family
             }
             let result = try await MealService.shared.list(q)
-            meals = filterMeals(result.items, by: filter)
+            meals = result.items
         } catch {
-            loadFailed = true
-            errorMessage = error.localizedDescription
+            loadFailed = true; errorMessage = error.localizedDescription
         }
     }
 
-    private func filterMeals(_ items: [MealSession], by filter: HistoryView.Filter) -> [MealSession] {
-        switch filter {
-        case .thisMonth:
-            let cal = Calendar.current
-            return items.filter { meal in
-                guard let date = meal.completedAt ?? meal.confirmedAt ?? meal.createdAt else { return false }
-                return cal.isDate(date, equalTo: Date(), toGranularity: .month)
-            }
-        default:
-            return items
-        }
-    }
 }

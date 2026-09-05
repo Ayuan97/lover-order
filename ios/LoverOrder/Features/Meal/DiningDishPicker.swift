@@ -79,7 +79,7 @@ struct DiningDishPicker: View {
                         .padding(.horizontal, AppSpacing.md)
                         .padding(.vertical, AppSpacing.sm)
                         .foregroundStyle(.white)
-                        .background(Color.brandGreen)
+                        .background(Color.dopaminePink)
                         .clipShape(Capsule())
                 }
             }

@@ -8,15 +8,13 @@ struct RecipeStepsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: AppSpacing.lg) {
+                VStack(alignment: .leading, spacing: AppSpacing.lg) {
                 headerCard
-                quickFacts
                 ingredientsGrid
                 stepsSection
                 if let tips = recipe.tips, !tips.isEmpty {
                     tipsSection(tips)
                 }
-                Color.clear.frame(height: 80)
             }
             .padding(.horizontal, AppSpacing.lg)
             .padding(.top, AppSpacing.md)
@@ -47,27 +45,6 @@ struct RecipeStepsView: View {
             }
             Spacer()
         }
-    }
-
-    private var quickFacts: some View {
-        FlowLayout(spacing: AppSpacing.sm) {
-            if let t = recipe.cookingTime, t > 0 {
-                factChip(icon: "clock", text: "\(t) 分钟")
-            }
-            if let s = recipe.servings, s > 0 {
-                factChip(icon: "person.2", text: "\(s) 人份")
-            }
-            if let d = recipe.difficulty {
-                factChip(icon: "flame", text: d.label)
-            }
-            if let tags = recipe.tags, let first = tags.first {
-                factChip(icon: "leaf", text: first)
-            }
-        }
-    }
-
-    private func factChip(icon: String, text: String) -> some View {
-        TagChip(text: text, icon: icon)
     }
 
     private var ingredientsGrid: some View {
@@ -132,8 +109,10 @@ struct RecipeStepsView: View {
                     .foregroundStyle(Color.inkMuted)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, AppSpacing.xl)
-                    .background(Color.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+            .background(Color.cardBackground.opacity(0.9))
+            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.inkPrimary.opacity(0.08), lineWidth: 1))
+            .appCardShadow()
             } else {
                 VStack(spacing: AppSpacing.sm) {
                     ForEach(steps) { step in
@@ -145,21 +124,30 @@ struct RecipeStepsView: View {
     }
 
     private func stepCard(_ step: CookingStep) -> some View {
-        HStack(alignment: .top, spacing: AppSpacing.md) {
-            Text("\(step.index)")
-                .font(AppFont.headline(15))
-                .frame(width: 28, height: 28)
-                .foregroundStyle(.white)
-                .background(Color.brandGreen)
-                .clipShape(Circle())
-            Text(step.text)
-                .font(AppFont.body(14))
-                .foregroundStyle(Color.inkPrimary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(alignment: .leading, spacing: AppSpacing.md) {
+            HStack(alignment: .top, spacing: AppSpacing.md) {
+                Text("\(step.index)")
+                    .font(AppFont.headline(15))
+                    .frame(width: 28, height: 28)
+                    .foregroundStyle(.white)
+        .background(step.index.isMultiple(of: 2) ? Color.accentWarm : Color.brandGreen)
+                    .clipShape(Circle())
+                Text(step.text)
+                    .font(AppFont.body(14))
+                    .foregroundStyle(Color.inkPrimary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let image = step.image, !image.isEmpty {
+                AsyncImageView(url: image, name: "步骤 \(step.index)")
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 180)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
         }
-        .padding(AppSpacing.md)
-        .background(Color.brandGreen.opacity(0.06))
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+        .padding(AppSpacing.lg)
+        .background(step.index.isMultiple(of: 2) ? Color.paperWarm : Color.paperGreen)
+        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.inkPrimary.opacity(0.07), lineWidth: 1))
     }
 
     private func tipsSection(_ tips: String) -> some View {
@@ -176,7 +164,7 @@ struct RecipeStepsView: View {
                 .foregroundStyle(Color.inkSecondary)
         }
         .padding(AppSpacing.lg)
-        .background(Color(red: 0.97, green: 0.93, blue: 0.83))
+        .background(Color.paperWarm)
         .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
     }
 
@@ -191,6 +179,6 @@ struct RecipeStepsView: View {
         }
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, AppSpacing.sm)
-        .background(Color.appBackground)
+        .background(Color.cardBackground)
     }
 }
