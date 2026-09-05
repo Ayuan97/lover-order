@@ -109,7 +109,7 @@ struct MealCanvasView: View {
                 inlineEditorPanel
                     .padding(.horizontal, 8)
                     .padding(.top, 8)
-                    .presentationDetents([.height(320), .large])
+                    .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
                     .presentationBackground(Color.white)
             }
@@ -721,7 +721,8 @@ struct MealCanvasView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 18)
         } else {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 9) {
+            ScrollView(.vertical, showsIndicators: false) {
+                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 9) {
                 if case .sticker = selectedCanvasElement {
                     ForEach(CanvasEffect.allCases) { effect in
                         CanvasInlineEditorCard(icon: effect.icon, title: effect.title, previewKind: .sticker(effect), isSelected: selectedStickerEffect == effect) { applyEffect(effect) }
@@ -731,12 +732,15 @@ struct MealCanvasView: View {
                         CanvasInlineEditorCard(icon: effect.icon, title: effect.title, previewKind: .text(effect), isSelected: selectedTextEffect == effect) { applyTextEffect(effect) }
                     }
                 }
+                }
+                .padding(.bottom, 8)
             }
         }
     }
 
     private var brushEditorContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("颜色")
                     .font(.system(size: 12, weight: .semibold))
@@ -836,6 +840,8 @@ struct MealCanvasView: View {
                     .background(drawingEnabled ? CanvasPalette.accent : CanvasPalette.ink, in: Capsule())
             }
             .buttonStyle(CanvasPressStyle(scale: 0.96))
+            }
+            .padding(.bottom, 8)
         }
     }
 
