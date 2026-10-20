@@ -1,8 +1,10 @@
 import SwiftUI
 
-// 主框架底部四个入口。使用系统 TabBar 让安全区、Home Indicator 和切换动画保持为一层。
+// TabView 保留四个页面的状态，底部图标提供四个主要入口。
 struct MainTabView: View {
     @State private var selection: Tab = .meal
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var tabIndicator
 
     enum Tab: Hashable, CaseIterable {
         case meal
@@ -19,11 +21,20 @@ struct MainTabView: View {
             }
         }
 
+        var glyph: ProductIcon.Kind {
+            switch self {
+            case .meal: return .meal
+            case .menu: return .recipes
+            case .history: return .history
+            case .profile: return .profile
+            }
+        }
+
         var icon: String {
             switch self {
-            case .meal: return "fork.knife"
+            case .meal: return "square.on.square"
             case .menu: return "book.closed"
-            case .history: return "clock.arrow.circlepath"
+            case .history: return "clock"
             case .profile: return "person"
             }
         }
@@ -47,9 +58,47 @@ struct MainTabView: View {
                 .tabItem { Label(Tab.profile.title, systemImage: Tab.profile.icon) }
                 .tag(Tab.profile)
         }
-        .tint(Color.brandGreen)
-        .toolbarBackground(.visible, for: .tabBar)
-        .toolbarBackground(Color.cardBackground, for: .tabBar)
-        .toolbarColorScheme(.light, for: .tabBar)
+        .tint(CanvasTheme.accent)
+        .toolbar(.hidden, for: .tabBar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            navigationBar
+        }
+    }
+
+    private var navigationBar: some View {
+        HStack(spacing: 0) {
+            ForEach(Tab.allCases, id: \.self) { tab in
+                Button {
+                    guard selection != tab else { return }
+                    Haptics.light()
+                    selection = tab
+                } label: {
+                    VStack(spacing: 6) {
+                        ProductIcon(kind: tab.glyph)
+                            .foregroundStyle(selection == tab ? CanvasTheme.accent : CanvasTheme.secondary)
+                            .offset(y: selection == tab ? -1 : 0)
+                        Circle()
+                            .fill(.clear)
+                            .frame(width: 3, height: 3)
+                            .overlay {
+                                if selection == tab {
+                                    Circle()
+                                        .fill(CanvasTheme.accent)
+                                        .matchedGeometryEffect(id: "selectedTab", in: tabIndicator)
+                                }
+                            }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(SoftPressStyle())
+                .accessibilityLabel(tab.title)
+                .accessibilityAddTraits(selection == tab ? .isSelected : [])
+            }
+        }
+        .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.82), value: selection)
+        .padding(.horizontal, 20)
+        .background(CanvasTheme.page.ignoresSafeArea(edges: .bottom))
     }
 }

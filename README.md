@@ -1,8 +1,13 @@
 # 我们这顿 · lover-order
 
-“我们这顿”是给家庭成员一起决定吃什么的 iOS 应用。当前版本的主路径是：在“这一顿”里加菜 → 定下这一顿 → 吃完后记录。它不是商家点餐系统。
+“我们这顿”围绕一张对应今天这一顿的自由画布展开。日常主要由用户和对象共同添加内容、放上想吃的菜、摆放和商量，决定今天吃什么；在家吃完后，把菜、画布当时的样子、备注和多张照片留进历史。来客以临时身份加入同一张画布，继续共同完善这一顿。
 
-当前可用行为、页面入口、状态和协作房间规则见[当前版本说明](docs/product-flow.md)。首页画布的编辑交互见[首页画布说明](docs/features/home-canvas/feature.md)。
+这是产品方向，现有实现尚未全部对齐。阅读时请区分：
+
+- [产品方向与目标流程](docs/product-flow.md)：自由画布、日常协作、临时来客和历史记录。
+- [产品视觉与操作规范](docs/design/product-visual-system.md)：以吃一点为参考的页面与控件规范。
+- [当前画布与餐次入口](docs/features/home-canvas/feature.md)：现在实际能用的内容与操作。
+- [代码对齐清单](docs/audits/2026-10-canvas-alignment.md)：尚未对齐的代码、影响和定位依据。
 
 ## 项目结构
 
@@ -11,7 +16,7 @@ lover-order/
 ├── backend/                 # Go + Gin + GORM 服务
 ├── ios/project.yml          # XcodeGen 工程配置
 ├── ios/LoverOrder/          # SwiftUI 客户端
-├── docs/                    # 当前版本功能说明与清理审查
+├── docs/                    # 产品方向、当前行为与代码对齐清单
 └── love/                    # 设计参考图
 ```
 
@@ -38,6 +43,6 @@ open LoverOrder.xcodeproj
 
 ## 认证与数据
 
-正式登录使用 Sign in with Apple；非 release 构建提供开发登录。后端使用 MySQL、GORM 和自签 JWT。餐次、菜谱、家庭、评价和临时点菜房间均由后端持久化。
+正式登录使用 Sign in with Apple；iOS Debug 构建显示开发登录，后端仅在非 release 模式提供开发登录接口。后端使用 MySQL、GORM 和自签 JWT。餐次、菜谱、家庭、评价和房间参与关系由后端持久化；完整画布目前存于本机，记录页可回看当前手机保存的餐次画布；共享存储暂缓。
 
-当前代码和可达页面优先于旧设计稿、截图和历史说明。无入口的遗留页面及旧画布组件的审查结果记录在[清理审查](docs/audits/2026-09-current-version.md)。
+产品方向以用户明确的决定及同步后的文档为准；当前可用行为以实际可达代码为准。两者不一致时登记到代码对齐清单。

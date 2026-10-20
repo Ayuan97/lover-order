@@ -6,6 +6,7 @@ import UIKit
 struct MultiPhotoPicker: View {
     @Binding var urls: [String]
     var maxCount: Int = 9
+    var onUploadingChanged: (Bool) -> Void = { _ in }
 
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var isUploading: Bool = false
@@ -27,7 +28,9 @@ struct MultiPhotoPicker: View {
                                     .foregroundStyle(.white)
                                     .background(Circle().fill(Color.black.opacity(0.5)))
                             }
-                            .padding(4)
+                            .frame(width: 44, height: 44)
+                            .accessibilityLabel("移除照片")
+                            .padding(2)
                         }
                     }
                     if urls.count < maxCount {
@@ -58,6 +61,7 @@ struct MultiPhotoPicker: View {
                                     .stroke(Color.brandGreen.opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [4]))
                             )
                         }
+                        .disabled(isUploading)
                     }
                 }
             }
@@ -67,6 +71,7 @@ struct MultiPhotoPicker: View {
                     .foregroundStyle(Color.errorInk)
             }
         }
+        .onChange(of: isUploading) { _, value in onUploadingChanged(value) }
         .onChange(of: pickerItems) { _, items in
             guard !items.isEmpty else { return }
             Task { await uploadAll(items) }

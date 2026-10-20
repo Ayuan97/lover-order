@@ -15,13 +15,14 @@ struct LoginView: View {
             Spacer()
 
             VStack(spacing: AppSpacing.md) {
-                Image(systemName: "fork.knife")
-                    .font(.system(size: 56, weight: .light))
+                ProductIcon(kind: .meal)
+                    .scaleEffect(2.5)
+                    .frame(width: 72, height: 72)
                     .foregroundStyle(Color.brandGreen)
                 Text("我们这顿")
                     .font(AppFont.title(36))
                     .foregroundStyle(Color.inkPrimary)
-                Text("两个人轻松决定吃什么")
+                Text("一起决定今天吃什么")
                     .font(AppFont.body())
                     .foregroundStyle(Color.inkMuted)
             }
@@ -34,7 +35,7 @@ struct LoginView: View {
                 }, onCompletion: handleApple)
                     .signInWithAppleButtonStyle(.black)
                     .frame(height: 52)
-                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.pill, style: .continuous))
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
 
                 #if DEBUG
                 Button {

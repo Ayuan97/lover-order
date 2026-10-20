@@ -392,7 +392,7 @@ struct RecipeEditView: View {
                 .padding(.horizontal, AppSpacing.md)
                 .padding(.vertical, 8)
                 .foregroundStyle(isSelected ? .white : Color.inkPrimary)
-                .background(isSelected ? Color.dopaminePink : Color.appBackground)
+                .background(isSelected ? Color.brandGreen : Color.appBackground)
                 .clipShape(Capsule())
         }
         .buttonStyle(.plain)

@@ -65,7 +65,7 @@ struct ShoppingListView: View {
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: AppSpacing.xs) {
-                Text("买买买")
+                Text("要买的食材")
                     .font(AppFont.title(24))
                     .foregroundStyle(Color.inkPrimary)
                 Text("买到了就点一下")
@@ -122,7 +122,7 @@ struct ShoppingListView: View {
                 }
                 Spacer()
             }
-            .padding(.vertical, 6)
+            .padding(.vertical, 10)
         }
         .buttonStyle(.plain)
     }

@@ -16,12 +16,8 @@ struct TagChip: View {
         .font(AppFont.caption(12))
         .padding(.horizontal, compact ? AppSpacing.sm : AppSpacing.md)
         .padding(.vertical, compact ? 4 : 6)
-        .foregroundStyle(Color.accentInk)
-        .background(Color.accentWarm.opacity(0.13))
+        .foregroundStyle(Color.inkSecondary)
+        .background(Color.paperGreen.opacity(0.65))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.accentWarm.opacity(0.22), lineWidth: 0.8)
-        }
     }
 }

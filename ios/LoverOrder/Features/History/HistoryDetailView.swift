@@ -20,9 +20,12 @@ struct HistoryDetailView: View {
             VStack(alignment: .leading, spacing: AppSpacing.lg) {
                 if let meal {
                     titleBlock(meal)
-                    peopleCard(meal)
-                    dishesCard(meal)
+                    if mealCanvasDocumentExists(mealID: meal.id) {
+                        MealCanvasSnapshotView(mealID: meal.id)
+                    }
                     reviewsCard(meal)
+                    dishesCard(meal)
+                    peopleCard(meal)
                     Color.clear.frame(height: 80)
                 } else if isLoading {
                     ProgressView().tint(Color.brandGreen).padding(.top, 40)
@@ -72,13 +75,11 @@ struct HistoryDetailView: View {
 
     private func titleBlock(_ meal: MealSession) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(meal.title?.isEmpty == false ? meal.title! : meal.scene.historyLabel)
+            Text(meal.title?.isEmpty == false ? meal.title! : "这一顿")
                 .font(AppFont.title(24))
                 .foregroundStyle(Color.inkPrimary)
             HStack(spacing: 8) {
-                Text(meal.scene.historyLabel)
                 if let when = meal.completedAt ?? meal.confirmedAt ?? meal.createdAt {
-                    Text("·")
                     Text(RelativeDateFormatter.format(when))
                 }
             }
@@ -197,7 +198,7 @@ struct HistoryDetailView: View {
         let reviews = meal.reviews ?? []
         SectionCard {
             HStack {
-                Text("留言")
+                Text("备注和照片")
                     .font(AppFont.headline(15))
                     .foregroundStyle(Color.inkPrimary)
                 Spacer()
@@ -205,14 +206,14 @@ struct HistoryDetailView: View {
                     Button {
                         showReview = true
                     } label: {
-                        Label("留言和照片", systemImage: "plus.circle")
+                        Label("添加", systemImage: "plus")
                             .font(AppFont.caption(13))
                             .foregroundStyle(Color.brandGreen)
                     }
                 }
             }
             if reviews.isEmpty {
-                Text("还没人留言")
+                Text("留几句话，或放上这一顿的照片")
                     .font(AppFont.caption())
                     .foregroundStyle(Color.inkMuted)
             } else {
@@ -288,7 +289,7 @@ struct HistoryDetailView: View {
             HStack(spacing: AppSpacing.md) {
                 if meal.status == .completed && (meal.reviews ?? []).isEmpty {
                     historyAction(
-                        title: "写留言",
+                        title: "补写记录",
                         subtitle: "补一句话或加照片",
                         icon: "square.and.pencil",
                         tint: Color.brandGreen
@@ -309,7 +310,7 @@ struct HistoryDetailView: View {
         }
         .padding(.horizontal, AppSpacing.lg)
         .padding(.top, 12)
-        .padding(.bottom, 76)
+        .padding(.bottom, 8)
         .background(Color.appBackground)
     }
 

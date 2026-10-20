@@ -69,15 +69,15 @@ let scan_jobs = [];
 let p0 = "";
 p0 += "You are investigating the lover-order monorepo (workspace root). ";
 p0 += "Focus ONLY on backend Go correctness bugs in backend/. ";
-p0 += "Project: couples meal decision app. Backend is Go+Gin+GORM under backend/. ";
-p0 += "Rules from CLAUDE.md: only GET/POST APIs under /api/v1; meal status machine planning->confirmed->completed (or cancelled); ";
+p0 += "Project: a shared freeform canvas for today's meal, used by a couple and temporary guests, with meal history. Backend is Go+Gin+GORM under backend/. ";
+p0 += "Read AGENTS.md and docs/product-flow.md first. Current APIs use GET/POST under /api/v1; current meal states are planning, confirmed, completed or cancelled. ";
 p0 += "household-scoped data; Apple auth + JWT. ";
-p0 += "MUST use tools: list_dir, grep, read_file. Also run: cd backend && go build ./... and go vet ./... if shell is available. ";
+p0 += "MUST inspect actual files. Follow the user's scope; do not generate test code or run tests unless explicitly requested. ";
 p0 += "Look for: compile errors, nil panics, wrong status transitions, missing household isolation, ";
 p0 += "SQL/GORM bugs, incorrect error codes, race conditions in meal dishes, broken invite flow, upload path issues. ";
 p0 += "Report at most 6 concrete findings as {file, issue, severity, area}. ";
 p0 += "severity: critical|high|medium|low. area must be backend. ";
-p0 += "Empty list is valid ONLY after you have read handlers/services and attempted build. ";
+p0 += "Empty list is valid ONLY after reading handlers/services and recording concrete static evidence. ";
 p0 += "Do NOT invent style nits or speculative issues — only real bugs with file paths.";
 scan_jobs.push(#{
     prompt: p0,
@@ -88,7 +88,7 @@ scan_jobs.push(#{
 
 let p1 = "";
 p1 += "You are investigating the lover-order monorepo. Focus ONLY on iOS Swift correctness bugs in ios/LoverOrder/. ";
-p1 += "Stack: SwiftUI + Combine, XcodeGen project.yml, APIClient talking to /api/v1. ";
+p1 += "Read AGENTS.md and docs/product-flow.md. The product centers on one freeform meal canvas shared by daily users and temporary guests; history holds dishes, canvas appearance, notes and multiple photos. Stack: SwiftUI + Combine, XcodeGen project.yml, APIClient talking to /api/v1. ";
 p1 += "MUST use tools: list_dir, grep, read_file on Models/, Network/, Features/, App/. ";
 p1 += "Look for: wrong Decoding keys vs backend JSON, force unwrap crashes, broken navigation, ";
 p1 += "View calling API directly (should go ViewModel/Service), token refresh failures, ";
@@ -111,7 +111,7 @@ p2 += "MUST use tools: read backend internal/api/*.go and service response shape
 p2 += "read ios Models/*.swift and Network/Services/*.swift and APIClient.swift. ";
 p2 += "Compare field names (json tags vs CodingKeys), path strings, request body fields, ";
 p2 += "status enums (meal scene/mood/status), list response wrappers. ";
-p2 += "Also check: endpoints documented in CLAUDE.md vs registered routes in main.go or router setup. ";
+p2 += "Also read AGENTS.md and compare documented current behavior with routes in main.go. Keep product direction distinct from implementation gaps. ";
 p2 += "Report at most 6 concrete mismatches as {file, issue, severity, area}. ";
 p2 += "severity: critical|high|medium|low. area must be api-contract. ";
 p2 += "file should be the client or server file that is wrong (prefer the side that should change). ";
@@ -256,8 +256,8 @@ for f in confirmed {
     let fp = "";
     fp += "Fix this CONFIRMED bug in the lover-order workspace (edit files in place, no worktree). ";
     fp += "Bug JSON: " + encoded_f + " ";
-    fp += "Rules from project CLAUDE.md: ";
-    fp += "- API methods only GET/POST; no new Markdown docs; no TODO; comments only explain WHY; ";
+    fp += "Read and follow AGENTS.md and docs/product-flow.md: ";
+    fp += "- API methods remain GET/POST; changes must stay within the user's scope; do not generate test code or run tests unless explicitly requested; ";
     fp += "- All user-facing Chinese if you change UI strings; SwiftUI View must not call network directly; ";
     fp += "- Do not over-engineer; fix only this issue; do not generate seed/demo data. ";
     fp += "Steps: 1) read the file and related call sites; 2) apply minimal correct fix with search_replace/write; ";

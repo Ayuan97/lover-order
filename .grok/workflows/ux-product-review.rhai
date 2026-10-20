@@ -1,7 +1,7 @@
 let meta = #{
     name: "ux-product-review",
     description: "从产品使用角度审查 lover-order 的 UI/UX 与功能逻辑闭环",
-    when_to_use: "审查选菜到留评闭环、家庭/聚餐/菜单/记录等主流程的可用与断点",
+    when_to_use: "审查自由画布、日常与临时协作、用餐结束和历史记录的实际可用性",
     phases: [
         #{ title: "Review", detail: "按产品旅程并行审查" },
         #{ title: "Verify", detail: "对抗核验每个问题是否真实存在" },
@@ -52,12 +52,12 @@ let report_schema = #{
 
 // 产品背景（写入每个 prompt，子代理无会话上下文）
 let product_ctx = "";
-product_ctx += "产品：lover-order，家庭日常吃饭决策工具（非商家点餐）。";
-product_ctx += "核心动词：选菜 → 定下这一顿 → 做了 → 吃了 → 留下记录。";
-product_ctx += "概念：一个家(Household)、这一顿(MealSession)、场景 household/dining、心情 easy/normal/serious/change。";
-product_ctx += "状态机：planning → confirmed → completed（可 cancelled）。";
-product_ctx += "iOS 主 Tab：这一顿 / 菜单 / 记录 / 我的。代码在 ios/LoverOrder/。";
-product_ctx += "设计：日式侘寂、米白、墨绿。审查重点是「真实用户能不能走通」而非像素级美工。";
+product_ctx += "先读取 AGENTS.md 与 docs/product-flow.md。产品主体是这一顿的自由画布，可自由添加内容，菜是核心内容。";
+product_ctx += "主线：打开画布 → 添加内容和菜 → 共同编辑商量 → 决定今天吃什么 → 在家用餐 → 结束并进入历史。";
+product_ctx += "日常主要用户和对象共同编辑；来客以临时身份加入同一画布，不能以独立点菜列表替代共同编辑。";
+product_ctx += "历史承载菜、画布当时的样子、备注与多图。产品方向与当前实现须分开，内部场景标签不定义主要玩法。";
+product_ctx += "iOS 主 Tab：这一顿 / 菜谱 / 记录 / 我的。代码在 ios/LoverOrder/。";
+product_ctx += "复用现有设计 token。审查真实用户能否走通，仅静态检查，不生成测试代码、不运行测试。";
 
 // 可选 scope：args.scope 限制旅程；默认全量
 let scope = "all";
@@ -78,25 +78,25 @@ if scope == "all" || scope == "onboarding" {
 if scope == "all" || scope == "meal-loop" {
     journeys.push(#{
         id: "meal-loop",
-        label: "这一顿主闭环 选菜定下完成评价",
-        paths: "ios/LoverOrder/Features/Meal/MealNowView.swift ios/LoverOrder/Features/Meal/MealNowViewModel.swift ios/LoverOrder/Features/Meal/AddDishView.swift ios/LoverOrder/Features/Meal/MealReviewView.swift ios/LoverOrder/Features/Meal/ShoppingListView.swift ios/LoverOrder/Features/Meal/EmptyMealHint.swift ios/LoverOrder/Features/Meal/FuturePlansView.swift",
-        focus: "planning 加菜/移除 → confirm → complete → review 是否每步有入口、禁用态、空态、错误提示；是否可跳步或卡死；场景/心情切换；购物清单是否接得上；完成后如何开下一顿",
+        label: "这一顿画布到历史",
+        paths: "ios/LoverOrder/Features/Meal/MealCanvasView.swift ios/LoverOrder/Features/Meal/MealNowView.swift ios/LoverOrder/Features/Meal/MealNowViewModel.swift ios/LoverOrder/Features/Meal/AddDishView.swift ios/LoverOrder/Features/Meal/MealReviewView.swift ios/LoverOrder/Features/Meal/ShoppingListView.swift",
+        focus: "自由内容编辑、菜与画布操作一致性、双方协作、决定与结束用餐的可达入口、历史是否保存画布与多图；只以当前挂载页面判断行为",
     });
 }
 if scope == "all" || scope == "dining" {
     journeys.push(#{
         id: "dining",
-        label: "聚餐房间 主客一起点菜",
+        label: "临时来客共同编辑画布",
         paths: "ios/LoverOrder/Features/Meal/DiningHostView.swift ios/LoverOrder/Features/Meal/DiningGuestView.swift ios/LoverOrder/Features/Meal/DiningJoinView.swift ios/LoverOrder/Features/Meal/DiningDishPicker.swift ios/LoverOrder/Network/Services/DiningService.swift",
-        focus: "开房间/扫码加入/点菜/离开/过期；客人与 host 家菜单关系是否可理解；与「这一顿」状态如何衔接；房间结束后 UI 是否闭环",
+        focus: "临时身份加入当前这一顿，来客是否能进入同一画布共同编辑；参与结束与用餐完成是否区分；未确定的认证与权限记录为待明确",
     });
 }
 if scope == "all" || scope == "menu" {
     journeys.push(#{
         id: "menu",
-        label: "家庭菜单库 增删改查与筛选",
+        label: "菜谱资料与画布加菜",
         paths: "ios/LoverOrder/Features/Menu/ ios/LoverOrder/Features/Profile/CategoryManagementView.swift",
-        focus: "建菜谱→出现在菜单→能加入这一顿；收藏/分类/心情场景标签；删除菜谱后历史是否可理解；空菜单引导是否指向创建",
+        focus: "菜谱创建和维护是否能服务当前画布加菜；收藏、分类与空态是否可用；菜谱变化后记录中的菜是否清楚",
     });
 }
 if scope == "all" || scope == "history-profile" {
@@ -104,7 +104,7 @@ if scope == "all" || scope == "history-profile" {
         id: "history-profile",
         label: "记录与我的 回顾与家管理",
         paths: "ios/LoverOrder/Features/History/ ios/LoverOrder/Features/Profile/ ios/LoverOrder/App/MainTabView.swift",
-        focus: "历史列表/详情/评价回看；统计是否有意义；邀请家人；资料编辑；从记录回到「再吃一顿」是否断链；权限与退出家后的空状态",
+        focus: "历史是否承载吃过的菜、画布当时的样子、备注与多图；资料及家庭关系管理是否清楚；从记录再吃一顿是否接通；权限和空态",
     });
 }
 if scope == "all" || scope == "feedback" {

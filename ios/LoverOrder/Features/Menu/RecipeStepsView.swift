@@ -110,8 +110,8 @@ struct RecipeStepsView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, AppSpacing.xl)
             .background(Color.cardBackground.opacity(0.9))
-            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.inkPrimary.opacity(0.08), lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.inkPrimary.opacity(0.08), lineWidth: 1))
             .appCardShadow()
             } else {
                 VStack(spacing: AppSpacing.sm) {
@@ -130,7 +130,7 @@ struct RecipeStepsView: View {
                     .font(AppFont.headline(15))
                     .frame(width: 28, height: 28)
                     .foregroundStyle(.white)
-        .background(step.index.isMultiple(of: 2) ? Color.accentWarm : Color.brandGreen)
+        .background(Color.brandGreen)
                     .clipShape(Circle())
                 Text(step.text)
                     .font(AppFont.body(14))
@@ -145,9 +145,9 @@ struct RecipeStepsView: View {
             }
         }
         .padding(AppSpacing.lg)
-        .background(step.index.isMultiple(of: 2) ? Color.paperWarm : Color.paperGreen)
-        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.inkPrimary.opacity(0.07), lineWidth: 1))
+        .background(Color.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+
     }
 
     private func tipsSection(_ tips: String) -> some View {

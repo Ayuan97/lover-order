@@ -221,6 +221,10 @@ func (s *MealService) Complete(householdID, id uint) (*model.MealSession, error)
 	now := time.Now()
 	m.Status = model.MealStatusCompleted
 	m.CompletedAt = &now
+	// 进行中保留 household 供首页查询；开过房间的餐次吃完后归档为 dining。
+	if m.RoomExpiresAt != nil {
+		m.Scene = model.SceneDining
+	}
 	m.RoomCode = ""
 	m.RoomExpiresAt = nil
 	if err := model.DB.Save(m).Error; err != nil {

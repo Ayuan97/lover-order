@@ -1,7 +1,7 @@
 let meta = #{
     name: "ux-fix-and-verify",
-    description: "修复 ux-product-review 确认的产品闭环问题，并对抗性核验修复是否生效",
-    when_to_use: "在产品 UX 审查之后落地修复并二次核验",
+    description: "核对画布与历史的产品闭环，按用户授权修复并复核",
+    when_to_use: "在产品审查之后按用户指定范围处理已确认的缺口",
     phases: [
         #{ title: "Fix", detail: "按旅程顺序修复，避免同文件冲突" },
         #{ title: "Verify", detail: "对抗核验每条修复是否真正闭环" },
@@ -40,32 +40,32 @@ let report_schema = #{
 };
 
 let rules = "";
-rules += "项目 lover-order iOS SwiftUI + Go 后端。";
-rules += "规则：只改必要代码；中文 UI 文案；View 不直接发请求走 ViewModel/Service；";
-rules += "仅 GET/POST API；注释只写 WHY；不写 Markdown 文档；不留 TODO；不过度设计。";
-rules += "设计 token 用 Design/ 已有颜色字体。修改后若动后端需 go build ./...。";
+rules += "项目 lover-order iOS SwiftUI + Go 后端。先读取 AGENTS.md 与 docs/product-flow.md。";
+rules += "主体是这一顿自由画布：两人日常共同编辑，来客临时加入同一画布，吃完历史保存菜、画布样子、备注和多图。";
+rules += "只改用户明确授权的缺口；核查清单不是已确认问题。未授权的画布同步、身份认证或权限变更只报告，不擅自实现。";
+rules += "复用 Design/ 的颜色字体，保持 GET/POST 接口契约。无要求不生成测试代码、不运行测试，不做完整验收。";
 
-// 已核验问题清单（来自 ux-product-review）
+// 按当前产品方向逐项核对，确认存在问题且获授权后才修改
 let issues_blob = "";
-issues_blob += "O1 critical: 建家/加入成功后 refreshProfile try? 吞错，RootView 只认 currentUser.hasHousehold 不认 household，半状态死胡同。";
-issues_blob += " 修: 成功乐观写 currentUser.householdId；Root 条件含 household!=nil；refresh 失败可见重试+刷新家庭状态。";
-issues_blob += " | O2 high: HouseholdSetupView 无退出登录。修: 底部次要退出登录+重新同步。";
-issues_blob += " | O3 high: 建家成功不展示邀请码。修: 成功后中间态展示 inviteCode/QR/分享或 sheet InviteTicketView。";
-issues_blob += " | O4 high: 临时邀请码与 InviteTicketView 永久码不同步。修: 餐券/分享用当前展示的码，或明确双轨文案并让 QR 用同一 code。";
-issues_blob += " | O5 medium: 扫码权限 denied 黑屏。修: 非 authorized 说明+去设置+手输。";
-issues_blob += " | O6 medium: 退出家文案隐瞒解散。修: 仅自己时提示将解散这个家。";
-issues_blob += " | M1 high: 评价可永久跳过首页无补评。修: 关闭后轻量 banner/以后再说；可再打开评价。";
-issues_blob += " | M2 high: meal==nil 底栏仍可点空白。修: 未就绪禁用加菜/定下；失败可重试 toast。";
-issues_blob += " | M3 high: confirm/complete 无防重入。修: isActing loading+disabled。";
-issues_blob += " | M4 medium: 0 道菜可 complete。修: 客户端禁止；后端 Complete 校验 dishCount>0（若尚未）。";
-issues_blob += " | M5 medium: 自定义菜购物清单空无 CTA。修: 空态提示并引导补食材/存菜单。";
-issues_blob += " | M6 medium: 标题写死我们这顿；改心情竞态。修: 标题用 currentScene.label；改心情避免并行 load 覆盖。";
-issues_blob += " | D1 critical: 家庭场景可直接发起聚餐。";
-issues_blob += " | D2 high: Host 不判 roomExpiresAt。修: 按过期时间判存活；过期提示重新开房。";
-issues_blob += " | D3 high: Host 无菜列表/进行中态。修: 房间页显示菜与点菜人；有效 room 时首页「聚餐中·查看」。";
-issues_blob += " | D4 high: 结束聚餐文案像散伙。修: 文案改为关闭点菜房间；客人区分关房。";
-issues_blob += " | D5 medium: 扫码文案固定餐券。修: 聚餐扫码自定义提示。";
-issues_blob += " | D6 medium: 重新选这顿不提示清房间。修: 有有效 room 时确认文案写明会结束点菜房间。";
+issues_blob += "O1: 登录或加入长期协作关系后，资料刷新失败时仍有明确入口和重试，不困在半状态。";
+issues_blob += " 按当前身份状态和 RootView 实际分支核对。";
+issues_blob += " | O2: 身份引导可以退出登录并重新同步。";
+issues_blob += " | O3: 邀请日常参与者的入口和结果清楚可达。";
+issues_blob += " | O4: 邀请码显示、二维码和分享内容一致。";
+issues_blob += " | O5: 相机未授权时有说明、设置或手输入口。";
+issues_blob += " | O6: 退出长期协作关系前说明对资料访问的影响。";
+issues_blob += " | M1: 历史直接承载菜、画布样子、备注和多图，核对已有内容与缺口。";
+issues_blob += " | M2: 当前餐次未加载时，画布操作有明确等待或失败反馈。";
+issues_blob += " | M3: 决定和结束用餐的按钮防止重复提交，且真实执行对应动作。";
+issues_blob += " | M4: 画布内容、实际菜单、决定与完成状态一致；未明确的空白画布规则只报告。";
+issues_blob += " | M5: 买菜清单作为辅助入口，缺少食材时如实解释。";
+issues_blob += " | M6: 页面围绕当前这一顿的画布，弱化模式选择，不从内部场景值生成主要玩法。";
+issues_blob += " | D1: 从当前这一顿邀请临时参与者，继续使用同一张画布。";
+issues_blob += " | D2: 按现有接口核对参与有效期的反馈，不擅自确定产品时长。";
+issues_blob += " | D3: 来客可以共同完善画布；核对当前点菜列表与目标的差距。";
+issues_blob += " | D4: 停止临时参与和结束用餐有清楚区别。";
+issues_blob += " | D5: 日常关系邀请和临时参与入口的扫码与输入提示准确。";
+issues_blob += " | D6: 当前餐次操作影响临时参与资格时明确反馈，不无提示改变权限。";
 
 // --- Phase 1: Fix (sequential journeys to avoid file races) ------------------
 phase("Fix");
@@ -75,14 +75,14 @@ log("开始按旅程顺序修复...");
 let pA = "";
 pA += "你是 iOS/后端工程师，在 lover-order 工作区直接改代码修复 Onboarding 相关问题。";
 pA += rules;
-pA += " 必须修复 ID：O1 O2 O3 O4 O5 O6。";
-pA += " 问题与修法：" + issues_blob;
+pA += " 逐项核对 ID：O1 O2 O3 O4 O5 O6，仅修复确实存在且获授权的问题。";
+pA += " 产品核查项：" + issues_blob;
 pA += " 重点文件：ios/LoverOrder/Features/Auth/HouseholdSetupView.swift App/RootView.swift App/AppState.swift";
 pA += " Features/Profile/ProfileView.swift InviteTicketView.swift Design/Components/QRScannerView.swift Models/User.swift";
 pA += " 步骤：先 read_file/grep 确认现状，再 search_replace 最小改动。";
-pA += " O1: submit 成功后更新 currentUser 的 householdId；RootView 进主页条件加上 household 已加载；半状态提供刷新。";
-pA += " O3: 创建成功可设 showInviteAfterCreate 弹出 InviteTicketView 或内嵌展示码。";
-pA += " O4: InviteTicketView 接受外部 code 参数，Profile 传入当前 inviteCode 状态。";
+pA += " O1: 核对 submit、身份状态和 RootView 真实入口，不重复修改已经成立的分支。";
+pA += " O3: 核对当前邀请入口，不根据未挂载组件增加一套流程。";
+pA += " O4: 核对当前展示码是否贯穿二维码与分享。";
 pA += " 返回 fixed_ids 实际修好的 ID 列表、files_changed、summary、notes。";
 
 let rA = agent(pA, #{
@@ -112,14 +112,14 @@ if rA != () && rA.success {
 let pB = "";
 pB += "你是 iOS/后端工程师，在 lover-order 工作区直接改代码修复「这一顿」主闭环问题。";
 pB += rules;
-pB += " 必须修复 ID：M1 M2 M3 M4 M5 M6，以及与 MealNowView 相关的 D1 D6。";
-pB += " 问题与修法：" + issues_blob;
-pB += " 重点文件：Features/Meal/MealNowView.swift MealNowViewModel.swift MealReviewView.swift";
-pB += " ShoppingListView.swift AddDishView.swift EmptyMealHint.swift";
-pB += " 后端若需 M4：backend/internal/service/meal_service.go Complete 拒绝 0 道菜。";
-pB += " 先 read 再改。D1: showFriendOrderingCard 按家庭餐次统一处理。";
-pB += " D6: cancel 确认文案在 room 有效时提示会结束点菜房间。";
-pB += " M3: ViewModel isActing，按钮 isLoading。M1: 关闭评价后仍可从 banner 进入。";
+pB += " 逐项核对 ID：M1 M2 M3 M4 M5 M6，以及与 MealNowView 相关的 D1 D6；只修用户授权范围。";
+pB += " 产品核查项：" + issues_blob;
+pB += " 重点文件：Features/Meal/MealCanvasView.swift MealNowView.swift MealNowViewModel.swift MealReviewView.swift";
+pB += " ShoppingListView.swift AddDishView.swift Features/History/HistoryDetailView.swift";
+pB += " 后端核对 backend/internal/service/meal_service.go 与实际餐次状态，不新增未明确的产品规则。";
+pB += " 先 read 再改。D1: 核对当前画布邀请入口与来客共同编辑的差距。";
+pB += " D6: 当前餐次操作影响参与资格时说明结果。";
+pB += " M3: 核对动作是否真的调用并防重入。M1: 核对历史四类内容，缺少授权时仅报告。";
 pB += " 返回 fixed_ids、files_changed、summary、notes。";
 
 let rB = agent(pB, #{
@@ -143,11 +143,11 @@ if rB != () && rB.success {
 
 // Fix C: dining host/guest
 let pC = "";
-pC += "你是 iOS 工程师，在 lover-order 工作区修复聚餐房间体验问题（D2 D3 D4 D5；D1/D6 若未修好可补）。";
+pC += "你是 iOS 工程师，核对临时参与体验（D2 D3 D4 D5 及 D1 D6），只修确实存在且获授权的问题。";
 pC += rules;
-pC += " 问题与修法：" + issues_blob;
+pC += " 产品核查项：" + issues_blob;
 pC += " 重点：DiningHostView.swift DiningGuestView.swift DiningJoinView.swift QRScannerView/扫码提示";
-pC += " MealNowView 聚餐入口文案（进行中·查看房间号）；可 grep dining/current 是否 Host 应轮询。";
+pC += " MealNowView 当前邀请入口与后端 dining/current，核对实际权限和回传；来客目标是共同编辑同一画布。";
 pC += " D2: roomExpiresAt 判断；D3: Host 展示 dishes；D4: 关闭点菜房间文案；D5: 扫码提示可配置。";
 pC += " 先 read 现状（可能前序 agent 已改 MealNowView），再最小补丁，勿回滚他人修复。";
 pC += " 返回 fixed_ids、files_changed、summary、notes。";
@@ -182,26 +182,26 @@ let check_ids = [
     "D1", "D2", "D3", "D4", "D5", "D6",
 ];
 
-// 期望行为简述供核验
+// 产品核对项，实际缺口与授权范围须分别报告
 let expect = #{};
-expect["O1"] = "建家/加入成功后即使用户能进主页：乐观 householdId 或 Root 认 household；profile 失败有重试/刷新";
+expect["O1"] = "建立长期协作关系后能进入当前画布，资料刷新失败可重试";
 expect["O2"] = "HouseholdSetupView 有退出登录入口";
 expect["O3"] = "建家成功后展示邀请码或弹出餐券/分享";
 expect["O4"] = "InviteTicketView QR/分享与当前展示的邀请码一致";
 expect["O5"] = "扫码非授权时有说明/去设置，非纯黑屏";
 expect["O6"] = "仅自己退出家时文案提示解散";
-expect["M1"] = "关评价后首页仍有补评入口或 banner";
+expect["M1"] = "历史承载菜、画布当时的样子、备注和多图；已有内容与缺口分清";
 expect["M2"] = "meal 未就绪时加菜/定下禁用或有 toast，不空白 sheet";
 expect["M3"] = "confirm/complete 有 isActing/loading 防重入";
-expect["M4"] = "0 道菜不能 complete（客户端或后端）";
+expect["M4"] = "画布内容、真实菜单与餐次状态一致，不擅自确定空白画布规则";
 expect["M5"] = "购物清单空态有引导 CTA";
-expect["M6"] = "标题跟场景；心情修改无明显覆盖竞态";
-expect["D1"] = "家庭餐次可发起聚餐";
-expect["D2"] = "Host 按 roomExpiresAt 判断过期";
-expect["D3"] = "Host 房间页有菜列表或等价；进行中入口文案";
-expect["D4"] = "结束聚餐文案表达关房间而非散伙吃完";
-expect["D5"] = "聚餐扫码提示可区分于家庭餐券";
-expect["D6"] = "有 room 时重新选这顿确认文案提及结束点菜房间";
+expect["M6"] = "页面围绕当前画布，弱化模式选择";
+expect["D1"] = "从当前画布邀请临时参与者";
+expect["D2"] = "按现有接口核对参与有效期与反馈，不新增产品时长限制";
+expect["D3"] = "来客共同完善同一画布，目标与当前点菜列表差距如实报告";
+expect["D4"] = "停止临时参与和结束用餐的反馈清楚";
+expect["D5"] = "扫码和手输准确区分日常关系邀请与临时参与";
+expect["D6"] = "影响临时参与资格的操作有明确反馈";
 
 let vjobs = [];
 for id in check_ids {
@@ -209,7 +209,7 @@ for id in check_ids {
     let vp = "";
     vp += "对抗性核验：检查产品问题 " + id + " 是否已在代码中真正修复。";
     vp += " 期望行为：" + exp + " ";
-    vp += " 原始问题清单：" + issues_blob + " ";
+    vp += " 产品核查项：" + issues_blob + " ";
     vp += " 必须用 read_file/grep 读 ios/LoverOrder 与相关 backend 现状，禁止凭记忆。";
     vp += " fixed=true 仅当代码明确实现期望且用户路径可走通；部分修或仍有洞 → fixed=false。";
     vp += " evidence 引用文件路径与关键逻辑。返回 id=" + id + "。";

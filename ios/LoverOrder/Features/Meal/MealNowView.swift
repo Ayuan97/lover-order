@@ -895,7 +895,7 @@ enum DishArtwork {
             return "StickerSalmonBowl"
         }
         if normalized.contains("吐司") || normalized.contains("面包") || normalized.contains("toast") { return "StickerToast" }
-        if normalized.contains("意面") || normalized.contains("pasta") { return "StickerPasta" }
+        if normalized.contains("意面") || normalized.contains("意大利面") || normalized.contains("pasta") { return "StickerPasta" }
         if normalized.contains("披萨") || normalized.contains("pizza") { return "StickerPizza" }
         if normalized.contains("沙拉") || normalized.contains("拌饭") || normalized.contains("鸡蛋") { return "StickerSalad" }
         return nil
@@ -906,21 +906,39 @@ enum DishArtwork {
 struct RecipeCircleCard: View {
     let recipe: Recipe
     var alreadyAdded: Bool = false
+    var isAdding: Bool = false
     let onAdd: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppSpacing.sm) {
             ZStack(alignment: .bottomTrailing) {
                 artwork
+                    .overlay {
+                        RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous)
+                            .strokeBorder(Color.brandGreen.opacity(alreadyAdded ? 0.45 : 0), lineWidth: 1)
+                    }
                 Button(action: onAdd) {
-                    Image(systemName: alreadyAdded ? "checkmark" : "plus")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 22, height: 22)
-                        .background(alreadyAdded ? Color.inkMuted : Color.accentWarm)
-                        .clipShape(Circle())
+                    ZStack {
+                        if isAdding {
+                            ProgressView().tint(.white).controlSize(.mini)
+                        } else {
+                            ProductIcon(kind: alreadyAdded ? .check : .add)
+                                .scaleEffect(0.68)
+                                .id(alreadyAdded)
+                                .transition(reduceMotion ? .opacity : .scale(scale: 0.65).combined(with: .opacity))
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .frame(width: 28, height: 28)
+                    .background(alreadyAdded ? Color.brandGreen : Color.actionInk, in: Circle())
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
                 }
-                .padding(6)
+                .buttonStyle(SoftPressStyle())
+                .disabled(alreadyAdded || isAdding)
+                .accessibilityLabel(isAdding ? "正在加入" + recipe.name : alreadyAdded ? "已加入这一顿" : "加入" + recipe.name)
+                .padding(2)
             }
             .frame(maxWidth: .infinity)
             Text(recipe.name)
@@ -934,27 +952,24 @@ struct RecipeCircleCard: View {
                     .lineLimit(1)
             }
         }
+        .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.82), value: alreadyAdded)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: isAdding)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private var artwork: some View {
         ZStack {
-            if let assetName = DishArtwork.assetName(for: recipe.name) {
-                LinearGradient(
-                    colors: [Color.paperWarm, Color.paperGreen],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                Image(assetName)
-                    .resizable()
-                    .scaledToFit()
-                    .padding(8)
-            } else {
+            if APIConfig.imageURL(recipe.coverImage) != nil {
                 AsyncImageView(url: recipe.coverImage, name: recipe.name)
+            } else if let assetName = DishArtwork.assetName(for: recipe.name) {
+                Color.paperGreen
+                Image(assetName).resizable().scaledToFit().padding(8)
+            } else {
+                AsyncImageView(url: nil, name: recipe.name)
             }
         }
-        .frame(height: 112)
+        .frame(height: 124)
         .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
     }
 }
@@ -1034,22 +1049,17 @@ struct DishThumb: View {
 
     var body: some View {
         Group {
-            if let assetName = DishArtwork.assetName(for: name) {
-                ZStack {
-                    Color.appBackground
-                    Image(assetName)
-                        .resizable()
-                        .scaledToFit()
-                        .padding(5)
-                }
-            } else if let url = APIConfig.imageURL(image) {
+            if let url = APIConfig.imageURL(image) {
                 AsyncImage(url: url) { phase in
                     switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFill()
-                    default:
-                        placeholder
+                    case .success(let img): img.resizable().scaledToFill()
+                    default: placeholder
                     }
+                }
+            } else if let assetName = DishArtwork.assetName(for: name) {
+                ZStack {
+                    Color.appBackground
+                    Image(assetName).resizable().scaledToFit().padding(5)
                 }
             } else {
                 placeholder

@@ -23,11 +23,10 @@ struct HistoryView: View {
             ScrollView {
                 VStack(spacing: 22) {
                     header
-                    filterChips
                     listContent
                 }
                 .padding(.horizontal, 18)
-                .padding(.top, 30)
+                .padding(.top, 12)
                 .padding(.bottom, 28)
             }
             .background(Color.appBackground.ignoresSafeArea())
@@ -48,50 +47,32 @@ struct HistoryView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 7) {
-                Text("记录")
-                    .font(AppFont.title(34))
-                    .foregroundStyle(Color.inkPrimary)
-                Text("记下和家人、朋友吃过的饭")
-                    .font(AppFont.body(15))
-                    .foregroundStyle(Color.inkMuted)
-            }
+        HStack {
+            Text("记录")
+                .font(AppFont.title(27))
+                .foregroundStyle(Color.inkPrimary)
             Spacer()
-            Button {
-                showManualEntry = true
+            Menu {
+                Picker("筛选记录", selection: $filter) {
+                    ForEach(Filter.allCases) { item in Text(item.label).tag(item) }
+                }
             } label: {
-                Label("记一顿", systemImage: "plus")
-                    .font(AppFont.body(13))
-                    .foregroundStyle(Color.brandGreen)
-                    .padding(.horizontal, 12)
-                    .frame(height: 38)
-                    .background(Color.paperGreen)
-                    .clipShape(Capsule())
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.system(size: 19))
+                    .foregroundStyle(filter == .all ? Color.inkMuted : Color.brandGreen)
+                    .frame(width: 44, height: 44)
             }
+            .accessibilityLabel("筛选记录：" + filter.label)
+            Button { showManualEntry = true } label: {
+                ProductIcon(kind: .add)
+                    .foregroundStyle(Color.inkPrimary)
+                    .frame(width: 44, height: 44)
+                    .background(Color.cardBackground, in: Circle())
+            }
+            .buttonStyle(SoftPressStyle())
             .accessibilityLabel("记一顿")
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var filterChips: some View {
-        HStack(spacing: 8) {
-            ForEach(Filter.allCases) { item in
-                Button { filter = item } label: {
-                    Text(item.label)
-                        .font(AppFont.body(12))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.78)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 11)
-                        .foregroundStyle(filter == item ? Color.white : Color.inkSecondary)
-                    .background(filter == item ? Color.brandGreen : Color.cardBackground)
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(filter == item ? Color.clear : Color.black.opacity(0.09), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-            }
-        }
+        .frame(height: 52)
     }
 
     @ViewBuilder
@@ -147,65 +128,54 @@ extension MealScene {
 
 private struct HistoryCard: View {
     let meal: MealSession
-    private let thumbSize: CGFloat = 74
 
     var body: some View {
-        HStack(alignment: .top, spacing: 11) {
-            VStack(alignment: .leading, spacing: 9) {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(badgeColor)
-                        .frame(width: 7, height: 7)
-                    Text(meal.scene.historyLabel)
-                        .font(AppFont.body(13))
-                }
-                .foregroundStyle(Color.inkPrimary)
-
-                Text(formatDate(meal.completedAt ?? meal.confirmedAt ?? meal.createdAt))
-                    .font(AppFont.caption(12))
-                    .foregroundStyle(Color.inkMuted)
-
-                if let dishes = meal.dishes, !dishes.isEmpty {
-                    Text("\(dishes.count) 道菜")
-                        .font(AppFont.caption(11))
-                        .foregroundStyle(Color.inkMuted)
-                }
-
+        HStack(spacing: 16) {
+            artwork
+                .frame(width: 100, height: 124)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            VStack(alignment: .leading, spacing: 8) {
+                Text(dateLabel)
+                    .font(AppFont.headline(16))
+                    .foregroundStyle(Color.inkPrimary)
+                Text(meal.title?.isEmpty == false ? meal.title! : (meal.dishes ?? []).map(\.recipeName).joined(separator: "、"))
+                    .font(AppFont.body(14))
+                    .foregroundStyle(Color.inkSecondary)
+                    .lineLimit(2)
                 if let comment = meal.reviews?.first?.comment, !comment.isEmpty {
                     Text(comment)
-                        .font(AppFont.caption(12))
-                        .foregroundStyle(Color.inkSecondary)
-                        .lineLimit(1)
+                        .font(AppFont.body(13))
+                        .foregroundStyle(Color.inkMuted)
+                        .lineLimit(2)
                 }
+                Text("\((meal.dishes ?? []).count) 道菜")
+                    .font(AppFont.caption(12))
+                    .foregroundStyle(Color.brandGreen)
             }
-            Spacer(minLength: 0)
-            HStack(spacing: 6) {
-                ForEach((meal.dishes ?? []).prefix(2)) { dish in
-                    DishThumb(name: dish.recipeName, image: dish.recipeImage, size: thumbSize, radius: 12)
-                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white, lineWidth: 1.5))
-                }
-                if (meal.dishes ?? []).isEmpty { placeholder }
-            }
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Color.inkMuted.opacity(0.8))
-                .padding(.top, 38)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(14)
-        .background(Color.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.black.opacity(0.075), lineWidth: 1))
-        .shadow(color: Color.black.opacity(0.045), radius: 8, y: 3)
+        .padding(12)
+        .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
     }
 
-    private var badgeColor: Color {
-        switch meal.scene { case .household: return Color.brandGreen; case .dining: return Color.clay }
+    @ViewBuilder
+    private var artwork: some View {
+        if mealCanvasDocumentExists(mealID: meal.id) {
+            MealCanvasSnapshotView(mealID: meal.id)
+                .frame(width: 100)
+        } else if let photo = meal.reviews?.compactMap({ $0.photos?.first }).first {
+            AsyncImageView(url: photo, name: "这一顿")
+        } else if let dish = meal.dishes?.first {
+            DishThumb(name: dish.recipeName, image: dish.recipeImage, size: 124, radius: 16)
+        } else {
+            Color.paperGreen.overlay { ProductIcon(kind: .meal).foregroundStyle(Color.brandGreen) }
+        }
     }
-    private var placeholder: some View {
-        ZStack { Color.paperGreen; Image(systemName: "leaf").foregroundStyle(Color.brandGreen.opacity(0.55)) }
-            .frame(width: thumbSize, height: thumbSize).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+    private var dateLabel: String {
+        guard let date = meal.completedAt ?? meal.confirmedAt ?? meal.createdAt else { return "这一顿" }
+        return RelativeDateFormatter.format(date)
     }
-    private func formatDate(_ date: Date?) -> String { guard let date else { return "" }; return RelativeDateFormatter.format(date) }
 }
 
 enum RelativeDateFormatter {

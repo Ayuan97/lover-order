@@ -52,26 +52,32 @@ struct CategoryManagementView: View {
     private var addCard: some View {
         SectionCard {
             FieldLabel("新建一个分类")
-            HStack(spacing: AppSpacing.sm) {
-                TextField("图标 比如 🍲", text: $newIcon)
-                    .frame(width: 60)
-                    .padding(AppSpacing.sm)
-                    .background(Color.appBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous))
-                TextField("分类名 比如 家常菜", text: $newName)
-                    .padding(AppSpacing.sm)
-                    .background(Color.appBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous))
-                Button {
-                    Task { await addCategory() }
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 14, weight: .bold))
-                        .frame(width: 36, height: 36)
-                        .foregroundStyle(.white)
-                        .background(Color.actionInk)
-                        .clipShape(Circle())
+            HStack(alignment: .bottom, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("图标").font(AppFont.caption(12)).foregroundStyle(Color.inkMuted)
+                    TextField("🍲", text: $newIcon)
+                        .multilineTextAlignment(.center)
+                        .frame(width: 52, height: 44)
+                        .background(Color.appBackground, in: RoundedRectangle(cornerRadius: 12))
+                        .accessibilityLabel("分类图标")
                 }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("分类名").font(AppFont.caption(12)).foregroundStyle(Color.inkMuted)
+                    TextField("如：家常菜", text: $newName)
+                        .padding(.horizontal, 12)
+                        .frame(height: 44)
+                        .background(Color.appBackground, in: RoundedRectangle(cornerRadius: 12))
+                        .accessibilityLabel("分类名称")
+                }
+                Button { Task { await addCategory() } } label: {
+                    ProductIcon(kind: .add)
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(Color.actionInk, in: Circle())
+                }
+                .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.35 : 1)
+                .accessibilityLabel("添加分类")
             }
         }
     }
@@ -116,14 +122,14 @@ struct CategoryManagementView: View {
                 } label: {
                     Image(systemName: "checkmark")
                         .foregroundStyle(Color.brandGreen)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 44, height: 44)
                 }
                 Button {
                     cancelEdit()
                 } label: {
                     Image(systemName: "xmark")
                         .foregroundStyle(Color.inkMuted)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 44, height: 44)
                 }
             } else {
                 Text(c.icon?.isEmpty == false ? c.icon! : "🍽")
@@ -140,12 +146,14 @@ struct CategoryManagementView: View {
                 } label: {
                     Image(systemName: "pencil")
                         .foregroundStyle(Color.inkSecondary)
+                        .frame(width: 44, height: 44)
                 }
                 Button {
                     Task { await deleteCategory(c) }
                 } label: {
                     Image(systemName: "trash")
                         .foregroundStyle(Color.inkMuted)
+                        .frame(width: 44, height: 44)
                 }
             }
         }

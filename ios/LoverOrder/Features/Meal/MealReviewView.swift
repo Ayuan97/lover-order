@@ -1,6 +1,6 @@
 import SwiftUI
 
-// 一顿吃完后的评价表单 评分 + 留言 + 照片 URL
+// 餐后记录：备注、照片和口味。
 struct MealReviewView: View {
     let mealId: UInt
     var onSaved: () -> Void = {}
@@ -10,6 +10,7 @@ struct MealReviewView: View {
     @State private var rating: Int = 5
     @State private var comment: String = ""
     @State private var photoLinks: [String] = []
+    @State private var photosUploading = false
     @State private var meal: MealSession?
     @State private var dishRatings: [UInt: Int] = [:]
     @State private var dishComments: [UInt: String] = [:]
@@ -20,11 +21,15 @@ struct MealReviewView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: AppSpacing.lg) {
-                    header
-                    ratingCard
-                    dishRatingCard
                     commentCard
                     photosCard
+                    ratingCard
+                    DisclosureGroup("每道菜的口味") {
+                        dishRatingCard.padding(.top, 12)
+                    }
+                    .font(AppFont.body(14))
+                    .foregroundStyle(Color.inkSecondary)
+                    .padding(.horizontal, 4)
                     Color.clear.frame(height: 60)
                 }
                 .padding(.horizontal, AppSpacing.lg)
@@ -37,6 +42,8 @@ struct MealReviewView: View {
             .task {
                 await loadMeal()
             }
+            .interactiveDismissDisabled(isSubmitting || photosUploading)
+            .navigationTitle("记录这一顿")
             .navigationBarTitleDisplayMode(.inline)
             .toast($errorMessage)
             .toolbar {
@@ -44,34 +51,17 @@ struct MealReviewView: View {
                     Button {
                         dismiss()
                     } label: {
-                        Text("以后再说").foregroundStyle(Color.inkSecondary)
+                        Text("稍后记录").foregroundStyle(Color.inkSecondary)
                     }
+                    .disabled(isSubmitting || photosUploading)
                 }
             }
         }
     }
 
-    private var header: some View {
-        VStack(spacing: AppSpacing.xs) {
-            HStack(spacing: 6) {
-                Text("吃得怎么样")
-                    .font(AppFont.title(26))
-                    .foregroundStyle(Color.inkPrimary)
-                Image(systemName: "heart.fill")
-                    .foregroundStyle(Color.accentWarm)
-                    .font(.system(size: 13))
-            }
-            Text("随便写写 给下次自己看")
-                .font(AppFont.body())
-                .foregroundStyle(Color.inkMuted)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, AppSpacing.sm)
-    }
-
     private var ratingCard: some View {
         SectionCard {
-            FieldLabel("总体")
+            FieldLabel("这顿的口味")
             HStack(spacing: AppSpacing.sm) {
                 ForEach(1...5, id: \.self) { star in
                     Button {
@@ -169,7 +159,7 @@ struct MealReviewView: View {
 
     private var commentCard: some View {
         SectionCard {
-            FieldLabel("还想说")
+            FieldLabel("备注")
             TextField("写两句也行", text: $comment, axis: .vertical)
                 .lineLimit(3...6)
                 .padding(AppSpacing.md)
@@ -181,33 +171,23 @@ struct MealReviewView: View {
     private var photosCard: some View {
         SectionCard {
             HStack {
-                FieldLabel("配图")
+                FieldLabel("照片")
                 Spacer()
                 Text("最多 9 张")
                     .font(AppFont.caption(11))
                     .foregroundStyle(Color.inkMuted)
             }
-            MultiPhotoPicker(urls: $photoLinks, maxCount: 9)
+            MultiPhotoPicker(urls: $photoLinks, maxCount: 9) { photosUploading = $0 }
         }
     }
 
     private var bottomBar: some View {
         VStack(spacing: AppSpacing.sm) {
-            PrimaryButton(title: isSubmitting ? "在记…" : "记好了", isLoading: isSubmitting) {
+            PrimaryButton(title: "保存记录", isLoading: isSubmitting) {
                 Task { await submit() }
             }
-            // 评价是可选的 出口要一眼能看见
-            Button {
-                dismiss()
-            } label: {
-                Text("先不了")
-                    .font(AppFont.body(14))
-                    .foregroundStyle(Color.inkMuted)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4)
-            }
-            .buttonStyle(.plain)
-            .disabled(isSubmitting)
+            .disabled(photosUploading)
+
         }
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, AppSpacing.sm)

@@ -106,7 +106,7 @@ struct HouseholdSetupView: View {
             Text("先有个家")
                 .font(AppFont.title(28))
                 .foregroundStyle(Color.inkPrimary)
-            Text("两个人的菜单 得放在同一个地方")
+            Text("和 Ta 一起完善每一顿的画布")
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
         }

@@ -1,12 +1,12 @@
 let meta = #{
     name: "usage-logic-polish",
-    description: "按家庭餐次主路径走查使用逻辑与人话，核验后修复，并写入产品宪法要点",
-    when_to_use: "产品心智纠正后，冻结使用逻辑并打磨主路径/聚会弱入口",
+    description: "按这一顿自由画布走查协作、用餐与历史记录，并核对项目指引",
+    when_to_use: "根据用户明确的产品方向检查画布主线与实际入口",
     phases: [
         #{ title: "Walk", detail: "按使用任务走查代码路径" },
         #{ title: "Verify", detail: "对抗核验问题是否真实" },
         #{ title: "Fix", detail: "修复已确认的使用逻辑与文案" },
-        #{ title: "Constitution", detail: "把产品宪法写入 CLAUDE.md" },
+        #{ title: "Constitution", detail: "核对 AGENTS.md 与产品方向" },
         #{ title: "Report", detail: "中文结果报告" },
     ],
 };
@@ -72,16 +72,16 @@ let report_schema = #{
     },
 };
 
-// 产品宪法（写入每个 agent，禁止再做成两种场景）
+// 产品方向（写入每个 agent，并要求读取项目指引）
 let constitution = "";
-constitution += "lover-order 产品宪法：";
-constitution += "1) 主产品=家庭餐次「我们这顿」，首页固定 household，只保留家庭与聚餐两种场景。";
-constitution += "2) 主循环=点菜 → 就这些(confirm) → 吃完了(complete) → 可选写两句；禁止跳步；至少一道菜。";
-constitution += "3) 聚会=偶发「点菜房间」，弱入口，不是模式/场景；关房间≠吃完。";
-constitution += "4) 进家(餐券)≠进房间(房间号)；客人点菜不加入 household。";
-constitution += "5) 聚餐/菜单/记录=支线，不上首页抢主路径。";
-constitution += "6) 文案要人话口语，禁止 AI 腔、说明书腔、教程式芯片。";
-constitution += "7) 技术：View 不直接请求；API 仅 GET/POST；注释只写 WHY；不写新 Markdown 文档除 CLAUDE.md。";
+constitution += "先完整读取 AGENTS.md 与 docs/product-flow.md，以用户明确的决定为产品方向依据。";
+constitution += "1) 主体是这一顿的自由画布，可以自由添加内容，想吃的菜是核心内容。";
+constitution += "2) 日常主要由用户和对象共同编辑；来客以临时身份加入同一张画布，共同完善这一顿。";
+constitution += "3) 主线=打开画布 → 添加内容和菜 → 共同商量 → 决定吃什么 → 在家用餐 → 进入历史。";
+constitution += "4) 历史直接承载吃过的菜、画布当时的样子、备注和多张图片；决定吃什么与结束用餐分开。";
+constitution += "5) 弱化模式切换；菜谱与买菜清单服务当前画布。内部数据标签不能替代产品主线。";
+constitution += "6) 当前入口以可达代码核验；目标与实现分开说明。未确定的身份认证和权限不补默认答案。";
+constitution += "7) 只改用户授权范围；无要求不生成测试代码、不运行测试，不执行完整验收。文案直接自然。";
 
 // --- Phase 1: Walk four usage tasks -----------------------------------------
 phase("Walk");
@@ -90,27 +90,27 @@ log("按 4 条使用任务走查...");
 let tasks = [
     #{
         id: "T1",
-        name: "进门与建家",
+        name: "身份与进入当前画布",
         paths: "ios/LoverOrder/App/RootView.swift AppState.swift Features/Auth/ Features/Profile/InviteTicketView.swift",
-        ask: "登录→无家→建家/进家→餐券→主页；半状态；蹭饭不建家。找走不通、逻辑错、仍像两种场景/产品腔的文案。",
+        ask: "核对登录及长期协作关系怎样进入当前画布，失败如何重试，来客怎样临时加入；区分现有认证与尚未明确的产品权限。",
     },
     #{
         id: "T2",
         name: "主循环我们这顿",
-        paths: "ios/LoverOrder/Features/Meal/MealNowView.swift MealNowViewModel.swift AddDishView ShoppingListView MealReviewView EmptyMealHint backend/internal/service/meal_service.go",
-        ask: "挑菜→就这些→买/做→吃完了→写两句。状态机、空菜拦截、底栏、定了后布局、补评。找逻辑断点与假思考文案。",
+        paths: "ios/LoverOrder/Features/Meal/MealCanvasView.swift MealNowView.swift MealNowViewModel.swift AddDishView ShoppingListView MealReviewView backend/internal/service/meal_service.go",
+        ask: "核对自由内容、菜品与画布操作是否一致，双方协作、决定吃什么、结束用餐到历史是否接通；根据实际挂载入口找断点，不凭未调用视图判断。",
     },
     #{
         id: "T3",
-        name: "客人点菜房间",
-        paths: "MealNowView diningQuietEntry DiningHostView DiningGuestView DiningJoinView dining_service.go",
-        ask: "弱入口、开房关房、客人不入家、关房≠complete。找入口过强、语义混场景、逻辑洞。",
+        name: "来客参与同一画布",
+        paths: "MealCanvasView MealNowView DiningHostView DiningGuestView DiningJoinView dining_service.go",
+        ask: "核对临时参与身份、加入当前画布及共同编辑能力；停止参与和结束用餐要分清。来客仅有列表点菜时记录与目标的差距，不将其写成产品限制。",
     },
     #{
         id: "T4",
-        name: "支线不抢主",
-        paths: "MainTabView ProfileView FuturePlansView MenuView HistoryView",
-        ask: "聚餐/菜单/记录是否抢首页；相处模式是否还在；文案是否还在卖两种场景。",
+        name: "历史与辅助入口",
+        paths: "MainTabView ProfileView MenuView HistoryView HistoryDetailView",
+        ask: "核对历史是否承载菜、画布样子、备注和多图；菜谱与买菜是否服务当前画布，页面是否弱化模式选择。",
     },
 ];
 
@@ -161,14 +161,14 @@ if findings.len() > MAX_F {
 
 log("走查候选 " + findings.len().to_string());
 if findings.len() == 0 {
-    // 仍写宪法
+    // 核对产品指引
     phase("Constitution");
     let c0 = "";
-    c0 += "在 CLAUDE.md 的「产品理念」或合适小节追加「产品宪法（使用逻辑）」短列表（中文要点，不写长文）。";
+    c0 += "核对 AGENTS.md 与 docs/product-flow.md 是否表达用户明确的画布方向；只有用户明确决定需要同步时才直接修正文档，不追加重复小节。";
     c0 += constitution;
     c0 += " 用 search_replace 最小改动。updated=true 仅当文件已写入。";
     let cr0 = agent(c0, #{ label: "constitution-empty", capability_mode: "all", output_schema: constitution_schema });
-    let empty_md = "# 使用逻辑打磨报告\n\n走查无新增问题。已尝试写入产品宪法。\n";
+    let empty_md = "# 使用逻辑打磨报告\n\n走查无新增问题。已核对产品指引。\n";
     let path0 = write_scratch_file("report.md", empty_md);
     complete(#{ summary: "No findings; constitution attempted", confirmed: [], fixed: [], path: path0 });
 }
@@ -208,11 +208,11 @@ log("确认 " + confirmed.len().to_string() + "/" + findings.len().to_string());
 if confirmed.len() == 0 {
     phase("Constitution");
     let c1 = "";
-    c1 += "在 CLAUDE.md 追加「产品宪法（使用逻辑）」简短要点。";
+    c1 += "核对 AGENTS.md 与 docs/product-flow.md；仅同步用户明确的产品决定，不把实现缺口写成限制，不追加重复小节。";
     c1 += constitution;
     c1 += " 最小改动 search_replace。";
     let cr1 = agent(c1, #{ label: "constitution-only", capability_mode: "all", output_schema: constitution_schema });
-    let md1 = "# 使用逻辑打磨\n\n候选未通过对抗核验。已写产品宪法。\n";
+    let md1 = "# 使用逻辑打磨\n\n候选未通过对抗核验。已核对产品指引。\n";
     let p1 = write_scratch_file("report.md", md1);
     complete(#{ summary: "None confirmed", confirmed: [], path: p1 });
 }
@@ -258,7 +258,7 @@ if other_ids.len() > 0 {
 
 if meal_ids.len() > 0 {
     let pm = "";
-    pm += "修复 lover-order 主路径/聚会使用逻辑与人话。";
+    pm += "修复 lover-order 画布主线与临时参与的使用逻辑和文案。";
     pm += constitution;
     pm += " 问题 JSON：" + json_encode(meal_ids);
     pm += " 重点 MealNowView/ViewModel/Dining* / meal_service。最小改动。";
@@ -275,10 +275,10 @@ if meal_ids.len() > 0 {
 // --- Phase 4: Constitution --------------------------------------------------
 phase("Constitution");
 let cp = "";
-cp += "更新 CLAUDE.md：在产品理念附近增加小节「产品宪法（使用逻辑）」，用短列表写清：";
-cp += "家庭餐次主轴、主循环动词、聚会弱入口、进家≠进房间、支线不上首页、人话。";
+cp += "核对 AGENTS.md 与 docs/product-flow.md，只根据用户明确的决定修正文档，保持一份清楚一致的产品方向：";
+cp += "这一顿自由画布、两人日常协作、来客同一画布、用餐结束与历史四类内容。";
 cp += constitution;
-cp += " 不要删已有有用内容；不要写成长文。updated=true 当已写入。";
+cp += " 不推断新需求，不追加重复小节。updated=true 仅当实际修改文件。";
 let cr = agent(cp, #{ label: "constitution", capability_mode: "all", output_schema: constitution_schema });
 
 // --- Phase 5: Report --------------------------------------------------------

@@ -33,6 +33,8 @@
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>拍摄菜品照片、扫码加入家庭</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>将这一顿的画布保存到相册</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>选择菜品照片和评价配图</string>
 	<key>UILaunchScreen</key>

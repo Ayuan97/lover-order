@@ -266,14 +266,17 @@ final class MealNowViewModel: ObservableObject {
 
     func removeDish(_ dish: MealDish) async {
         guard let meal else { return }
-        // confirmed 至少留一道；清光请走「算了 重选」，别卡成空 confirmed
+        // 已确定的餐次至少保留一道菜，避免变成无法完成的空餐次。
         if meal.status == .confirmed && dishCount <= 1 {
-            errorMessage = "定了至少留一道 要重选就点「算了 重选」"
+            errorMessage = "这一顿已定下，至少保留一道菜"
             return
         }
         do {
             try await mealService.removeDish(mealId: meal.id, dishId: dish.id)
-            self.meal = try await mealService.detail(id: meal.id)
+            if self.meal?.id == meal.id {
+                self.meal?.dishes?.removeAll { $0.id == dish.id }
+            }
+            Haptics.light()
         } catch {
             errorMessage = error.localizedDescription
         }

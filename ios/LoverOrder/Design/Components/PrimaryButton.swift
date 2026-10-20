@@ -1,7 +1,8 @@
 import SwiftUI
 
-// 主操作按钮：像手账贴纸一样有温度，不使用工业感过强的纯色大胶囊。
+// 表单主操作保持清楚、稳定的提交状态。
 struct PrimaryButton: View {
+    @Environment(\.isEnabled) private var isEnabled
     let title: String
     var icon: String? = nil
     var isLoading: Bool = false
@@ -17,23 +18,22 @@ struct PrimaryButton: View {
                 }
                 Text(title)
                     .font(AppFont.headline(17))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 50)
+            .frame(height: 48)
             .foregroundStyle(.white)
             .background(Color.actionInk)
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
-            }
-            .appCardShadow()
+            .opacity(isEnabled ? 1 : 0.4)
         }
         .disabled(isLoading)
+        .buttonStyle(SoftPressStyle())
     }
 }
 
-// 次要按钮 透明背景 墨绿描边
+// 次要操作使用浅橄榄底色。
 struct SecondaryButton: View {
     let title: String
     var icon: String? = nil
@@ -47,16 +47,26 @@ struct SecondaryButton: View {
                 }
                 Text(title)
                     .font(AppFont.headline(15))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
             .frame(maxWidth: .infinity)
             .frame(height: 48)
             .foregroundStyle(Color.brandGreen)
-            .background(Color.cardBackground)
-            .overlay(
-                RoundedRectangle(cornerRadius: AppRadius.pill, style: .continuous)
-                    .stroke(Color.brandGreen.opacity(0.2), lineWidth: 1)
-            )
+            .background(Color.paperGreen.opacity(0.7))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
+        .buttonStyle(SoftPressStyle())
+    }
+}
+
+struct SoftPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
+            .opacity(configuration.isPressed ? 0.72 : 1)
+            .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.82), value: configuration.isPressed)
     }
 }

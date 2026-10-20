@@ -120,10 +120,6 @@ struct RecipeDetailView: View {
 
     private func titleSection(_ r: Recipe) -> some View {
         VStack(alignment: .leading, spacing: AppSpacing.sm) {
-            Text("菜谱详情")
-                .font(AppFont.caption(10))
-                .tracking(1.1)
-                .foregroundStyle(Color.accentWarm)
             Text(r.name)
                 .font(AppFont.title(26))
                 .foregroundStyle(Color.inkPrimary)
@@ -197,8 +193,8 @@ struct RecipeDetailView: View {
             }
             .padding(AppSpacing.lg)
             .background(Color.cardBackground.opacity(0.9))
-            .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.accentWarm.opacity(0.18), lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+
         }
         .buttonStyle(.plain)
     }

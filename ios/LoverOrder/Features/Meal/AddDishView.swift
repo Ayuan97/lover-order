@@ -1,9 +1,11 @@
 import SwiftUI
 
-// 点菜面板：已选 + 输入 + 快速入口 + 推荐 + 底部完成
+// 加菜面板：直接输入、菜谱筛选、已选菜品。
 struct AddDishView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var sourceHighlight
 
     let mealId: UInt
     var onChanged: () -> Void = {}
@@ -14,12 +16,17 @@ struct AddDishView: View {
     @State private var pinnedDishes: [MealDish] = []
     @State private var isLoading: Bool = false
     @State private var isSubmittingCustom: Bool = false
+    @State private var addingRecipeIDs: Set<UInt> = []
+    @State private var removingDishIDs: Set<UInt> = []
     @State private var errorMessage: String?
     @State private var tipMessage: String?
     @State private var showCreateRecipe: Bool = false
 
+    private var hasPendingChanges: Bool {
+        isSubmittingCustom || !addingRecipeIDs.isEmpty || !removingDishIDs.isEmpty
+    }
+
     enum QuickSource: String, CaseIterable, Identifiable {
-        case custom
         case all
         case favorite
         case recent
@@ -28,19 +35,9 @@ struct AddDishView: View {
 
         var label: String {
             switch self {
-            case .custom: return "写个菜名"
-            case .all: return "从菜单里挑"
+            case .all: return "全部"
             case .favorite: return "爱吃的"
             case .recent: return "常做的"
-            }
-        }
-
-        var icon: String {
-            switch self {
-            case .custom: return "pencil"
-            case .all: return "book"
-            case .favorite: return "heart"
-            case .recent: return "clock"
             }
         }
     }
@@ -50,12 +47,12 @@ struct AddDishView: View {
             ScrollView {
                 VStack(spacing: AppSpacing.lg) {
                     header
-                    pinnedSection
                     inputSection
                     quickEntries
                     recommendSection
+                    pinnedSection
                     alsoSection
-                    Color.clear.frame(height: 80)
+                    Color.clear.frame(height: 16)
                 }
                 .padding(.horizontal, AppSpacing.lg)
                 .padding(.top, AppSpacing.md)
@@ -64,8 +61,10 @@ struct AddDishView: View {
             .safeAreaInset(edge: .bottom) {
                 bottomBar
             }
-            .task {
+            .task(id: quickSource) {
+                isLoading = true
                 await loadPinned()
+                guard !Task.isCancelled else { return }
                 await loadRecipes()
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -81,38 +80,27 @@ struct AddDishView: View {
             .toast($errorMessage)
             .tipToast($tipMessage)
         }
+        .interactiveDismissDisabled(hasPendingChanges)
     }
 
-    // 头部
     private var header: some View {
-        VStack(spacing: AppSpacing.xs) {
-            HStack(spacing: 6) {
-                Text("从菜谱加菜")
-                    .font(AppFont.title(26))
-                    .foregroundStyle(Color.inkPrimary)
-                Image(systemName: "heart.fill")
-                    .foregroundStyle(Color.accentWarm)
-                    .font(.system(size: 13))
-            }
-            Text("选中的菜会回到画布里")
-                .font(AppFont.body())
-                .foregroundStyle(Color.inkMuted)
-        }
-        .frame(maxWidth: .infinity)
-        .overlay(alignment: .topTrailing) {
-            Button {
-                dismiss()
-            } label: {
+        HStack {
+            Text("加菜")
+                .font(AppFont.title(24))
+                .foregroundStyle(Color.inkPrimary)
+            Spacer()
+            Button { dismiss() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 36, height: 36)
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(Color.inkSecondary)
-                    .background(Color.cardBackground)
-                    .clipShape(Circle())
-                    .capsuleHairline()
+                    .frame(width: 44, height: 44)
+                    .background(Color.cardBackground, in: Circle())
             }
+            .buttonStyle(SoftPressStyle())
+            .disabled(hasPendingChanges)
+            .opacity(hasPendingChanges ? 0.4 : 1)
+            .accessibilityLabel("关闭加菜")
         }
-        .padding(.vertical, AppSpacing.sm)
     }
 
     // 已选区
@@ -151,77 +139,77 @@ struct AddDishView: View {
                         Button {
                             Task { await remove(dish) }
                         } label: {
-                            Image(systemName: "minus.circle")
-                                .foregroundStyle(Color.inkMuted)
+                            Group {
+                                if removingDishIDs.contains(dish.id) {
+                                    ProgressView().tint(Color.brandGreen)
+                                } else {
+                                    Image(systemName: "minus.circle")
+                                        .foregroundStyle(Color.inkMuted)
+                                }
+                            }
+                            .frame(width: 44, height: 44)
                         }
+                        .buttonStyle(SoftPressStyle())
+                        .disabled(removingDishIDs.contains(dish.id))
+                        .accessibilityLabel("移除" + dish.recipeName)
                     }
+                    .transition(.opacity)
                 }
             }
         }
     }
 
-    // 输入直加
     private var inputSection: some View {
-        HStack(spacing: AppSpacing.sm) {
-            HStack(spacing: AppSpacing.sm) {
-                Image(systemName: "fork.knife")
-                    .foregroundStyle(Color.inkMuted)
-                TextField("写个菜名就行", text: $customName)
+        VStack(alignment: .leading, spacing: 8) {
+            FieldLabel("想吃什么")
+            HStack(spacing: 8) {
+                TextField("直接写个菜名", text: $customName)
+                    .font(AppFont.body(15))
                     .submitLabel(.done)
-                    .onSubmit {
-                        Task { await addCustom() }
+                    .onSubmit { Task { await addCustom() } }
+                    .padding(.horizontal, 14)
+                    .frame(height: 48)
+                    .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 16))
+                Button { Task { await addCustom() } } label: {
+                    Group {
+                        if isSubmittingCustom { ProgressView().tint(.white) }
+                        else { ProductIcon(kind: .add) }
                     }
-            }
-            .padding(.horizontal, AppSpacing.md)
-            .padding(.vertical, AppSpacing.sm)
-            .background(Color.cardBackground)
-            .clipShape(Capsule())
-            .capsuleHairline()
-
-            Button {
-                Task { await addCustom() }
-            } label: {
-                Text(isSubmittingCustom ? "加入中" : "加入")
-                    .font(AppFont.body(14))
-                    .padding(.horizontal, AppSpacing.lg)
-                    .padding(.vertical, AppSpacing.sm)
                     .foregroundStyle(.white)
-                    .background(Color.brandGreen.opacity(customName.isEmpty ? 0.4 : 1))
-                    .clipShape(Capsule())
+                    .frame(width: 48, height: 48)
+                    .background(Color.actionInk, in: RoundedRectangle(cornerRadius: 16))
+                    .opacity(customName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.35 : 1)
+                }
+                .buttonStyle(SoftPressStyle())
+                .disabled(customName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSubmittingCustom)
+                .accessibilityLabel("加入这一顿")
             }
-            .disabled(customName.isEmpty || isSubmittingCustom)
         }
     }
 
-    // 4 列快速入口
     private var quickEntries: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.md) {
-            Text("从哪儿挑")
-                .font(AppFont.headline(15))
-                .foregroundStyle(Color.inkPrimary)
-            HStack(spacing: AppSpacing.sm) {
-                ForEach(QuickSource.allCases) { source in
-                    Button {
-                        select(source)
-                    } label: {
-                        VStack(spacing: AppSpacing.xs) {
-                            Image(systemName: source.icon)
-                                .font(.system(size: 18, weight: .light))
-                                .foregroundStyle(quickSource == source ? .white : Color.brandGreen)
-                                .frame(width: 44, height: 44)
-                                .background(quickSource == source ? Color.brandGreen : Color.cardBackground)
-                                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
-                                .hairline(AppRadius.md, color: quickSource == source ? .clear : Color.dividerLine.opacity(0.7))
-                            Text(source.label)
-                                .font(AppFont.caption(11))
-                                .foregroundStyle(Color.inkPrimary)
+        HStack(spacing: 8) {
+            ForEach(QuickSource.allCases) { source in
+                Button { select(source) } label: {
+                    Text(source.label)
+                        .font(AppFont.body(14))
+                        .foregroundStyle(quickSource == source ? Color.brandGreen : Color.inkMuted)
+                        .padding(.horizontal, 18)
+                        .frame(height: 44)
+                        .background {
+                            if quickSource == source {
+                                Capsule()
+                                    .fill(Color.paperGreen)
+                                    .matchedGeometryEffect(id: "source", in: sourceHighlight)
+                            }
                         }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.plain)
                 }
+                .buttonStyle(SoftPressStyle())
+                .accessibilityAddTraits(quickSource == source ? .isSelected : [])
             }
+            Spacer(minLength: 0)
         }
+        .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.86), value: quickSource)
     }
 
     // 6 个推荐网格
@@ -229,7 +217,7 @@ struct AddDishView: View {
     private var recommendSection: some View {
         VStack(alignment: .leading, spacing: AppSpacing.md) {
             HStack {
-                Text(quickSource == .custom ? "上面写个名字就行" : "点一下加上")
+                Text("从菜谱里选")
                     .font(AppFont.headline(15))
                     .foregroundStyle(Color.inkPrimary)
                 Spacer()
@@ -246,11 +234,11 @@ struct AddDishView: View {
                     .background(Color.cardBackground)
                     .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
             } else {
-                let columns = Array(repeating: GridItem(.flexible(), spacing: AppSpacing.md), count: 3)
+                let columns = Array(repeating: GridItem(.flexible(), spacing: AppSpacing.md), count: 2)
                 LazyVGrid(columns: columns, spacing: AppSpacing.md) {
                     ForEach(recipes.prefix(6)) { recipe in
                         let onTable = alreadyOnTable(recipe)
-                        RecipeCircleCard(recipe: recipe, alreadyAdded: onTable) {
+                        RecipeCircleCard(recipe: recipe, alreadyAdded: onTable, isAdding: addingRecipeIDs.contains(recipe.id)) {
                             Task { await addRecipe(recipe) }
                         }
                     }
@@ -259,41 +247,20 @@ struct AddDishView: View {
         }
     }
 
-    // 也可以 3 个底部入口
     private var alsoSection: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.md) {
-            Text("也可以")
-                .font(AppFont.caption(12))
-                .foregroundStyle(Color.inkMuted)
-            HStack(spacing: AppSpacing.md) {
-                alsoButton(icon: "heart", title: "加入收藏") {
-                    Task { await batchFavorite() }
-                }
-                alsoButton(icon: "square.and.pencil", title: "手动新建") {
-                    showCreateRecipe = true
-                }
+        HStack {
+            Button { Task { await batchFavorite() } } label: {
+                Label("收藏已选菜谱", systemImage: "heart")
+            }
+            Spacer()
+            Button { showCreateRecipe = true } label: {
+                Label("新建菜谱", systemImage: "square.and.pencil")
             }
         }
-    }
-
-    private func alsoButton(icon: String, title: String, enabled: Bool = true, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: AppSpacing.xs) {
-                Image(systemName: icon)
-                    .font(.system(size: 18, weight: .light))
-                    .foregroundStyle(enabled ? Color.brandGreen : Color.inkMuted)
-                    .frame(width: 44, height: 44)
-                    .background(Color.cardBackground)
-                    .clipShape(Circle())
-                    .capsuleHairline()
-                Text(title)
-                    .font(AppFont.caption(11))
-                    .foregroundStyle(enabled ? Color.inkPrimary : Color.inkMuted)
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
+        .font(AppFont.body(13))
+        .foregroundStyle(Color.brandGreen)
+        .frame(minHeight: 44)
+        .buttonStyle(SoftPressStyle())
     }
 
     private var bottomBar: some View {
@@ -301,6 +268,7 @@ struct AddDishView: View {
             onChanged()
             dismiss()
         }
+        .disabled(hasPendingChanges)
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, AppSpacing.sm)
         .background(Color.appBackground)
@@ -319,29 +287,33 @@ struct AddDishView: View {
     }
 
     private func select(_ source: QuickSource) {
+        guard quickSource != source else { return }
+        Haptics.light()
         quickSource = source
-        Task { await loadRecipes() }
     }
 
     private func loadPinned() async {
         do {
             let m = try await MealService.shared.detail(id: mealId)
-            pinnedDishes = m.dishes ?? []
+            guard !Task.isCancelled else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+                pinnedDishes = m.dishes ?? []
+            }
         } catch {
+            guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
         }
     }
 
     private func loadRecipes() async {
-        if quickSource == .custom {
-            recipes = []
-            return
-        }
+        let source = quickSource
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            if !Task.isCancelled && source == quickSource { isLoading = false }
+        }
         do {
             var query = RecipeListQuery(page: 1, pageSize: 30)
-            switch quickSource {
+            switch source {
             case .favorite:
                 query.favorite = true
             case .all:
@@ -349,12 +321,12 @@ struct AddDishView: View {
                 query.scene = .household
             case .recent:
                 break
-            case .custom:
-                break
             }
             let result = try await RecipeService.shared.list(query)
+            guard !Task.isCancelled, source == quickSource else { return }
             recipes = sort(result.items)
         } catch {
+            guard !Task.isCancelled, source == quickSource else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -371,11 +343,14 @@ struct AddDishView: View {
     }
 
     private func addRecipe(_ recipe: Recipe) async {
+        guard !addingRecipeIDs.contains(recipe.id) else { return }
         if alreadyOnTable(recipe) {
             tipMessage = "这道已经在桌上了"
             Haptics.light()
             return
         }
+        addingRecipeIDs.insert(recipe.id)
+        defer { addingRecipeIDs.remove(recipe.id) }
         do {
             _ = try await MealService.shared.addDish(mealId: mealId, dish: DishInput(recipeId: recipe.id))
             await loadPinned()
@@ -388,7 +363,7 @@ struct AddDishView: View {
 
     private func addCustom() async {
         let name = customName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if name.isEmpty { return }
+        guard !name.isEmpty, !isSubmittingCustom else { return }
         isSubmittingCustom = true
         defer { isSubmittingCustom = false }
         do {
@@ -399,12 +374,16 @@ struct AddDishView: View {
             customName = ""
             await loadPinned()
             onChanged()
+            Haptics.light()
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
     private func remove(_ dish: MealDish) async {
+        guard !removingDishIDs.contains(dish.id) else { return }
+        removingDishIDs.insert(dish.id)
+        defer { removingDishIDs.remove(dish.id) }
         do {
             try await MealService.shared.removeDish(mealId: mealId, dishId: dish.id)
             await loadPinned()

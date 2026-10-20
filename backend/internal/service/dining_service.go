@@ -52,9 +52,10 @@ func (s *DiningService) Open(householdID, mealID uint) (*model.MealSession, erro
 // Close host 关闭聚餐 房间号作废 参与者随之失效（菜不动）
 func (s *DiningService) Close(householdID, mealID uint) error {
 	return model.DB.Transaction(func(tx *gorm.DB) error {
+		// 清空房间号即失效；保留失效时间，供吃完时识别聚餐归档。
 		res := tx.Model(&model.MealSession{}).
 			Where("id = ? AND household_id = ?", mealID, householdID).
-			Updates(map[string]any{"room_code": "", "room_expires_at": nil})
+			Updates(map[string]any{"room_code": ""})
 		if res.Error != nil {
 			return res.Error
 		}

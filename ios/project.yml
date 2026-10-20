@@ -47,4 +47,5 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         NSPhotoLibraryUsageDescription: 选择菜品照片和评价配图
+        NSPhotoLibraryAddUsageDescription: 将这一顿的画布保存到相册
         NSCameraUsageDescription: 拍摄菜品照片、扫码加入家庭

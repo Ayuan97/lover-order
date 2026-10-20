@@ -5,8 +5,7 @@ import PhotosUI
 // "我的"页：资料、常用工具、家庭设置和退出。
 struct ProfileView: View {
     @EnvironmentObject private var appState: AppState
-    // 封面要承担页面第一视觉，不能只像一条横幅。
-    private let profileHeroHeight: CGFloat = 300
+    private let profileHeroHeight: CGFloat = 204
 
     @State private var inviteCode: String?
 
@@ -35,11 +34,9 @@ struct ProfileView: View {
                     Color.clear.frame(height: 40)
                 }
                 .padding(.horizontal, AppSpacing.lg)
-                .padding(.top, 0)
+                .padding(.top, 12)
             }
             .background(Color.appBackground.ignoresSafeArea())
-            // 封面是页面的沉浸式背景，允许它延伸到刘海屏后面。
-            .ignoresSafeArea(edges: .top)
             .scrollIndicators(.hidden)
             .task {
                 profileBackgroundData = ProfileHeaderImageStore.load()
@@ -106,7 +103,7 @@ struct ProfileView: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Color.actionInk)
                 .frame(width: 32, height: 32)
-                .background(icon == "qrcode.viewfinder" ? Color.dopaminePink.opacity(0.28) : Color.dopamineYellow.opacity(0.42))
+                .background(Color.paperGreen)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
@@ -126,89 +123,52 @@ struct ProfileView: View {
     }
 
     private var profileHero: some View {
-        ZStack(alignment: .bottomLeading) {
-            Group {
+        let hasCover = profileBackgroundData.flatMap(UIImage.init(data:)) != nil
+        return ZStack {
+            GeometryReader { proxy in
                 if let data = profileBackgroundData, let image = UIImage(data: data) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
+                    Image(uiImage: image).resizable().scaledToFill()
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .clipped()
+                    Color.black.opacity(0.3)
                 } else {
-                    LinearGradient(
-                        colors: [Color.dopamineYellow.opacity(0.72), Color.dopaminePink.opacity(0.36), Color.appBackground],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                    .overlay(alignment: .topTrailing) {
-                        Image(systemName: "sparkles")
-                            .font(.system(size: 54, weight: .light))
-                            .foregroundStyle(.white.opacity(0.62))
-                            .rotationEffect(.degrees(12))
-                            .padding(28)
-                    }
+                    Color.paperGreen
                 }
             }
-            .frame(maxWidth: .infinity)
-            .frame(height: profileHeroHeight)
-            .clipped()
-
-            LinearGradient(
-                colors: [.black.opacity(0.04), .black.opacity(0.62)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-
-            VStack(alignment: .leading, spacing: AppSpacing.md) {
-                HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 4) {
                     Spacer()
-                    HStack(spacing: 8) {
-                        PhotosPicker(selection: $profileBackgroundItem, matching: .images) {
-                            Image(systemName: "photo.on.rectangle.angled")
-                                .font(.system(size: 14, weight: .semibold))
-                                .frame(width: 34, height: 34)
-                        }
-                        Button {
-                            showEditProfile = true
-                        } label: {
-                            Text("编辑")
-                                .font(AppFont.caption(13))
-                                .padding(.horizontal, 12)
-                                .frame(height: 34)
-                        }
+                    PhotosPicker(selection: $profileBackgroundItem, matching: .images) {
+                        Image(systemName: "photo")
+                            .frame(width: 44, height: 44)
                     }
-                    .foregroundStyle(Color.actionInk)
-                    .background(.white.opacity(0.90), in: Capsule())
+                    .accessibilityLabel("更换个人封面")
+                    Button { showEditProfile = true } label: {
+                        Image(systemName: "pencil")
+                            .frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("编辑资料")
                 }
-
+                .font(.system(size: 18))
+                .foregroundStyle(hasCover ? .white : Color.inkPrimary)
                 Spacer(minLength: 0)
-
-                HStack(spacing: AppSpacing.md) {
-                    AvatarView(user: appState.currentUser, size: 76, ring: true)
-                        .overlay {
-                            Circle()
-                                .stroke(.white.opacity(0.78), lineWidth: 2)
-                        }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(appState.currentUser?.displayName ?? "美食家")
-                            .font(AppFont.title(24))
-                            .foregroundStyle(.white)
-                            .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
-                        HStack(spacing: 5) {
-                            Image(systemName: "house.fill")
-                                .font(.system(size: 10, weight: .semibold))
-                            Text(householdSubtitle)
-                                .font(AppFont.caption(12))
-                        }
-                        .foregroundStyle(.white.opacity(0.9))
+                HStack(spacing: 14) {
+                    AvatarView(user: appState.currentUser, size: 64, ring: true)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(appState.currentUser?.displayName ?? "我")
+                            .font(AppFont.title(23))
+                        Text(householdSubtitle)
+                            .font(AppFont.body(13))
+                            .opacity(0.75)
                     }
+                    .foregroundStyle(hasCover ? .white : Color.inkPrimary)
+                    Spacer(minLength: 0)
                 }
             }
-            .padding(.horizontal, AppSpacing.lg)
-            .padding(.top, 54)
-            .padding(.bottom, AppSpacing.lg)
+            .padding(18)
         }
         .frame(height: profileHeroHeight)
-        // 沉浸式封面是页面背景，不做卡片式底部收口或阴影。
-        .padding(.horizontal, -AppSpacing.lg)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .task(id: profileBackgroundItem) {
             guard let item = profileBackgroundItem,
                   let data = try? await item.loadTransferable(type: Data.self),
@@ -409,9 +369,9 @@ private struct StatsCard: View {
 
     private var numbersRow: some View {
         HStack(spacing: 0) {
-            statBox(value: "\(stats.totalMeals)", label: "累计餐次", accent: Color.dopaminePink, divider: true)
+            statBox(value: "\(stats.totalMeals)", label: "累计餐次", accent: Color.inkPrimary, divider: true)
             statBox(value: "\(stats.totalDishes)", label: "累计菜品", accent: Color.brandGreen, divider: true)
-            statBox(value: "\(stats.recentMeals)", label: "近 30 天", accent: Color.accentWarm, divider: false)
+            statBox(value: "\(stats.recentMeals)", label: "近 30 天", accent: Color.inkPrimary, divider: false)
         }
     }
 

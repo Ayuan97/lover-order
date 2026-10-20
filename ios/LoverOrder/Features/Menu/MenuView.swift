@@ -70,75 +70,41 @@ struct MenuView: View {
     private var header: some View {
         HStack(alignment: .bottom) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("今日菜谱")
-                    .font(AppFont.title(31))
+                Text("菜谱")
+                    .font(AppFont.title(27))
                     .foregroundStyle(Color.inkPrimary)
-                Text("选择菜品加入今天的菜单")
-                .font(AppFont.body(13))
-                .foregroundStyle(Color.inkMuted)
             }
             Spacer()
             Button {
                 showCreateRecipe = true
             } label: {
-                VStack(spacing: 2) {
-                    Image(systemName: "pencil.tip")
-                        .font(.system(size: 16, weight: .medium))
-                    Text("记一道")
-                        .font(AppFont.caption(10))
-                }
-                .foregroundStyle(Color.brandGreen)
-                .frame(width: 48, height: 48)
-                .background(Color.paperGreen)
-                .clipShape(Circle())
-                .overlay(Circle().stroke(Color.brandGreen.opacity(0.25), lineWidth: 1))
+                ProductIcon(kind: .add)
+                    .foregroundStyle(Color.inkPrimary)
+                    .frame(width: 44, height: 44)
+                    .background(Color.cardBackground, in: Circle())
             }
+            .buttonStyle(SoftPressStyle())
+            .accessibilityLabel("添加菜谱")
         }
-        .padding(.top, AppSpacing.sm)
+        .frame(height: 52)
     }
 
     private var filterPanel: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.md) {
-            HStack(spacing: AppSpacing.sm) {
-                Image(systemName: "line.3.horizontal.decrease.circle")
-                    .foregroundStyle(Color.brandGreen)
-                Text("筛选")
-                    .font(AppFont.headline(15))
-                    .foregroundStyle(Color.inkPrimary)
-                Spacer()
-                if vm.selectedCategoryId != nil || vm.quickFilter != .all {
-                    Text("已筛选")
-                        .font(AppFont.caption(11))
-                        .foregroundStyle(Color.accentWarm)
-                    Button("清除") {
-                        Task { await vm.clearFilters() }
-                    }
-                    .font(AppFont.caption(11))
-                    .foregroundStyle(Color.inkMuted)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                CategoryChip(title: "全部", isSelected: vm.selectedCategoryId == nil && vm.quickFilter == .all) {
+                    Task { await vm.clearFilters() }
                 }
-            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: AppSpacing.sm) {
-                    CategoryChip(title: MenuFilter.recent.label, isSelected: vm.quickFilter == .recent) {
-                        Task { await vm.selectFilter(vm.quickFilter == .recent ? .all : .recent) }
-                    }
+                CategoryChip(title: MenuFilter.recent.label, isSelected: vm.quickFilter == .recent) {
+                    Task { await vm.selectFilter(vm.quickFilter == .recent ? .all : .recent) }
                 }
-            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: AppSpacing.sm) {
-                    ForEach(visibleCategories) { category in
-                        CategoryChip(title: category.name, isSelected: vm.selectedCategoryId == category.id) {
-                            Task { await vm.selectCategory(category.id) }
-                        }
+                ForEach(visibleCategories) { category in
+                    CategoryChip(title: category.name, isSelected: vm.selectedCategoryId == category.id) {
+                        Task { await vm.selectCategory(category.id) }
                     }
                 }
             }
         }
-        .padding(AppSpacing.md)
-        .background(Color.cardBackground.opacity(0.92))
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.inkPrimary.opacity(0.055), lineWidth: 1))
-        .shadow(color: Color.inkPrimary.opacity(0.035), radius: 14, y: 5)
     }
 
     /// 后端分类允许用户自定义；如果有人把“最近做过”之类的快捷筛选也建成分类，页面只展示一次。
@@ -171,10 +137,7 @@ struct MenuView: View {
         .background(Color.cardBackground.opacity(0.9))
         .clipShape(Capsule())
         .overlay(Capsule().stroke(Color.inkPrimary.opacity(0.055), lineWidth: 1))
-        .overlay(alignment: .bottom) {
-            Capsule().fill(Color.brandGreen.opacity(0.42)).frame(width: 38, height: 2)
-                .padding(.bottom, 3)
-        }
+        .accessibilityLabel("搜索菜谱")
     }
 
     private var grid_section: some View {
@@ -190,14 +153,9 @@ struct MenuView: View {
             } else {
                 LazyVGrid(columns: grid, spacing: AppSpacing.md) {
                     ForEach(vm.recipes) { recipe in
-                        NavigationLink {
-                            RecipeDetailView(recipeId: recipe.id)
-                        } label: {
-                            MenuRecipeCard(recipe: recipe, alreadyAdded: alreadyAdded(recipe)) {
-                                Task { await vm.addDish(recipe) }
-                            }
+                        MenuRecipeCard(recipe: recipe, alreadyAdded: alreadyAdded(recipe)) {
+                            Task { await vm.addDish(recipe) }
                         }
-                        .buttonStyle(.plain)
                         .onAppear {
                             if recipe.id == vm.recipes.last?.id {
                                 Task { await vm.loadMore() }
@@ -231,7 +189,7 @@ struct MenuView: View {
     private var pinnedSection: some View {
         Group {
             if !vm.pinnedDishes.isEmpty {
-                SectionCard(padding: AppSpacing.lg, radius: 6) {
+                SectionCard(padding: AppSpacing.lg, radius: 20) {
                     HStack {
                         Text("已选菜品")
                             .font(AppFont.title(19))
@@ -263,8 +221,7 @@ struct MenuView: View {
                         }
                     }
                 }
-                .background(Color.paperWarm.opacity(0.82))
-                .rotationEffect(.degrees(0.5))
+
             }
         }
     }
@@ -277,16 +234,13 @@ struct MenuView: View {
                     Text("\(vm.pinnedDishes.count) 道菜")
                         .font(AppFont.headline(15))
                         .foregroundStyle(Color.inkPrimary)
-                    Text("今天的菜单 · " + appState.currentMood.label)
-                        .font(AppFont.caption())
-                        .foregroundStyle(Color.inkMuted)
                 }
                 Spacer()
                 PrimaryButton(title: confirmTitle) {
                     Task { await vm.confirmMeal() }
                 }
-                .frame(width: 180)
-                .disabled(vm.meal?.status != .planning)
+                .frame(width: 132)
+                .disabled(vm.meal?.status != .planning || vm.pinnedDishes.isEmpty)
                 .opacity(vm.meal?.status == .planning ? 1 : 0.55)
             }
             .padding(.horizontal, AppSpacing.lg)
@@ -356,84 +310,85 @@ private struct MenuRecipeCard: View {
     let onAdd: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ZStack(alignment: .bottomTrailing) {
-                AsyncImageView(url: recipe.coverImage, name: recipe.name)
-                    .frame(height: 142)
-                    .frame(maxWidth: .infinity)
-                    .clipped()
-                    .overlay(alignment: .topTrailing) {
-                        Text("✦")
-                            .font(.system(size: 14))
-                            .foregroundStyle(Color.dopaminePink.opacity(0.9))
+        ZStack(alignment: .topTrailing) {
+            NavigationLink {
+                RecipeDetailView(recipeId: recipe.id)
+            } label: {
+                VStack(alignment: .leading, spacing: 0) {
+                    cover
+                    information
+                }
+            }
+            .buttonStyle(.plain)
+            Button(action: onAdd) {
+                Image(systemName: alreadyAdded ? "checkmark" : "plus")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 30, height: 30)
+                    .background(alreadyAdded ? Color.brandGreen : Color.actionInk, in: Circle())
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(SoftPressStyle())
+            .padding(.top, 96)
+            .padding(.trailing, 3)
+            .disabled(alreadyAdded)
+            .accessibilityLabel(alreadyAdded ? "已加入这一顿" : "加入" + recipe.name)
+        }
+        .background(Color.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private var cover: some View {
+        GeometryReader { proxy in
+            AsyncImageView(url: recipe.coverImage, name: recipe.name)
+                .frame(width: proxy.size.width, height: 142)
+                .clipped()
+                .overlay(alignment: .topLeading) {
+                    if let time = recipe.cookingTime, time > 0 {
+                        Text("\(time) 分钟")
+                            .font(AppFont.caption(11))
+                            .foregroundStyle(Color.inkSecondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(.white.opacity(0.9), in: Capsule())
                             .padding(8)
                     }
-                    .overlay(alignment: .topLeading) {
-                        if let time = recipe.cookingTime, time > 0 {
-                            HStack(spacing: 2) {
-                                Image(systemName: "clock").font(.system(size: 10))
-                                Text("\(time)分钟").font(AppFont.caption(11))
-                            }
-                            .padding(.horizontal, AppSpacing.sm)
-                            .padding(.vertical, 4)
-                            .background(Color.cardBackground.opacity(0.78))
-                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                            .foregroundStyle(Color.inkPrimary)
-                            .padding(AppSpacing.sm)
-                        }
-                    }
-
-                Button(action: onAdd) {
-                    Image(systemName: alreadyAdded ? "checkmark" : "plus")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 28, height: 28)
-                        .background(alreadyAdded ? Color.inkMuted : Color.accentWarm)
-                        .clipShape(Circle())
-                        .overlay(Circle().stroke(Color.white.opacity(0.8), lineWidth: 2))
                 }
-                .padding(AppSpacing.sm)
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(recipe.name)
-                    .font(AppFont.body(15))
-                    .foregroundStyle(Color.inkPrimary)
+        }
+        .frame(height: 142)
+    }
+
+    private var information: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(recipe.name)
+                .font(AppFont.headline(15))
+                .foregroundStyle(Color.inkPrimary)
+                .lineLimit(1)
+            if let desc = recipe.description, !desc.isEmpty {
+                Text(desc)
+                    .font(AppFont.caption(12))
+                    .foregroundStyle(Color.inkMuted)
                     .lineLimit(1)
-                if let desc = recipe.description, !desc.isEmpty {
-                    Text(desc)
-                        .font(AppFont.caption())
+            }
+            HStack(spacing: 4) {
+                if let creator = recipe.creator {
+                    AvatarView(user: creator, size: 16)
+                    Text(creator.displayName)
+                        .font(AppFont.caption(11))
                         .foregroundStyle(Color.inkMuted)
                         .lineLimit(1)
                 }
-                HStack(spacing: 4) {
-                    if let creator = recipe.creator {
-                        AvatarView(user: creator, size: 16)
-                        Text(creator.displayName)
-                            .font(AppFont.caption(11))
-                            .foregroundStyle(Color.inkMuted)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                    if let used = recipe.useCount, used > 0 {
-                        HStack(spacing: 2) {
-                            Image(systemName: "fork.knife").font(.system(size: 9))
-                            Text("\(used)").font(AppFont.caption(11))
-                        }
+                Spacer(minLength: 0)
+                if let used = recipe.useCount, used > 0 {
+                    Text("做过 \(used) 次")
+                        .font(AppFont.caption(11))
                         .foregroundStyle(Color.brandGreen)
-                    }
                 }
-                .padding(.top, 1)
             }
-            .padding(.horizontal, AppSpacing.md)
-            .padding(.top, AppSpacing.sm)
-                .padding(.bottom, AppSpacing.md)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        .background(Color.cardBackground.opacity(0.88))
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.inkPrimary.opacity(0.07), lineWidth: 1))
-        .appCardShadow()
-        .rotationEffect(.degrees(recipe.id.isMultiple(of: 2) ? -0.35 : 0.35))
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

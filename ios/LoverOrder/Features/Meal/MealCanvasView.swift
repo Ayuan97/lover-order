@@ -1,9 +1,9 @@
 import SwiftUI
 import PhotosUI
+import Photos
 import UIKit
 
-/// 首页的主画布。菜谱仍然由 AddDishView 负责，首页只负责把「这一顿」拼出来。
-/// 这是第一版可玩的画布：底图、贴纸、文字、涂鸦和轻量动效都在本地即时生效。
+/// 这一顿的自由画布，支持菜品、文字、表情和涂鸦。
 struct MealCanvasView: View {
     @ObservedObject var vm: MealNowViewModel
     let pendingReviewMealId: UInt?
@@ -29,50 +29,60 @@ struct MealCanvasView: View {
     @State private var brushWidth: CGFloat = 4
     @State private var selectedStickerID: UUID?
     @State private var selectedNoteID: UUID?
+    @State private var isSelecting = false
+    @State private var selectedElements: Set<CanvasSelection> = []
     @State private var drawingEnabled = false
     @State private var restoredMealID: UInt?
-    @State private var liveDuration = 5
-    @State private var isMuted = true
+    @State private var isRemovingDish = false
+    @State private var canvasFrame: CGRect = .zero
+    @State private var isExporting = false
     @State private var isEditing = false
+    @State private var isCanvasInteracting = false
+    @State private var alignmentGuides = CanvasAlignmentGuides()
+    @State private var transformUndo: [CanvasTransformUndo] = []
+    @State private var transformEditorHasChanges = false
     @State private var activeEditor: CanvasEditorPanel?
     @State private var insertMode: CanvasInsertItem?
-    @State private var draftText = "今晚吃点好的"
+    @State private var draftText = ""
     @State private var emojiCategory: CanvasEmojiCategory = .recent
+    @Namespace private var emojiCategoryHighlight
     @State private var backgroundPhotoItem: PhotosPickerItem?
     @FocusState private var textEditorFocused: Bool
 
     var body: some View {
         ZStack {
             CanvasPalette.page.ignoresSafeArea()
-            CanvasPaperTexture()
-                .ignoresSafeArea()
-                .allowsHitTesting(false)
+            GeometryReader { viewport in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(spacing: 12) {
+                        header.frame(height: 52)
+                        canvas
+                            .frame(height: max(240, viewport.size.height - 80))
 
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 8) {
-                    header
-                    canvas
-
-                    if vm.loadFailed && vm.meal == nil {
-                        retryStrip
+                        if vm.loadFailed && vm.meal == nil {
+                            retryStrip
+                        }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 4)
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .padding(.bottom, 0)
+                .scrollDisabled(drawingEnabled || isSelecting || isCanvasInteracting)
             }
-            .scrollDisabled(drawingEnabled)
 
         }
         .onAppear { restoreDocumentIfNeeded() }
         .onChange(of: vm.meal?.id) { _, _ in
             selectedStickerID = nil
             selectedNoteID = nil
+            finishSelecting()
             activeStroke.removeAll()
+            drawingEnabled = false
             isEditing = false
             activeEditor = nil
             insertMode = nil
             textEditorFocused = false
+            transformUndo = []
             restoreDocumentIfNeeded()
         }
         .onChange(of: vm.meal?.status) { _, status in
@@ -80,7 +90,27 @@ struct MealCanvasView: View {
                 finishEditing()
             }
         }
-        .onChange(of: vm.dishCount) { _, _ in syncStickers() }
+        .onChange(of: vm.dishes.map(\.id)) { _, _ in
+            let addedDishID = restoredMealID == vm.meal?.id
+                ? vm.dishes.first(where: { dish in !stickers.contains(where: { $0.mealDishID == dish.id }) })?.id
+                : nil
+            syncStickers()
+            selectedElements.formIntersection(Set(layerEntries.map(\.selection)))
+            if let addedDishID, let added = stickers.first(where: { $0.mealDishID == addedDishID }) {
+                finishSelecting()
+                selectedStickerID = added.id
+                selectedNoteID = nil
+            }
+        }
+        .onChange(of: selectedNoteID) { _, _ in
+            if activeEditor == .insert {
+                draftText = selectedTextNote?.text ?? ""
+            }
+        }
+        .onChange(of: selectedCanvasElement) { _, _ in transformEditorHasChanges = false }
+        .onChange(of: notes.map(\.id)) { _, _ in
+            selectedElements.formIntersection(Set(layerEntries.map(\.selection)))
+        }
         .onChange(of: background) { _, _ in saveDocument() }
         .onChange(of: blur) { _, _ in saveDocument() }
         .onChange(of: customBackgroundData) { _, _ in saveDocument() }
@@ -89,7 +119,11 @@ struct MealCanvasView: View {
             Task {
                 guard let data = try? await item.loadTransferable(type: Data.self),
                       let image = UIImage(data: data),
-                      let preview = image.canvasPreviewData else { return }
+                      let preview = image.canvasPreviewData else {
+                    backgroundPhotoItem = nil
+                    vm.tipMessage = "无法读取照片，请重新选择"
+                    return
+                }
                 await MainActor.run {
                     customBackgroundData = preview
                     background = .custom
@@ -98,12 +132,8 @@ struct MealCanvasView: View {
             }
         }
         .sheet(isPresented: $isEditing, onDismiss: {
-            // 下滑关闭编辑器时也要完整退出画笔和选中态，避免回到首页后
-            // 画布仍拦截滚动或继续接收涂鸦手势。
             activeEditor = nil
-            drawingEnabled = false
-            selectedStickerID = nil
-            selectedNoteID = nil
+            textEditorFocused = false
         }) {
             if activeEditor != nil {
                 inlineEditorPanel
@@ -111,70 +141,96 @@ struct MealCanvasView: View {
                     .padding(.top, 8)
                     .presentationDetents(editorDetents)
                     .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(28)
                     .presentationBackground(Color.white)
+                    .presentationBackgroundInteraction(.enabled)
             }
         }
     }
 
     private var editorDetents: Set<PresentationDetent> {
         switch activeEditor {
+        case .transform: return [.height(360)]
         case .emoji: return [.height(520), .large]
-        case .brush: return [.height(560), .large]
+        case .brush: return [.height(440), .large]
         case .effects: return [.height(360)]
-        case .insert, .background: return [.height(430), .large]
+        case .insert: return [.height(selectedTextNote == nil ? 300 : 500), .large]
+        case .background: return [.height(260)]
         case nil: return [.height(430)]
         }
     }
 
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    HStack(alignment: .firstTextBaseline, spacing: 1) {
-                        Text("今日")
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
-                        Text("LiveLog")
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
-                    }
-                    .foregroundStyle(CanvasPalette.ink)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(CanvasPalette.muted)
-                    Text("· \(vm.dishCount)")
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                    Text("这一顿")
+                        .font(.system(size: 27, weight: .semibold))
+                        .foregroundStyle(CanvasPalette.ink)
+                    Text("\(vm.dishCount) 道菜")
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(CanvasPalette.accent)
+                        .contentTransition(.numericText())
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: vm.dishCount)
                 }
-                Text(isEditing ? "拖一拖，摆成你喜欢的样子" : "把想吃的，放在一起")
+                Text(isRemovingDish ? "正在移除…" : drawingEnabled ? "正在画画" : isSelecting
+                    ? (selectedElements.isEmpty ? "拖出范围框选内容" : "已选 \(selectedElements.count) 项 · 拖动一起移动")
+                    : "拖动移动 · 手柄调整")
                     .font(.system(size: 12))
                     .foregroundStyle(CanvasPalette.muted)
                     .lineLimit(1)
+                    .opacity(isRemovingDish || drawingEnabled || isSelecting || selectedCanvasElement != nil ? 1 : 0)
+                    .accessibilityHidden(!isRemovingDish && !drawingEnabled && !isSelecting && selectedCanvasElement == nil)
             }
 
             Spacer(minLength: 8)
+
+            Button(action: undoLastTransform) {
+                ProductIcon(kind: .undo)
+                    .scaleEffect(0.8)
+                    .foregroundStyle(CanvasPalette.ink)
+                    .opacity(canUndoTransform ? 1 : 0.25)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(CanvasPressStyle())
+            .disabled(!canUndoTransform)
+            .accessibilityLabel("撤销上次位置、大小和角度调整")
+
+            if vm.dishCount > 0 {
+                Button {
+                    Haptics.light()
+                    actionBarConfirm()
+                } label: {
+                    Group {
+                        if vm.isActing { ProgressView().tint(CanvasPalette.accent) }
+                        else { Image(systemName: confirmIcon).font(.system(size: 18, weight: .medium)) }
+                    }
+                    .foregroundStyle(CanvasPalette.accent)
+                    .frame(width: 44, height: 44)
+                    .background(Color.paperGreen, in: Circle())
+                }
+                .buttonStyle(SoftPressStyle())
+                .disabled(vm.isActing || isRemovingDish || isCanvasInteracting)
+                .accessibilityLabel(confirmTitle)
+            }
 
             Menu {
                 Button("保存至相册", systemImage: "square.and.arrow.down") {
                     saveCanvasToPhotos()
                 }
-                if vm.meal?.status == .planning {
+                if vm.meal?.status == .planning || vm.meal?.status == .confirmed {
                     Button("从菜谱加菜", systemImage: "plus") {
                         onAddDish()
                     }
+                    .disabled(vm.isActing || isRemovingDish)
                 }
-                if isEditing {
-                    Button("完成编辑", systemImage: "checkmark") {
-                        finishEditing()
+                if vm.dishCount > 0 || (vm.meal?.status != nil && vm.meal?.status != .planning) {
+                    Button(confirmTitle, systemImage: confirmIcon) {
+                        Haptics.light()
+                        actionBarConfirm()
                     }
-                } else {
-                    Button("编辑画布", systemImage: "pencil") {
-                        beginEditing()
-                    }
-                    if vm.dishCount > 0 || (vm.meal?.status != nil && vm.meal?.status != .planning) {
-                        Button(confirmTitle, systemImage: confirmIcon) {
-                            Haptics.light()
-                            actionBarConfirm()
-                        }
-                    }
+                    .disabled(vm.isActing || isRemovingDish)
                 }
                 Button("买菜清单", systemImage: "cart") { onShoppingList() }
                 Button("邀请一起点", systemImage: "person.2") { onDining() }
@@ -193,17 +249,14 @@ struct MealCanvasView: View {
                 }
                 .disabled(!hasCanvasAdditions)
             } label: {
-                Text("保存至相册")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 19, weight: .medium))
                     .foregroundStyle(CanvasPalette.ink)
-                    .padding(.horizontal, 12)
-                    .frame(height: 32)
-                    .background(CanvasPalette.surface, in: Capsule())
-                    .overlay {
-                        Capsule().stroke(CanvasPalette.ink.opacity(0.06), lineWidth: 0.8)
-                    }
+                    .frame(width: 44, height: 44)
+                    .background(CanvasPalette.surface, in: Circle())
             }
-            .accessibilityLabel("保存至相册及更多操作")
+            .disabled(isCanvasInteracting)
+            .accessibilityLabel("这一顿的更多操作")
 
         }
     }
@@ -214,51 +267,66 @@ struct MealCanvasView: View {
                 CanvasMediaBackground(
                     source: background,
                     blur: blur,
-                    reduceMotion: reduceMotion,
                     customData: customBackgroundData
                 )
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .id(background)
+                .transition(.opacity)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: background)
                 .allowsHitTesting(false)
+                .zIndex(-1_000_000)
+
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.spring(response: 0.24, dampingFraction: 0.82)) {
+                            selectedStickerID = nil
+                            selectedNoteID = nil
+                            textEditorFocused = false
+                        }
+                    }
+                    .allowsHitTesting(!drawingEnabled && !isCanvasInteracting)
+                    .zIndex(-999_999)
 
                 if stickers.isEmpty && notes.isEmpty && strokes.isEmpty {
-                    VStack(spacing: 7) {
-                        Image(systemName: "wand.and.stars")
-                            .font(.system(size: 23, weight: .light))
-                        Text("从菜谱挑几道菜")
-                            .font(.system(size: 16, weight: .semibold))
-                        Text("它们会变成画布上的贴纸")
-                            .font(.system(size: 12))
-                            .opacity(0.76)
-                        Button {
-                            Haptics.light()
-                            onAddDish()
-                        } label: {
-                            Label("去菜谱挑几道", systemImage: "book.closed")
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                .foregroundStyle(CanvasPalette.ink)
-                                .padding(.horizontal, 13)
-                                .frame(height: 32)
-                                .background(.white.opacity(0.92), in: Capsule())
+                    Button {
+                        Haptics.light()
+                        onAddDish()
+                    } label: {
+                        VStack(spacing: 14) {
+                            ProductIcon(kind: .meal)
+                                .scaleEffect(1.6)
+                                .frame(width: 44, height: 44)
+                            Text("今天想吃什么")
+                                .font(.system(size: 17, weight: .medium))
                         }
-                        .buttonStyle(CanvasPressStyle(scale: 0.94))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.3), radius: 6, y: 2)
+                        .padding(24)
+                        .contentShape(Rectangle())
                     }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 14)
-                    .background(.black.opacity(0.20), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .buttonStyle(SoftPressStyle())
+                    .disabled(vm.meal == nil || vm.isActing)
+                    .accessibilityLabel("从菜谱添加第一道菜")
                 }
 
                 ForEach($stickers) { $sticker in
                     CanvasStickerView(
                         sticker: $sticker,
                         canvasSize: proxy.size,
-                        isSelected: sticker.id == selectedStickerID,
-                        reduceMotion: reduceMotion,
+                        isSelected: !isExporting && !isEditing && !isSelecting && sticker.id == selectedStickerID,
+                        reduceMotion: reduceMotion || isSelecting,
+                        reportsBounds: isSelecting,
+                        alignmentTargets: alignmentTargets(excluding: .sticker(sticker.id)),
+                        onTransformStart: { rememberTransform(for: .sticker(sticker.id)) },
                         onSelect: {
+                            if selectedStickerID != sticker.id { Haptics.light() }
                             withAnimation(.spring(response: 0.30, dampingFraction: 0.76)) {
                                 selectedStickerID = sticker.id
                                 selectedNoteID = nil
                             }
                         },
+                        onTransform: { openEditor(.transform) },
                         onLayerMove: { move in
                             moveLayer(move, for: .sticker(sticker.id))
                         },
@@ -267,20 +335,34 @@ struct MealCanvasView: View {
                         },
                         onChange: saveDocument
                     )
+                    .transition(.opacity)
                     .zIndex(Double(sticker.layer))
+                    .accessibilityHidden(isSelecting)
+                    .allowsHitTesting(!drawingEnabled && !isSelecting && (!isCanvasInteracting || selectedStickerID == sticker.id))
                 }
 
                 ForEach($notes) { $note in
                     CanvasNoteView(
                         note: $note,
                         canvasSize: proxy.size,
-                        isSelected: note.id == selectedNoteID,
+                        isSelected: !isExporting && !isEditing && !isSelecting && note.id == selectedNoteID,
+                        freezesMotion: isSelecting,
+                        reportsBounds: isSelecting,
+                        alignmentTargets: alignmentTargets(excluding: .note(note.id)),
+                        onTransformStart: { rememberTransform(for: .note(note.id)) },
                         onSelect: {
+                            if selectedNoteID != note.id { Haptics.light() }
                             withAnimation(.spring(response: 0.30, dampingFraction: 0.76)) {
                                 selectedStickerID = nil
                                 selectedNoteID = note.id
                             }
                         },
+                        onEdit: {
+                            selectedStickerID = nil
+                            selectedNoteID = note.id
+                            openEditor(.insert)
+                        },
+                        onTransform: { openEditor(.transform) },
                         onLayerMove: { move in
                             moveLayer(move, for: .note(note.id))
                         },
@@ -289,7 +371,10 @@ struct MealCanvasView: View {
                         },
                         onChange: saveDocument
                     )
+                    .transition(.opacity)
                     .zIndex(Double(note.layer))
+                    .accessibilityHidden(isSelecting)
+                    .allowsHitTesting(!drawingEnabled && !isSelecting && (!isCanvasInteracting || selectedNoteID == note.id))
                 }
 
                 CanvasDrawingView(
@@ -304,150 +389,150 @@ struct MealCanvasView: View {
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)
 
-                if let selected = selectedCanvasElement {
-                    CanvasElementActionBar(
-                        onEdit: { beginEditing(preferred: .effects) },
-                        onLayerMove: { moveLayer($0, for: selected) },
-                        onDelete: { deleteElement(selected) }
-                    )
-                    .position(elementMenuPosition(for: selected, in: proxy.size))
-                    .transition(.scale(scale: 0.82, anchor: .bottom).combined(with: .opacity))
-                    .animation(.spring(response: 0.30, dampingFraction: 0.72), value: selected)
-                    .zIndex(1000)
-                }
-            }
-            .overlay(alignment: .topLeading) {
-                HStack(spacing: 5) {
-                    Image(systemName: "livephoto")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text("实况")
-                        .font(.system(size: 11, weight: .medium))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 10)
-                .frame(height: 28)
-                .background(.black.opacity(0.25), in: Capsule())
-                .padding(12)
-            }
-            .overlay(alignment: .bottom) {
-                liveControls
-                    .padding(.horizontal, 9)
-                    .padding(.bottom, 9)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-            // 所有点按都由画布这一层统一命中；元素自身只处理拖动、缩放和旋转。
-            .simultaneousGesture(
-                SpatialTapGesture()
-                    .onEnded { value in
-                        handleCanvasTap(at: value.location, in: proxy.size)
-                    },
-                including: .all
-            )
-        }
-        // The editor is a sheet, so the canvas keeps its poster proportion while editing.
-        .aspectRatio(0.58, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .shadow(color: .black.opacity(0.13), radius: 18, y: 8)
-    }
-
-    private func handleCanvasTap(at point: CGPoint, in size: CGSize) {
-        guard !drawingEnabled, size.width > 0, size.height > 0 else { return }
-
-        // 先按层级从上到下命中，避免两个装饰元素靠近时总是选到先渲染的那个。
-        var candidates: [(layer: Int, selection: CanvasSelection, distance: CGFloat, radius: CGFloat)] = []
-        for sticker in stickers {
-            let center = CGPoint(x: size.width * sticker.position.x, y: size.height * sticker.position.y)
-            // 命中范围按贴纸实际可拖动外框计算，避免点到透明边缘时落空。
-            let radius = max(54, min(size.width, size.height) * 0.18 * sticker.scale)
-            candidates.append((sticker.layer, .sticker(sticker.id), hypot(point.x - center.x, point.y - center.y), radius))
-        }
-        for note in notes {
-            let center = CGPoint(x: size.width * note.position.x, y: size.height * note.position.y)
-            let radius = note.isEmoji ? max(34, min(size.width, size.height) * 0.085 * note.scale) : max(74, min(size.width, size.height) * 0.16 * note.scale)
-            candidates.append((note.layer, .note(note.id), hypot(point.x - center.x, point.y - center.y), radius))
-        }
-
-        guard let hit = candidates
-            .filter({ $0.distance <= $0.radius })
-            .sorted(by: { $0.layer == $1.layer ? $0.distance < $1.distance : $0.layer > $1.layer })
-            .first else {
-            withAnimation(.spring(response: 0.24, dampingFraction: 0.82)) {
-                selectedStickerID = nil
-                selectedNoteID = nil
-            }
-            return
-        }
-
-        withAnimation(.spring(response: 0.30, dampingFraction: 0.76)) {
-            switch hit.selection {
-            case .sticker(let id):
-                selectedStickerID = id
-                selectedNoteID = nil
-            case .note(let id):
-                selectedStickerID = nil
-                selectedNoteID = id
-            }
-        }
-    }
-
-    /// 画布内唯一的编辑工具条，详细设置在底部工作表中展开。
-    private var liveControls: some View {
-        HStack(spacing: 4) {
-            Menu {
-                ForEach([3, 5, 10], id: \.self) { seconds in
-                    Button("\(seconds)s") {
-                        withAnimation(.spring(response: 0.24, dampingFraction: 0.80)) {
-                            liveDuration = seconds
+                if !isExporting {
+                    Path { path in
+                        if let x = alignmentGuides.vertical {
+                            path.move(to: CGPoint(x: proxy.size.width * x, y: 12))
+                            path.addLine(to: CGPoint(x: proxy.size.width * x, y: proxy.size.height - 12))
+                        }
+                        if let y = alignmentGuides.horizontal {
+                            path.move(to: CGPoint(x: 12, y: proxy.size.height * y))
+                            path.addLine(to: CGPoint(x: proxy.size.width - 12, y: proxy.size.height * y))
                         }
                     }
+                    .stroke(.white.opacity(0.95), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                    .shadow(color: .black.opacity(0.25), radius: 1)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                    .zIndex(999)
                 }
-            } label: {
-                LiveControlLabel(title: "\(liveDuration)s", icon: "chevron.down")
-            }
 
-            LiveControlButton(title: "Aa", icon: nil, isActive: isEditing && activeEditor == .insert) {
-                openEditor(.insert)
             }
-            LiveControlButton(title: "贴纸", icon: nil, isActive: isEditing && activeEditor == .emoji) {
-                openEditor(.emoji)
+            .frame(width: proxy.size.width, height: proxy.size.height)
+            .overlayPreferenceValue(CanvasTransformOverlayKey.self) { overlay in
+                if let overlay {
+                    ZStack {
+                        overlay.controls
+                            .frame(width: overlay.size.width, height: overlay.size.height)
+                            .position(overlay.center)
+                            .id(overlay.selection)
+                            .transaction {
+                                $0.animation = nil
+                                $0.disablesAnimations = true
+                            }
+
+                        Group {
+                            if !isExporting, !isEditing, !isCanvasInteracting {
+                                CanvasElementActionBar(
+                                    canEditText: selectedTextNote != nil,
+                                    isDeleting: isRemovingDish,
+                                    layers: layerEntries.sorted { $0.layer > $1.layer },
+                                    selection: overlay.selection,
+                                    onSelect: selectElement,
+                                    onEditText: { openEditor(.insert) },
+                                    onEdit: { openEditor(.effects) },
+                                    onLayerMove: { moveLayer($0, for: overlay.selection) },
+                                    onDelete: { deleteElement(overlay.selection) }
+                                )
+                                .position(elementMenuPosition(for: overlay, in: proxy.size))
+                                .id(overlay.selection)
+                                .transition(reduceMotion ? .opacity : .scale(scale: 0.94, anchor: .bottom).combined(with: .opacity))
+                                .zIndex(1)
+                            }
+                        }
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isCanvasInteracting)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: selectedCanvasElement)
+                    }
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                }
             }
-            LiveControlButton(
-                title: nil,
-                icon: "sparkles",
-                isActive: isEditing && activeEditor == .effects || hasActiveCanvasEffect
-            ) {
-                openEditor(.effects)
+            .overlayPreferenceValue(CanvasElementBoundsKey.self) { bounds in
+                if isSelecting, !isExporting {
+                    CanvasMarqueeSelection(
+                        canvasSize: proxy.size,
+                        bounds: bounds,
+                        layers: layerEntries.sorted { $0.layer > $1.layer }.map(\.selection),
+                        selection: $selectedElements,
+                        transforms: selectedElements.compactMap { currentTransform(for: $0) },
+                        onMoveStart: { transformUndo = $0 },
+                        onMove: moveElements,
+                        onChange: saveDocument
+                    )
+                }
             }
-            LiveControlButton(title: "画笔", icon: nil, isActive: drawingEnabled || activeEditor == .brush) {
-                if drawingEnabled {
-                    drawingEnabled = false
-                } else {
+            .onAppear { canvasFrame = proxy.frame(in: .global) }
+            .onChange(of: proxy.frame(in: .global)) { _, frame in
+                guard frame.width > 0, frame.height > 0 else { return }
+                canvasFrame = frame
+                if restoredMealID == vm.meal?.id { saveDocument() }
+            }
+            .coordinateSpace(name: "mealCanvas")
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay(alignment: .bottom) {
+            liveControls
+                .padding(12)
+                .opacity(isExporting ? 0 : 1)
+        }
+        .onPreferenceChange(CanvasElementInteractionKey.self) { isCanvasInteracting = $0 }
+        .onPreferenceChange(CanvasAlignmentGuidesKey.self) { alignmentGuides = $0 }
+    }
+
+    /// 编辑工具随画布呈现，主导航保持独立。
+    private var liveControls: some View {
+        HStack(spacing: 8) {
+            if isSelecting {
+                LiveControlButton(title: "全选内容", icon: "selection.all", isActive: selectedElements.count == layerEntries.count,
+                    isDisabled: layerEntries.isEmpty) {
+                    selectedElements = Set(layerEntries.map(\.selection))
+                }
+                LiveControlButton(title: "清除选择", icon: "xmark", isDisabled: selectedElements.isEmpty) {
+                    selectedElements.removeAll()
+                }
+                LiveControlButton(title: "完成框选", icon: "checkmark", isActive: true) {
+                    finishSelecting()
+                }
+            } else if drawingEnabled {
+                LiveControlButton(title: "撤销", icon: "arrow.uturn.backward", isDisabled: strokes.isEmpty) {
+                    _ = strokes.popLast()
+                    saveDocument()
+                }
+                LiveControlButton(title: "画笔设置", icon: "slider.horizontal.3") {
                     openEditor(.brush)
                 }
-            }
-            LiveControlButton(title: "背景", icon: nil, isActive: isEditing && activeEditor == .background) {
-                openEditor(.background)
-            }
-            LiveControlButton(
-                title: nil,
-                icon: isMuted ? "speaker.slash" : "speaker.wave.2",
-                isActive: !isMuted
-            ) {
-                withAnimation(.spring(response: 0.24, dampingFraction: 0.80)) {
-                    isMuted.toggle()
+                LiveControlButton(title: "完成", icon: "checkmark") {
+                    drawingEnabled = false
+                }
+            } else {
+                LiveControlButton(title: "加菜", icon: "plus", isDisabled: vm.meal == nil || vm.isActing || isRemovingDish) {
+                    onAddDish()
+                }
+                LiveControlButton(title: "文字", icon: "textformat", isActive: activeEditor == .insert) {
+                    addText()
+                }
+                LiveControlButton(title: "贴纸", icon: "face.smiling", isActive: activeEditor == .emoji) {
+                    openEditor(.emoji)
+                }
+                LiveControlButton(title: "画笔", icon: "pencil", isActive: activeEditor == .brush) {
+                    openEditor(.brush)
+                }
+                LiveControlButton(title: "背景", icon: "photo", isActive: activeEditor == .background) {
+                    openEditor(.background)
+                }
+                LiveControlButton(title: "框选内容", icon: "selection", isDisabled: layerEntries.isEmpty || isRemovingDish) {
+                    selectedStickerID = nil
+                    selectedNoteID = nil
+                    textEditorFocused = false
+                    isSelecting = true
                 }
             }
         }
-        .padding(.vertical, 2)
-        // The editor row is deliberately full-width. Without an explicit frame,
-        // SwiftUI can measure the overlay at its intrinsic width on compact
-        // simulator sizes and push the trailing controls outside the canvas.
-        // Keep the controls anchored to the leading edge of the full-width
-        // pill. Centering an intrinsic-width overlay can resolve to a trailing
-        // frame inside GeometryReader on compact iPhones.
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .foregroundStyle(.white)
+        .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.86), value: drawingEnabled)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isSelecting)
+        .opacity(isCanvasInteracting ? 0.35 : 1)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isCanvasInteracting)
+        .allowsHitTesting(!isCanvasInteracting)
     }
 
     @ViewBuilder
@@ -455,12 +540,9 @@ struct MealCanvasView: View {
         if let activeEditor {
             VStack(alignment: .leading, spacing: 0) {
                 editorSheetHeader(activeEditor)
-                if activeEditor != .background {
-                    editorToolSwitcher
-                        .padding(.top, 14)
-                }
                 Group {
                     switch activeEditor {
+                    case .transform: transformEditorContent
                     case .insert: textEditorContent
                     case .emoji: emojiEditorContent
                     case .effects: effectsEditorContent
@@ -476,7 +558,7 @@ struct MealCanvasView: View {
             .padding(.horizontal, 20)
             .padding(.top, 18)
             .padding(.bottom, 20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Color.white)
         }
     }
@@ -484,60 +566,21 @@ struct MealCanvasView: View {
     private func editorSheetHeader(_ panel: CanvasEditorPanel) -> some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(panel == .insert ? "写一句" : panel == .emoji ? "Live 贴纸" : panel == .effects ? "给画布加点动效" : panel == .brush ? "画笔" : "画布背景")
-                    .font(.system(size: 23, weight: .bold, design: .rounded))
+                Text(panel == .insert ? (selectedTextNote == nil ? "写一句" : "编辑文字") : panel == .transform ? "大小与角度" : panel == .emoji ? "贴纸" : panel == .effects ? "特效" : panel == .brush ? "画笔" : "画布背景")
+                    .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(CanvasPalette.ink)
-                Text(panel == .insert ? "文字会作为贴纸放在画布上" : panel == .emoji ? "点击添加，拖出实况区域移除" : panel == .effects ? effectEditorHint : panel == .brush ? "选颜色和粗细，然后直接在画布上涂写" : "换一张照片或调整背景氛围")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(CanvasPalette.muted)
-                    .lineLimit(2)
+
             }
             Spacer(minLength: 8)
-            Button { finishEditing() } label: {
+            Button { closeEditor() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(CanvasPalette.ink)
-                    .frame(width: 32, height: 32)
+                    .frame(width: 44, height: 44)
                     .background(CanvasPalette.page, in: Circle())
             }
             .buttonStyle(CanvasPressStyle(scale: 0.90))
             .accessibilityLabel("关闭编辑器")
-        }
-    }
-
-    private var effectEditorHint: String {
-        switch selectedCanvasElement {
-        case .sticker: return "当前选中菜品贴纸"
-        case .note: return "当前选中文字贴纸"
-        case nil: return "先在画布上点选一个菜品或文字"
-        }
-    }
-
-    private var editorToolSwitcher: some View {
-        HStack(spacing: 0) {
-            ForEach([CanvasEditorPanel.insert, .emoji, .effects, .brush]) { panel in
-                Button {
-                    Haptics.light()
-                    openEditor(panel)
-                } label: {
-                    VStack(spacing: 7) {
-                        Label(panel.title, systemImage: panel.icon)
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(activeEditor == panel ? CanvasPalette.ink : CanvasPalette.muted)
-                        Rectangle()
-                            .fill(activeEditor == panel ? CanvasPalette.accent : .clear)
-                            .frame(height: 2)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 39)
-                }
-                .buttonStyle(CanvasPressStyle(scale: 0.97))
-            }
-        }
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(CanvasPalette.ink.opacity(0.08))
-                .frame(height: 1)
         }
     }
 
@@ -547,6 +590,7 @@ struct MealCanvasView: View {
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $draftText)
                     .focused($textEditorFocused)
+                    .accessibilityLabel("画布文字")
                     .font(.system(size: 20, weight: .semibold, design: .rounded))
                     .foregroundStyle(CanvasPalette.ink)
                     .frame(minHeight: 72, maxHeight: 84)
@@ -582,13 +626,13 @@ struct MealCanvasView: View {
                                         .font(font.font(size: 14, weight: .semibold))
                                         .foregroundStyle(note.font == font ? CanvasPalette.ink : CanvasPalette.muted)
                                         .frame(maxWidth: .infinity)
-                                        .frame(height: 32)
-                                        .background(note.font == font ? CanvasPalette.accent.opacity(0.18) : CanvasPalette.page, in: Capsule())
+                                        .frame(height: 44)
+                                        .background(note.font == font ? Color.paperGreen : CanvasPalette.page, in: Capsule())
                                 }
                                 .buttonStyle(CanvasPressStyle(scale: 0.94))
                             }
                         }
-                        HStack(spacing: 8) {
+                        HStack(spacing: 0) {
                             Text("颜色")
                                 .font(.system(size: 12, weight: .semibold))
                                 .foregroundStyle(CanvasPalette.muted)
@@ -600,10 +644,13 @@ struct MealCanvasView: View {
                                     Circle()
                                         .fill(color.color)
                                         .frame(width: 25, height: 25)
-                                        .overlay(Circle().stroke(note.color == color ? CanvasPalette.ink : .white.opacity(0.72), lineWidth: note.color == color ? 2 : 1))
+                                        .overlay(Circle().stroke(note.color == color ? CanvasPalette.ink : Color.dividerLine, lineWidth: note.color == color ? 2 : 1))
+                                        .frame(maxWidth: .infinity, minHeight: 44)
+                                        .contentShape(Rectangle())
                                 }
                                 .buttonStyle(CanvasPressStyle(scale: 0.92))
-                                .accessibilityLabel("文字颜色 (color.title)")
+                                .accessibilityLabel("文字颜色 \(color.title)")
+                                .accessibilityAddTraits(note.color == color ? .isSelected : [])
                             }
                             Spacer()
                         }
@@ -619,79 +666,81 @@ struct MealCanvasView: View {
                             setSelectedNoteScale(CGFloat(preset.0))
                         } label: {
                             Text(preset.1)
-                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .font(.system(size: 13, weight: .medium))
                                 .foregroundStyle(abs((notes.first(where: { $0.id == selectedNoteID })?.scale ?? 1) - CGFloat(preset.0)) < 0.02 ? CanvasPalette.ink : CanvasPalette.muted)
                                 .frame(maxWidth: .infinity)
-                                .frame(height: 30)
-                                .background(abs((notes.first(where: { $0.id == selectedNoteID })?.scale ?? 1) - CGFloat(preset.0)) < 0.02 ? CanvasPalette.accent.opacity(0.18) : CanvasPalette.page, in: Capsule())
+                                .frame(height: 44)
+                                .background(abs((notes.first(where: { $0.id == selectedNoteID })?.scale ?? 1) - CGFloat(preset.0)) < 0.02 ? Color.paperGreen : CanvasPalette.page, in: Capsule())
                         }
                         .buttonStyle(CanvasPressStyle(scale: 0.94))
                     }
                 }
             }
-            HStack(spacing: 10) {
-                Button {
-                    Haptics.light()
-                    openEditor(.emoji)
-                } label: {
-                    Label("贴纸", systemImage: "face.smiling")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(CanvasPalette.ink)
-                        .frame(height: 38)
-                        .frame(maxWidth: .infinity)
-                        .background(CanvasPalette.page, in: Capsule())
-                }
-                .buttonStyle(CanvasPressStyle(scale: 0.96))
-                Button {
-                    Haptics.light()
-                    commitDraftText()
-                } label: {
-                    Text("放到画布")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .frame(height: 38)
-                        .frame(maxWidth: .infinity)
-                        .background(CanvasPalette.ink, in: Capsule())
-                }
-                .buttonStyle(CanvasPressStyle(scale: 0.96))
-                .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .opacity(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.35 : 1)
-            }
+
         }
-        .padding(.bottom, 6)
+        .padding(.bottom, 4)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Button {
+                Haptics.light()
+                commitDraftText()
+            } label: {
+                Text(selectedTextNote == nil ? "放到画布" : "更新文字")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 48)
+                    .background(CanvasPalette.ink, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(SoftPressStyle())
+            .disabled(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .opacity(draftText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.35 : 1)
+            .padding(.top, 12)
+            .background(CanvasPalette.surface)
         }
     }
 
     private var emojiEditorContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("贴纸库")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
-                    .foregroundStyle(CanvasPalette.ink)
-                Spacer()
-                Button("清空") {
-                    Haptics.light()
-                    clearEmojiStickers()
-                }
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(CanvasPalette.muted)
-                .disabled(!notes.contains(where: { $0.isEmoji }))
-            }
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 4) {
                 ForEach(CanvasEmojiCategory.allCases) { item in
                     Button {
                         Haptics.light()
-                        withAnimation(.spring(response: 0.24, dampingFraction: 0.82)) { emojiCategory = item }
+                        emojiCategory = item
                     } label: {
-                        Capsule()
-                            .fill(emojiCategory == item ? CanvasPalette.accent : CanvasPalette.ink.opacity(0.14))
-                            .frame(width: emojiCategory == item ? 28 : 7, height: 6)
+                        Image(systemName: item.icon)
+                            .font(.system(size: 19, weight: .regular))
+                            .foregroundStyle(emojiCategory == item ? CanvasPalette.accent : CanvasPalette.muted)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .background {
+                                if emojiCategory == item {
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .fill(Color.paperGreen)
+                                        .matchedGeometryEffect(id: "emojiCategory", in: emojiCategoryHighlight)
+                                }
+                            }
                     }
-                    .buttonStyle(CanvasPressStyle(scale: 0.92))
-                    .accessibilityLabel("贴纸分页 \(item.title)")
+                    .buttonStyle(SoftPressStyle())
+                    .accessibilityLabel(item.title)
+                    .accessibilityAddTraits(emojiCategory == item ? .isSelected : [])
                 }
-                Spacer()
+                Divider().frame(height: 20).padding(.horizontal, 4)
+                Button {
+                    Haptics.light()
+                    clearEmojiStickers()
+                } label: {
+                    ProductIcon(kind: .trash)
+                        .scaleEffect(0.8)
+                        .frame(width: 44, height: 44)
+                }
+                .foregroundStyle(CanvasPalette.muted)
+                .buttonStyle(SoftPressStyle())
+                .disabled(!notes.contains(where: { $0.isEmoji }))
+                .opacity(notes.contains(where: { $0.isEmoji }) ? 1 : 0.35)
+                .accessibilityLabel("清空表情贴纸")
             }
+            .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.86), value: emojiCategory)
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 10) {
                     ForEach(emojiCategory.items, id: \.self) { emoji in
@@ -711,7 +760,59 @@ struct MealCanvasView: View {
                 }
                 .padding(.bottom, 6)
             }
+            .id(emojiCategory)
+            .transition(.opacity)
         }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: emojiCategory)
+    }
+
+    private var transformEditorContent: some View {
+        VStack(spacing: 14) {
+            HStack {
+                Text("大小")
+                Spacer()
+                Text("\(Int((selectedElementScale * 100).rounded()))%")
+                    .monospacedDigit()
+            }
+            Slider(value: Binding(
+                get: { Double(selectedElementScale) },
+                set: { updateSelectedTransform(scale: CGFloat($0)) }
+            ), in: 0.3...3)
+            .frame(height: 44)
+            .accessibilityLabel("元素大小")
+            HStack {
+                Text("角度")
+                Spacer()
+                Text("\(Int(selectedElementRotation.rounded()))°")
+                    .monospacedDigit()
+            }
+            Slider(value: Binding(
+                get: { selectedElementRotation },
+                set: { updateSelectedTransform(rotation: $0) }
+            ), in: -180...180)
+            .frame(height: 44)
+            .accessibilityLabel("元素角度")
+            HStack {
+                Text("直接拖动画布上的内容来移动")
+                    .font(.system(size: 12))
+                    .foregroundStyle(CanvasPalette.muted)
+                Spacer()
+                Button {
+                    Haptics.light()
+                    updateSelectedTransform(scale: 1, rotation: 0)
+                } label: {
+                    ProductIcon(kind: .undo)
+                        .foregroundStyle(CanvasPalette.ink)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(CanvasPressStyle())
+                .accessibilityLabel("恢复大小和角度")
+            }
+        }
+        .font(.system(size: 14, weight: .medium))
+        .foregroundStyle(CanvasPalette.ink)
+        .tint(CanvasPalette.accent)
+        .disabled(selectedCanvasElement == nil)
     }
 
     @ViewBuilder
@@ -721,10 +822,10 @@ struct MealCanvasView: View {
                 Image(systemName: "cursorarrow.click.2")
                     .font(.system(size: 24, weight: .medium))
                     .foregroundStyle(CanvasPalette.accent)
-                Text("先点选画布里的菜品或文字")
+                Text("先点选画布里的菜品、贴纸或文字")
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                     .foregroundStyle(CanvasPalette.ink)
-                Text("选中后这里会显示适合它的动效")
+                Text("选中后这里会显示适合它的特效")
                     .font(.system(size: 12))
                     .foregroundStyle(CanvasPalette.muted)
             }
@@ -733,13 +834,13 @@ struct MealCanvasView: View {
         } else {
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 9) {
-                if case .sticker = selectedCanvasElement {
+                if let sticker = stickers.first(where: { $0.id == selectedStickerID }) {
                     ForEach(CanvasEffect.allCases) { effect in
-                        CanvasInlineEditorCard(icon: effect.icon, title: effect.title, previewKind: .sticker(effect), isSelected: selectedStickerEffect == effect) { applyEffect(effect) }
+                        CanvasInlineEditorCard(icon: effect.icon, title: effect.title, previewKind: .sticker(effect, sticker), isSelected: selectedStickerEffect == effect) { applyEffect(effect) }
                     }
-                } else {
+                } else if let note = notes.first(where: { $0.id == selectedNoteID }) {
                     ForEach(CanvasTextEffect.allCases) { effect in
-                        CanvasInlineEditorCard(icon: effect.icon, title: effect.title, previewKind: .text(effect), isSelected: selectedTextEffect == effect) { applyTextEffect(effect) }
+                        CanvasInlineEditorCard(icon: effect.icon, title: effect.title, previewKind: .text(effect, note), isSelected: selectedTextEffect == effect) { applyTextEffect(effect) }
                     }
                 }
                 }
@@ -750,122 +851,126 @@ struct MealCanvasView: View {
 
     private var brushEditorContent: some View {
         ScrollView(.vertical, showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("颜色")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(CanvasPalette.muted)
-                Spacer()
-                Text(usesCustomBrushColor ? "自定义" : brushColor.title)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(CanvasPalette.ink)
-            }
-            HStack(spacing: 6) {
-                ForEach(CanvasBrushColor.allCases) { item in
-                    Button {
-                        Haptics.light()
-                        brushColor = item
-                        customBrushColor = item.color
-                        usesCustomBrushColor = false
-                    } label: {
-                        VStack(spacing: 5) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text("颜色")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(CanvasPalette.muted)
+                    Spacer()
+                    Text(usesCustomBrushColor ? "自定义" : brushColor.title)
+                        .font(.system(size: 12))
+                        .foregroundStyle(CanvasPalette.ink)
+                }
+                HStack(spacing: 4) {
+                    ForEach(CanvasBrushColor.allCases) { item in
+                        let selected = !usesCustomBrushColor && item == brushColor
+                        Button {
+                            Haptics.light()
+                            brushColor = item
+                            customBrushColor = item.color
+                            usesCustomBrushColor = false
+                        } label: {
                             Circle()
                                 .fill(item.color)
                                 .frame(width: 28, height: 28)
-                                .overlay(Circle().stroke(item == brushColor ? CanvasPalette.ink : CanvasPalette.ink.opacity(0.12), lineWidth: item == brushColor ? 2 : 0.8))
-                                .overlay { if item == brushColor { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(item == .ink ? .white : CanvasPalette.ink) } }
-                            Text(item.shortTitle)
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundStyle(item == brushColor ? CanvasPalette.ink : CanvasPalette.muted)
-                                .lineLimit(1)
+                                .overlay(Circle().stroke(selected ? CanvasPalette.ink : Color.dividerLine, lineWidth: selected ? 2 : 1))
+                                .overlay {
+                                    if selected {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundStyle(item == .ink ? .white : CanvasPalette.ink)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 44)
+                                .contentShape(Rectangle())
                         }
+                        .buttonStyle(SoftPressStyle())
+                        .accessibilityLabel(item.title)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                    }
+                    ColorPicker("自定义颜色", selection: Binding(
+                        get: { customBrushColor },
+                        set: { customBrushColor = $0; usesCustomBrushColor = true }
+                    ), supportsOpacity: true)
+                    .labelsHidden()
+                    .frame(width: 44, height: 44)
+                    .background(usesCustomBrushColor ? Color.paperGreen : .clear, in: RoundedRectangle(cornerRadius: 12))
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("笔触")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(CanvasPalette.muted)
+                    HStack(spacing: 8) {
+                        ForEach(CanvasBrushStyle.allCases) { item in
+                            Button {
+                                Haptics.light()
+                                brushStyle = item
+                            } label: {
+                                VStack(spacing: 8) {
+                                    CanvasBrushPreview(style: item, color: CanvasPalette.ink)
+                                        .frame(height: 22)
+                                        .padding(.horizontal, 8)
+                                    Text(item.title)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundStyle(item == brushStyle ? CanvasPalette.ink : CanvasPalette.muted)
+                                        .lineLimit(1)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(item == brushStyle ? Color.paperGreen : CanvasPalette.page, in: RoundedRectangle(cornerRadius: 14))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .stroke(item == brushStyle ? CanvasPalette.accent : .clear, lineWidth: 1)
+                                }
+                            }
+                            .buttonStyle(SoftPressStyle())
+                            .accessibilityAddTraits(item == brushStyle ? .isSelected : [])
+                        }
+                    }
+                }
+                HStack(spacing: 10) {
+                    Text("粗细")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(CanvasPalette.muted)
+                    Slider(value: $brushWidth, in: 2...14, step: 1)
+                        .tint(CanvasPalette.accent)
+                        .accessibilityLabel("画笔粗细")
+                    Circle()
+                        .fill(CanvasPalette.ink)
+                        .frame(width: brushWidth, height: brushWidth)
+                        .frame(width: 32, height: 44)
+                        .accessibilityHidden(true)
+                }
+                Button { startDrawing() } label: {
+                    Text("开始画画")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(CanvasPressStyle(scale: 0.92))
+                        .frame(height: 48)
+                        .background(CanvasPalette.ink, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
+                .buttonStyle(SoftPressStyle())
+                .accessibilityLabel("开始在画布上绘制")
             }
-            HStack(spacing: 10) {
-                ColorPicker("自由取色", selection: $customBrushColor, supportsOpacity: true)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(CanvasPalette.ink)
-                    .padding(.horizontal, 12)
-                    .frame(height: 34)
-                    .background(CanvasPalette.page, in: Capsule())
-                    .onChange(of: customBrushColor) { _, _ in usesCustomBrushColor = true }
-                Spacer()
-                Circle()
-                    .fill(customBrushColor)
-                    .frame(width: 25, height: 25)
-                    .overlay(Circle().stroke(CanvasPalette.ink.opacity(0.16), lineWidth: 1))
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                Text("笔触")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(CanvasPalette.muted)
-                HStack(spacing: 8) {
-                    ForEach(CanvasBrushStyle.allCases) { item in
-                        Button {
-                            Haptics.light()
-                            brushStyle = item
-                        } label: {
-                            VStack(spacing: 5) {
-                                CanvasBrushPreview(style: item, color: brushColor.color)
-                                    .frame(height: 22)
-                                Text(item.title)
-                                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(item == brushStyle ? CanvasPalette.ink : CanvasPalette.muted)
-                                    .lineLimit(1)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 7)
-                            .background(item == brushStyle ? CanvasPalette.accent.opacity(0.15) : CanvasPalette.page, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(item == brushStyle ? CanvasPalette.accent : CanvasPalette.ink.opacity(0.08), lineWidth: item == brushStyle ? 1.2 : 0.8)
-                            }
-                        }
-                        .buttonStyle(CanvasPressStyle(scale: 0.94))
-                    }
-                }
-            }
-            HStack(spacing: 10) {
-                Text("粗细")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(CanvasPalette.muted)
-                Slider(value: $brushWidth, in: 2...14, step: 1)
-                    .tint(CanvasPalette.ink)
-                Text("\(Int(brushWidth)) pt")
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(CanvasPalette.ink)
-                    .frame(width: 42, alignment: .trailing)
-            }
-            Button {
-                startDrawing()
-            } label: {
-                Label(drawingEnabled ? "正在画布上绘制" : "开始在画布上绘制", systemImage: drawingEnabled ? "pencil.tip" : "hand.tap")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 40)
-                    .background(drawingEnabled ? CanvasPalette.accent : CanvasPalette.ink, in: Capsule())
-            }
-            .buttonStyle(CanvasPressStyle(scale: 0.96))
-            }
-             .padding(.bottom, 0)
         }
     }
 
-    private func elementMenuPosition(for selection: CanvasSelection, in size: CGSize) -> CGPoint {
-        let point: CanvasPoint
-        switch selection {
-        case .sticker(let id):
-            point = stickers.first(where: { $0.id == id })?.position ?? CanvasPoint(x: 0.5, y: 0.5)
-        case .note(let id):
-            point = notes.first(where: { $0.id == id })?.position ?? CanvasPoint(x: 0.5, y: 0.5)
-        }
+    private func elementMenuPosition(for overlay: CanvasTransformOverlay, in size: CGSize) -> CGPoint {
+        let radians = overlay.controls.rotationDegrees * .pi / 180
+        let ring = overlay.controls.selectionSize
+        let halfElementHeight = hypot(ring.width * sin(radians), ring.height * cos(radians)) / 2 + 19
+        let halfWidth: CGFloat = (selectedTextNote == nil ? 148 : 195) / 2 + 8
+        let top = overlay.center.y - halfElementHeight
+        let bottom = overlay.center.y + halfElementHeight
+        let lowerLimit = max(34, size.height - 103)
+        let above = min(max(top - 49, 34), lowerLimit)
+        let below = min(max(bottom + 49, 34), lowerLimit)
+        let overlapAbove = max(0, min(above + 26, bottom) - max(above - 26, top))
+        let overlapBelow = max(0, min(below + 26, bottom) - max(below - 26, top))
         return CGPoint(
-            x: min(max(size.width * point.x + 30, 18), max(18, size.width - 18)),
-            y: min(max(size.height * point.y - 30, 18), max(18, size.height - 18))
+            x: min(max(overlay.center.x, halfWidth), max(halfWidth, size.width - halfWidth)),
+            y: overlapAbove <= overlapBelow ? above : below
         )
     }
 
@@ -881,7 +986,7 @@ struct MealCanvasView: View {
                             }
                         } label: {
                             ZStack(alignment: .bottomLeading) {
-                                CanvasMediaBackground(source: item, blur: 0, reduceMotion: true, customData: customBackgroundData)
+                                CanvasMediaBackground(source: item, blur: 0, customData: customBackgroundData)
                                 if background == item {
                                     Image(systemName: "checkmark")
                                         .font(.system(size: 9, weight: .bold))
@@ -902,7 +1007,9 @@ struct MealCanvasView: View {
                         .buttonStyle(CanvasPressStyle(scale: 0.96))
                         .animation(.spring(response: 0.24, dampingFraction: 0.80), value: background)
                         .accessibilityLabel(item.title)
+                        .accessibilityAddTraits(background == item ? .isSelected : [])
                         .disabled(item == .custom && customBackgroundData == nil)
+                        .opacity(item == .custom && customBackgroundData == nil ? 0.35 : 1)
                     }
 
                     PhotosPicker(selection: $backgroundPhotoItem, matching: .images, photoLibrary: .shared()) {
@@ -944,15 +1051,9 @@ struct MealCanvasView: View {
         return nil
     }
 
-    private var hasActiveCanvasEffect: Bool {
-        switch selectedCanvasElement {
-        case .sticker(let id):
-            return stickers.first(where: { $0.id == id })?.effect != CanvasEffect.none
-        case .note(let id):
-            return notes.first(where: { $0.id == id })?.textEffect != .plain
-        case nil:
-            return false
-        }
+    private var selectedTextNote: CanvasNote? {
+        guard let selectedNoteID else { return nil }
+        return notes.first { $0.id == selectedNoteID && !$0.isEmoji }
     }
 
     private var selectedTextEffect: CanvasTextEffect? {
@@ -965,9 +1066,146 @@ struct MealCanvasView: View {
         return stickers.first(where: { $0.id == id })?.effect
     }
 
+    private var selectedElementScale: CGFloat {
+        switch selectedCanvasElement {
+        case .sticker(let id): return stickers.first(where: { $0.id == id })?.scale ?? 1
+        case .note(let id): return notes.first(where: { $0.id == id })?.scale ?? 1
+        case nil: return 1
+        }
+    }
+
+    private var selectedElementRotation: Double {
+        let degrees: Double
+        switch selectedCanvasElement {
+        case .sticker(let id): degrees = stickers.first(where: { $0.id == id })?.rotationDegrees ?? 0
+        case .note(let id): degrees = notes.first(where: { $0.id == id })?.rotationDegrees ?? 0
+        case nil: degrees = 0
+        }
+        let angle = degrees.truncatingRemainder(dividingBy: 360)
+        return angle > 180 ? angle - 360 : angle < -180 ? angle + 360 : angle
+    }
+
+    private func updateSelectedTransform(scale: CGFloat? = nil, rotation: Double? = nil) {
+        guard scale.map({ min(max($0, 0.3), 3) != selectedElementScale }) == true
+            || rotation.map({ $0 != selectedElementRotation }) == true else { return }
+        if !transformEditorHasChanges, let selection = selectedCanvasElement {
+            rememberTransform(for: selection)
+            transformEditorHasChanges = true
+        }
+        switch selectedCanvasElement {
+        case .sticker(let id):
+            guard let index = stickers.firstIndex(where: { $0.id == id }) else { return }
+            if let scale { stickers[index].scale = min(max(scale, 0.3), 3) }
+            if let rotation { stickers[index].rotationDegrees = rotation }
+        case .note(let id):
+            guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+            if let scale { notes[index].scale = min(max(scale, 0.3), 3) }
+            if let rotation { notes[index].rotationDegrees = rotation }
+        case nil: return
+        }
+        saveDocument()
+    }
+
+    private func currentTransform(for selection: CanvasSelection) -> CanvasTransformUndo? {
+        switch selection {
+        case .sticker(let id):
+            guard let item = stickers.first(where: { $0.id == id }) else { return nil }
+            return CanvasTransformUndo(selection: selection, position: item.position, scale: item.scale, rotationDegrees: item.rotationDegrees)
+        case .note(let id):
+            guard let item = notes.first(where: { $0.id == id }) else { return nil }
+            return CanvasTransformUndo(selection: selection, position: item.position, scale: item.scale, rotationDegrees: item.rotationDegrees)
+        }
+    }
+
+    private var canUndoTransform: Bool {
+        guard !isCanvasInteracting, !isEditing, !drawingEnabled, !isRemovingDish else { return false }
+        return transformUndo.contains { previous in
+            guard let current = currentTransform(for: previous.selection) else { return false }
+            return current != previous
+        }
+    }
+
+    private func rememberTransform(for selection: CanvasSelection) {
+        transformEditorHasChanges = false
+        transformUndo = currentTransform(for: selection).map { [$0] } ?? []
+    }
+
+    private func undoLastTransform() {
+        guard canUndoTransform else { return }
+        let previous = transformUndo.filter { currentTransform(for: $0.selection) != nil }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            for item in previous {
+                switch item.selection {
+                case .sticker(let id):
+                    guard let index = stickers.firstIndex(where: { $0.id == id }) else { continue }
+                    stickers[index].position = item.position
+                    stickers[index].scale = item.scale
+                    stickers[index].rotationDegrees = item.rotationDegrees
+                case .note(let id):
+                    guard let index = notes.firstIndex(where: { $0.id == id }) else { continue }
+                    notes[index].position = item.position
+                    notes[index].scale = item.scale
+                    notes[index].rotationDegrees = item.rotationDegrees
+                }
+            }
+            selectedStickerID = nil
+            selectedNoteID = nil
+            if previous.count > 1 || isSelecting {
+                isSelecting = true
+                selectedElements = Set(previous.map(\.selection))
+            } else if let item = previous.first {
+                switch item.selection {
+                case .sticker(let id): selectedStickerID = id
+                case .note(let id): selectedNoteID = id
+                }
+            }
+            transformUndo = []
+        }
+        saveDocument()
+        Haptics.light()
+    }
+
+    private func moveElements(_ transforms: [CanvasTransformUndo], by offset: CGSize) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            for item in transforms {
+                let position = CanvasPoint(x: item.position.x + offset.width, y: item.position.y + offset.height)
+                switch item.selection {
+                case .sticker(let id):
+                    if let index = stickers.firstIndex(where: { $0.id == id }) { stickers[index].position = position }
+                case .note(let id):
+                    if let index = notes.firstIndex(where: { $0.id == id }) { notes[index].position = position }
+                }
+            }
+        }
+    }
+
+    private func finishSelecting() {
+        isSelecting = false
+        selectedElements.removeAll()
+    }
+
     private var layerEntries: [CanvasLayerEntry] {
-        stickers.map { CanvasLayerEntry(selection: .sticker($0.id), layer: $0.layer) }
-            + notes.map { CanvasLayerEntry(selection: .note($0.id), layer: $0.layer) }
+        stickers.map { CanvasLayerEntry(selection: .sticker($0.id), layer: $0.layer, title: $0.name, icon: "fork.knife") }
+            + notes.map {
+                CanvasLayerEntry(selection: .note($0.id), layer: $0.layer,
+                    title: $0.isEmoji ? "\($0.text) 贴纸" : String($0.text.replacingOccurrences(of: "\n", with: " ").prefix(16)),
+                    icon: $0.isEmoji ? "face.smiling" : "pencil")
+            }
+    }
+
+    private func selectElement(_ selection: CanvasSelection) {
+        guard selection != selectedCanvasElement, currentTransform(for: selection) != nil else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
+            switch selection {
+            case .sticker(let id): selectedStickerID = id; selectedNoteID = nil
+            case .note(let id): selectedStickerID = nil; selectedNoteID = id
+            }
+        }
+        Haptics.light()
     }
 
     private func moveLayer(_ move: CanvasLayerMove, for selected: CanvasSelection) {
@@ -976,8 +1214,10 @@ struct MealCanvasView: View {
 
         switch move {
         case .front:
+            guard currentIndex < ordered.count - 1 else { return }
             setLayer((ordered.last?.layer ?? 0) + 1, for: selected)
         case .back:
+            guard currentIndex > 0 else { return }
             setLayer((ordered.first?.layer ?? 0) - 1, for: selected)
         case .forward, .backward:
             let targetIndex = move == .forward ? currentIndex + 1 : currentIndex - 1
@@ -1003,34 +1243,40 @@ struct MealCanvasView: View {
     private func deleteElement(_ selected: CanvasSelection) {
         switch selected {
         case .sticker(let id):
-            stickers.removeAll { $0.id == id }
-            selectedStickerID = nil
+            guard !isRemovingDish,
+                  let sticker = stickers.first(where: { $0.id == id }),
+                  let dish = vm.dishes.first(where: { $0.id == sticker.mealDishID }) else { return }
+            isRemovingDish = true
+            Task {
+                defer { isRemovingDish = false }
+                await vm.removeDish(dish)
+                if !vm.dishes.contains(where: { $0.id == dish.id }) {
+                    syncStickers()
+                }
+            }
         case .note(let id):
-            notes.removeAll { $0.id == id }
-            selectedNoteID = nil
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                notes.removeAll { $0.id == id }
+                selectedNoteID = nil
+            }
+            closeEditor()
+            saveDocument()
         }
-        saveDocument()
     }
 
-    private func beginEditing(preferred: CanvasEditorPanel? = nil) {
-        if !isEditing {
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.84)) {
-                isEditing = true
-            }
-        }
-        if let preferred {
-            activeEditor = preferred
-        } else if activeEditor == nil {
-            withAnimation(.spring(response: 0.30, dampingFraction: 0.82)) {
-                activeEditor = .insert
-            }
-        }
+    private func addText() {
+        selectedStickerID = nil
+        selectedNoteID = nil
+        draftText = ""
+        openEditor(.insert)
     }
 
     private func openEditor(_ panel: CanvasEditorPanel) {
-        beginEditing()
+        finishSelecting()
+        transformEditorHasChanges = false
         withAnimation(.spring(response: 0.28, dampingFraction: 0.80)) {
             activeEditor = panel
+            isEditing = true
             drawingEnabled = false
             if panel == .insert, let selectedNoteID, let note = notes.first(where: { $0.id == selectedNoteID }), !note.isEmoji {
                 draftText = note.text
@@ -1047,11 +1293,19 @@ struct MealCanvasView: View {
         }
     }
 
+    private func closeEditor() {
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+            isEditing = false
+            insertMode = nil
+            textEditorFocused = false
+        }
+    }
+
     private func startDrawing() {
+        finishSelecting()
         Haptics.light()
         withAnimation(.spring(response: 0.34, dampingFraction: 0.80)) {
             isEditing = false
-            activeEditor = nil
             selectedStickerID = nil
             selectedNoteID = nil
             drawingEnabled = true
@@ -1059,10 +1313,9 @@ struct MealCanvasView: View {
     }
 
     private func finishEditing() {
+        finishSelecting()
+        closeEditor()
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-            isEditing = false
-            activeEditor = nil
-            insertMode = nil
             drawingEnabled = false
             selectedStickerID = nil
             selectedNoteID = nil
@@ -1070,10 +1323,8 @@ struct MealCanvasView: View {
     }
 
     private func actionBarConfirm() {
-        guard vm.meal?.status == .planning else {
-            finishEditing()
-            return
-        }
+        guard !vm.isActing, !isRemovingDish else { return }
+        finishEditing()
         onConfirm()
     }
 
@@ -1084,6 +1335,35 @@ struct MealCanvasView: View {
     private var nextLayerIndex: Int {
         let highest = (stickers.map(\.layer) + notes.map(\.layer)).max() ?? -1
         return highest + 1
+    }
+
+    private func alignmentTargets(excluding selection: CanvasSelection) -> [CanvasPoint] {
+        stickers.filter { .sticker($0.id) != selection }.map(\.position)
+            + notes.filter { .note($0.id) != selection }.map(\.position)
+    }
+
+    private func insertionPosition(isEmoji: Bool) -> CanvasPoint {
+        let width = max(canvasFrame.width, 1)
+        let height = max(canvasFrame.height, 1)
+        let preferred = CanvasPoint(x: isEmoji ? 0.78 : 0.5, y: isEmoji ? 0.68 : 0.16)
+        let baseSize = max(110, min(width, height) * 0.37)
+        let occupied = stickers.map {
+            (point: $0.position, radius: baseSize * 0.56 * min(max($0.scale, 0.3), 3))
+        } + notes.map {
+            (point: $0.position, radius: ($0.isEmoji ? 32.0 : 80.0) * min(max($0.scale, 0.3), 3))
+        }
+        let columns: [CGFloat] = isEmoji ? [0.22, 0.5, 0.78] : [0.5]
+        let candidates = [preferred] + [CGFloat(0.16), 0.32, 0.48, 0.64, 0.78].flatMap { y in
+            columns.map { CanvasPoint(x: $0, y: y) }
+        }
+        func score(_ point: CanvasPoint) -> CGFloat {
+            let clearance = occupied.map {
+                hypot((point.x - $0.point.x) * width, (point.y - $0.point.y) * height) - $0.radius
+            }.min() ?? 0
+            let distance = hypot((point.x - preferred.x) * width, (point.y - preferred.y) * height)
+            return clearance - distance * 0.15
+        }
+        return candidates.max { score($0) < score($1) } ?? preferred
     }
 
     private func clearCanvasAdditions() {
@@ -1133,9 +1413,7 @@ struct MealCanvasView: View {
         let note = CanvasNote(
             text: text,
             isEmoji: false,
-            // Keep the first caption in the quiet sky area, above the dish
-            // cluster, so a newly added note never lands on a sticker.
-            position: CanvasPoint(x: 0.50, y: 0.16),
+            position: insertionPosition(isEmoji: false),
             layer: nextLayerIndex
         )
         notes.append(note)
@@ -1146,6 +1424,8 @@ struct MealCanvasView: View {
 
     private func setSelectedNoteScale(_ scale: CGFloat) {
         guard let selectedNoteID, let index = notes.firstIndex(where: { $0.id == selectedNoteID }), !notes[index].isEmoji else { return }
+        guard notes[index].scale != scale else { return }
+        rememberTransform(for: .note(selectedNoteID))
         withAnimation(.spring(response: 0.30, dampingFraction: 0.76)) {
             notes[index].scale = scale
         }
@@ -1176,6 +1456,7 @@ struct MealCanvasView: View {
             insertText(value)
         }
         insertMode = nil
+        closeEditor()
     }
 
     private func clearEmojiStickers() {
@@ -1185,13 +1466,12 @@ struct MealCanvasView: View {
     }
 
     private func insertEmoji(_ emoji: String) {
-        // Put decorative marks in the lower-right breathing room by default;
-        // users can still drag, pinch, and rotate them directly on the canvas.
-        let note = CanvasNote(text: emoji, isEmoji: true, position: CanvasPoint(x: 0.78, y: 0.73), layer: nextLayerIndex)
+        let note = CanvasNote(text: emoji, isEmoji: true, position: insertionPosition(isEmoji: true), layer: nextLayerIndex)
         notes.append(note)
         selectedStickerID = nil
         selectedNoteID = note.id
         saveDocument()
+        closeEditor()
     }
 
     private func syncStickers() {
@@ -1234,7 +1514,6 @@ struct MealCanvasView: View {
 
     private func stickerAsset(for name: String, index: Int) -> String? {
         _ = index
-        // 用户上传的菜在完成自动/手动抠图前不显示封面，避免把整张照片伪装成贴纸。
         return DishArtwork.assetName(for: name)
     }
 
@@ -1335,146 +1614,118 @@ struct MealCanvasView: View {
                 customBackgroundData: customBackgroundData,
                 stickers: stickers,
                 notes: notes,
-                strokes: strokes
+                strokes: strokes,
+                size: canvasFrame.size.width > 0 ? canvasFrame.size : nil
             ),
             mealID: mealID
         )
     }
 
-    /// 将当前屏幕上的实况画布保存为一张静态图。顶部入口原先只是菜单
-    /// 外观，实际没有对应动作，容易让人误以为保存失败。
+    /// 导出画布内容，隐藏编辑控件，并以相册实际写入结果反馈。
     private func saveCanvasToPhotos() {
-        guard let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene })
-            .first(where: { $0.activationState == .foregroundActive }),
-              let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first else {
-            vm.tipMessage = "当前页面还不能保存"
-            return
+        guard !isExporting, canvasFrame.width > 0 else { return }
+        Task { @MainActor in
+            let authorization = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard authorization == .authorized || authorization == .limited else {
+                vm.tipMessage = "请在设置中允许添加照片后再保存"
+                return
+            }
+            guard let scene = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .first(where: { $0.activationState == .foregroundActive }),
+                  let window = scene.windows.first(where: { $0.isKeyWindow }) else { return }
+            isExporting = true
+            defer { isExporting = false }
+            try? await Task.sleep(for: .milliseconds(120))
+            let frame = canvasFrame
+            let renderer = UIGraphicsImageRenderer(size: frame.size)
+            let image = renderer.image { _ in
+                window.drawHierarchy(in: window.bounds.offsetBy(dx: -frame.minX, dy: -frame.minY), afterScreenUpdates: true)
+            }
+            do {
+                try await PHPhotoLibrary.shared().performChanges {
+                    PHAssetChangeRequest.creationRequestForAsset(from: image)
+                }
+                vm.tipMessage = "画布已保存到相册"
+            } catch {
+                vm.tipMessage = "保存失败，请重试"
+            }
         }
-
-        let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
-        let image = renderer.image { _ in
-            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
-        }
-        UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
-        vm.tipMessage = "已保存到相册"
     }
 }
 
-// 历史页只读地还原某顿饭当时保存的首页画布，避免把编辑控件带进回忆页面。
+/// 以保存时的尺寸还原画布，让文字、笔迹与食物保持相同的构图。
 struct MealCanvasSnapshotView: View {
-    let mealID: UInt
-    @State private var document: CanvasDocument?
+    private let document: CanvasDocument?
+
+    init(mealID: UInt) {
+        document = CanvasDocumentStore.load(mealID: mealID)
+    }
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack {
-                if let document {
-                    CanvasMediaBackground(
-                        source: CanvasBackground(rawValue: document.background) ?? .meadow,
-                        blur: document.blur,
-                        reduceMotion: true,
-                        customData: document.customBackgroundData
-                    )
-                    Canvas { context, _ in
-                        for stroke in document.strokes {
-                            guard let first = stroke.points.first else { continue }
-                            if stroke.points.count == 1 {
-                                context.fill(
-                                    Path(ellipseIn: CGRect(
-                                        x: first.x - stroke.width / 2,
-                                        y: first.y - stroke.width / 2,
-                                        width: stroke.width,
-                                        height: stroke.width
-                                    )),
-                                    with: .color(stroke.color.color)
-                                )
-                                continue
-                            }
-                            var path = Path()
-                            path.move(to: first)
-                            for point in stroke.points.dropFirst() {
-                                path.addLine(to: point)
-                            }
-                            context.stroke(
-                                path,
-                                with: .color(stroke.color.color),
-                                style: StrokeStyle(lineWidth: stroke.width, lineCap: .round, lineJoin: .round)
-                            )
-                        }
-                    }
-                    ForEach(document.stickers.sorted { $0.layer < $1.layer }) { sticker in
-                        StickerImageView(assetName: sticker.assetName, name: sticker.name)
-                            .frame(width: max(74, min(proxy.size.width, proxy.size.height) * 0.23) * 1.12)
-                            .scaleEffect(sticker.scale)
-                            .rotationEffect(.degrees(sticker.rotationDegrees))
-                            .position(x: proxy.size.width * sticker.position.x, y: proxy.size.height * sticker.position.y)
-                    }
-                    ForEach(document.notes.sorted { $0.layer < $1.layer }) { note in
-                        Text(note.text)
-                            .font(note.isEmoji ? .system(size: 34) : .system(size: 18, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.white)
-                            .shadow(color: .black.opacity(0.35), radius: 4, y: 2)
-                            .rotationEffect(.degrees(note.rotationDegrees))
-                            .scaleEffect(note.scale)
-                            .position(x: proxy.size.width * note.position.x, y: proxy.size.height * note.position.y)
-                    }
-                } else {
-                    CanvasMediaBackground(source: .meadow, blur: 3, reduceMotion: true, customData: nil)
-                    Text("当时没有保存画布")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.9))
-                }
+        if let document {
+            let size = document.size ?? CGSize(width: 360, height: 600)
+            GeometryReader { proxy in
+                CanvasDocumentArtwork(document: document, size: size)
+                    .frame(width: size.width, height: size.height)
+                    .scaleEffect(proxy.size.width / size.width, anchor: .topLeading)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .aspectRatio(size.width / size.height, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("这一顿保存的画布")
         }
-        .frame(maxWidth: 420)
-        .aspectRatio(0.58, contentMode: .fit)
+    }
+}
+
+private struct CanvasDocumentArtwork: View {
+    let document: CanvasDocument
+    let size: CGSize
+
+    var body: some View {
+        ZStack {
+            CanvasMediaBackground(
+                source: CanvasBackground(rawValue: document.background) ?? .meadow,
+                blur: document.blur,
+                customData: document.customBackgroundData
+            )
+            .frame(width: size.width, height: size.height)
+            .zIndex(-1_000_000)
+            ForEach(document.stickers) { sticker in
+                CanvasStickerView(
+                    sticker: .constant(sticker), canvasSize: size, isSelected: false,
+                    reduceMotion: true, onSelect: {}, onTransform: {}, onLayerMove: { _ in },
+                    onDelete: {}, onChange: {}
+                )
+                .zIndex(Double(sticker.layer))
+            }
+            ForEach(document.notes) { note in
+                CanvasNoteView(
+                    note: .constant(note), canvasSize: size, isSelected: false, freezesMotion: true,
+                    onSelect: {}, onEdit: {}, onTransform: {}, onLayerMove: { _ in }, onDelete: {}, onChange: {}
+                )
+                .zIndex(Double(note.layer))
+            }
+            CanvasDrawingView(
+                strokes: .constant(document.strokes), activeStroke: .constant([]),
+                isEnabled: false, brush: .white, paintColor: .white, style: .solid,
+                width: 4, onEnd: {}
+            )
+        }
+        .frame(width: size.width, height: size.height)
         .clipped()
-        .task {
-            document = CanvasDocumentStore.load(mealID: mealID)
-        }
     }
 }
 
 private enum CanvasPalette {
-    // The LiveLog reference uses a neutral studio white, charcoal type and a
-    // dusty olive accent. Keep these values local to the canvas so the older
-    // meal flows retain their existing green brand token.
-    static let page = Color(red: 0.985, green: 0.985, blue: 0.975)
-    static let surface = Color.white.opacity(0.97)
-    static let ink = Color(red: 0.20, green: 0.20, blue: 0.19)
-    static let muted = Color(red: 0.56, green: 0.56, blue: 0.54)
-    static let accent = Color.brandGreen
+    static let page = CanvasTheme.page
+    static let surface = CanvasTheme.surface
+    static let ink = CanvasTheme.ink
+    static let muted = CanvasTheme.secondary
+    static let accent = CanvasTheme.accent
     static let live = Color.dopamineYellow
     static let coral = Color.dopaminePink
-}
-
-/// Very light paper grain: enough to make the page feel tactile, never enough
-/// to compete with the canvas or reduce text contrast.
-private struct CanvasPaperTexture: View {
-    var body: some View {
-        Canvas { context, size in
-            let step: CGFloat = 24
-            var index = 0
-            for y in stride(from: 0, through: size.height, by: step) {
-                for x in stride(from: 0, through: size.width, by: step) {
-                    let variation = CGFloat((index * 37) % 17) / 17
-                    let diameter = 0.45 + variation * 0.9
-                    context.fill(
-                        Path(ellipseIn: CGRect(
-                            x: x + variation * 5,
-                            y: y + CGFloat((index * 11) % 7),
-                            width: diameter,
-                            height: diameter
-                        )),
-                        with: .color(CanvasPalette.ink.opacity(0.004 + variation * 0.006))
-                    )
-                    index += 1
-                }
-            }
-        }
-    }
 }
 
 private struct CanvasPoint: Codable, Hashable {
@@ -1482,12 +1733,605 @@ private struct CanvasPoint: Codable, Hashable {
     var y: CGFloat
 }
 
+private struct CanvasElementInteractionKey: PreferenceKey {
+    static var defaultValue: Bool { false }
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
+private struct CanvasAlignmentGuides: Equatable {
+    var vertical: CGFloat?
+    var horizontal: CGFloat?
+}
+
+private struct CanvasAlignmentGuidesKey: PreferenceKey {
+    static var defaultValue: CanvasAlignmentGuides { .init() }
+    static func reduce(value: inout CanvasAlignmentGuides, nextValue: () -> CanvasAlignmentGuides) {
+        let next = nextValue()
+        value.vertical = next.vertical ?? value.vertical
+        value.horizontal = next.horizontal ?? value.horizontal
+    }
+}
+
+private struct CanvasDragPlacement {
+    let position: CanvasPoint
+    let guides: CanvasAlignmentGuides
+
+    init(position: CanvasPoint, translation: CGSize, canvasSize: CGSize, isDragging: Bool,
+         alignmentTargets: [CanvasPoint],
+         previousGuides: CanvasAlignmentGuides = .init()) {
+        let width = max(canvasSize.width, 1)
+        let height = max(canvasSize.height, 1)
+        let x = position.x + translation.width / width
+        let y = position.y + translation.height / height
+        func target(_ value: CGFloat, length: CGFloat, previous: CGFloat?, candidates: [CGFloat]) -> CGFloat? {
+            guard isDragging else { return nil }
+            if let previous, abs(value - previous) * length <= 10 { return previous }
+            guard let nearest = ([CGFloat(0.5)] + candidates).min(by: { abs(value - $0) < abs(value - $1) }),
+                  abs(value - nearest) * length <= 6 else { return nil }
+            return nearest
+        }
+        guides = CanvasAlignmentGuides(
+            vertical: target(x, length: width, previous: previousGuides.vertical, candidates: alignmentTargets.map(\.x)),
+            horizontal: target(y, length: height, previous: previousGuides.horizontal, candidates: alignmentTargets.map(\.y)))
+        self.position = CanvasPoint(x: guides.vertical ?? min(max(x, 0.02), 0.98),
+                                    y: guides.horizontal ?? min(max(y, 0.02), 0.98))
+    }
+}
+
+private struct CanvasRotationPlacement {
+    let degrees: Double
+    let snappedAngle: Double?
+
+    init(degrees: Double, previousSnap: Double?) {
+        let nearest = (degrees / 90).rounded() * 90
+        let delta = degrees - nearest
+        let distance = abs(delta)
+        snappedAngle = distance <= (previousSnap == nearest ? 6 : 3) ? nearest : nil
+        let progress = min(max((distance - 3) / 3, 0), 1)
+        let blend = progress * progress * (3 - 2 * progress)
+        self.degrees = nearest + delta * blend
+    }
+}
+
+private struct CanvasManipulation: ViewModifier {
+    @Binding var position: CanvasPoint
+    @Binding var scale: CGFloat
+    @Binding var rotationDegrees: Double
+    @Binding var isGestureActive: Bool
+    let canvasSize: CGSize
+    let alignmentTargets: [CanvasPoint]
+    let isSelected: Bool
+    let isHandleActive: Bool
+    let onTransformStart: () -> Void
+    let onSelect: () -> Void
+    let onChange: () -> Void
+
+    @Environment(\.scenePhase) private var scenePhase
+    @GestureState(resetTransaction: Transaction(animation: nil)) private var isDragging = false
+    @GestureState(resetTransaction: Transaction(animation: nil)) private var isTransforming = false
+    @State private var dragStart: DragStart?
+    @State private var transformStart: TransformStart?
+    @State private var guides = CanvasAlignmentGuides()
+    @State private var snappedAngle: Double?
+    @State private var didChange = false
+
+    private struct DragStart {
+        var position: CanvasPoint
+        var translation: CGSize
+    }
+
+    private struct TransformStart {
+        var scale: CGFloat
+        let rotationDegrees: Double
+        var hasRotated = false
+    }
+
+    private var isManipulating: Bool { isDragging || isTransforming || isHandleActive }
+
+    func body(content: Content) -> some View {
+        content
+            .transaction {
+                if isManipulating {
+                    $0.animation = nil
+                    $0.disablesAnimations = true
+                }
+            }
+            .highPriorityGesture(dragGesture, including: isHandleActive ? .none : .all)
+            .simultaneousGesture(transformGesture, including: isHandleActive ? .none : .all)
+            .preference(key: CanvasElementInteractionKey.self, value: isManipulating)
+            .preference(key: CanvasAlignmentGuidesKey.self, value: guides)
+            .onChange(of: isDragging || isTransforming) { _, active in isGestureActive = active }
+            .onChange(of: isDragging) { _, active in
+                if !active { dragStart = nil; guides = .init() }
+            }
+            .onChange(of: isTransforming) { _, active in
+                if !active { transformStart = nil; snappedAngle = nil }
+            }
+            .onChange(of: isHandleActive) { _, active in
+                if active { didChange = true }
+            }
+            .onChange(of: isManipulating) { previous, active in
+                if previous && !active { finishManipulation() }
+            }
+            .onDisappear {
+                isGestureActive = false
+                if didChange { didChange = false; onChange() }
+            }
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 3, coordinateSpace: .named("mealCanvas"))
+            .updating($isDragging) { _, active, transaction in
+                active = true
+                transaction.animation = nil
+            }
+            .onChanged { updateDrag($0) }
+    }
+
+    private func updateDrag(_ value: DragGesture.Value) {
+        guard !isTransforming, !isHandleActive else { return }
+        if !isSelected { onSelect() }
+        if dragStart == nil {
+            dragStart = DragStart(position: position, translation: value.translation)
+        }
+        guard let start = dragStart else { return }
+        let delta = CGSize(width: value.translation.width - start.translation.width,
+                           height: value.translation.height - start.translation.height)
+        let placement = CanvasDragPlacement(position: start.position, translation: delta,
+            canvasSize: canvasSize, isDragging: true, alignmentTargets: alignmentTargets, previousGuides: guides)
+        if (placement.guides.vertical != nil && placement.guides.vertical != guides.vertical)
+            || (placement.guides.horizontal != nil && placement.guides.horizontal != guides.horizontal) {
+            Haptics.light()
+        }
+        guides = placement.guides
+        if position != placement.position {
+            if !didChange { onTransformStart() }
+            didChange = true
+            withTransaction(Transaction(animation: nil)) { position = placement.position }
+        }
+        let requestedX = start.position.x + delta.width / max(canvasSize.width, 1)
+        let requestedY = start.position.y + delta.height / max(canvasSize.height, 1)
+        if requestedX < 0.02 || requestedX > 0.98 {
+            dragStart?.position.x = placement.position.x
+            dragStart?.translation.width = value.translation.width
+        }
+        if requestedY < 0.02 || requestedY > 0.98 {
+            dragStart?.position.y = placement.position.y
+            dragStart?.translation.height = value.translation.height
+        }
+    }
+
+    private var transformGesture: some Gesture {
+        MagnifyGesture().simultaneously(with: RotateGesture())
+            .updating($isTransforming) { _, active, transaction in
+                active = true
+                transaction.animation = nil
+            }
+            .onChanged { updateTransform($0) }
+    }
+
+    private func updateTransform(_ value: SimultaneousGesture<MagnifyGesture, RotateGesture>.Value) {
+        guard !isHandleActive else { return }
+        if !isSelected { onSelect() }
+        if transformStart == nil {
+            transformStart = TransformStart(scale: scale, rotationDegrees: rotationDegrees)
+            let nearest = (rotationDegrees / 90).rounded() * 90
+            snappedAngle = abs(rotationDegrees - nearest) <= 3 ? nearest : nil
+            dragStart = nil
+            guides = .init()
+        }
+        guard let start = transformStart else { return }
+        let nextScale = value.first.map { min(max(start.scale * $0.magnification, 0.3), 3) } ?? scale
+        if let zoom = value.first, zoom.magnification > 0,
+           start.scale * zoom.magnification != nextScale {
+            // 到达大小边界后重新定标，反向捏合立即生效。
+            transformStart?.scale = nextScale / zoom.magnification
+        }
+        var nextRotation = rotationDegrees
+        if let rotation = value.second?.rotation.degrees, rotation != 0 || start.hasRotated {
+            transformStart?.hasRotated = true
+            let placement = CanvasRotationPlacement(degrees: start.rotationDegrees + rotation, previousSnap: snappedAngle)
+            if let target = placement.snappedAngle, target != snappedAngle { Haptics.light() }
+            snappedAngle = placement.snappedAngle
+            nextRotation = placement.degrees
+        }
+        if nextScale != scale || nextRotation != rotationDegrees {
+            if !didChange { onTransformStart() }
+            didChange = true
+            withTransaction(Transaction(animation: nil)) {
+                scale = nextScale
+                rotationDegrees = nextRotation
+            }
+        }
+    }
+
+    // 大小、角度和位置已在操作中更新，结束时只保存，不再次叠加手势增量。
+    private func finishManipulation() {
+        guard didChange else { return }
+        didChange = false
+        onChange()
+        if scenePhase == .active { Haptics.light() }
+    }
+}
+
+private enum CanvasTransformHandle: CaseIterable, Hashable {
+    case rotate, resize
+
+    var icon: ProductIcon.Kind { self == .rotate ? .rotate : .resize }
+    var title: String { self == .rotate ? "旋转" : "缩放" }
+}
+
+private struct CanvasTransformOverlay {
+    let selection: CanvasSelection
+    let controls: CanvasTransformControls
+    let size: CGSize
+    var center: CGPoint { controls.center }
+}
+
+private struct CanvasTransformOverlayKey: PreferenceKey {
+    static var defaultValue: CanvasTransformOverlay? { nil }
+    static func reduce(value: inout CanvasTransformOverlay?, nextValue: () -> CanvasTransformOverlay?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
+private struct CanvasTransformControls: View {
+    let size: CGSize
+    let canvasSize: CGSize
+    @Binding var rotationDegrees: Double
+    @Binding var position: CanvasPoint
+    @Binding var scale: CGFloat
+    @Binding var isHandleActive: Bool
+    let onTransformStart: () -> Void
+    let onChange: () -> Void
+
+    @GestureState(resetTransaction: Transaction(animation: nil)) private var activeHandle: CanvasTransformHandle? = nil
+    @State private var start: HandleStart?
+
+    private struct HandleStart {
+        let center: CGPoint
+        let grabOffset: CGSize
+        var scale: CGFloat
+        var distance: CGFloat
+        var angle: Double
+        var rotationDegrees: Double
+        var snappedAngle: Double?
+        var hasMoved = false
+        var hasChanged = false
+    }
+
+    var selectionSize: CGSize {
+        CGSize(width: (size.width + 8) * displayScale,
+               height: (size.height + 8) * displayScale)
+    }
+
+    var center: CGPoint {
+        CGPoint(x: position.x * canvasSize.width, y: position.y * canvasSize.height)
+    }
+
+    private var displayScale: CGFloat { min(max(scale, 0.3), 3) }
+    private var handleScale: CGFloat { min(max(displayScale, 0.65), 1.2) }
+
+    var body: some View {
+        ZStack {
+            Ellipse()
+                .stroke(.white.opacity(0.75), lineWidth: 0.75)
+                .frame(width: selectionSize.width, height: selectionSize.height)
+                .rotationEffect(.degrees(rotationDegrees))
+                .shadow(color: .black.opacity(0.3), radius: 1)
+                .position(x: size.width / 2, y: size.height / 2)
+                .allowsHitTesting(false)
+            ForEach(CanvasTransformHandle.allCases, id: \.self) { handle in
+                ProductIcon(kind: handle.icon)
+                    .foregroundStyle(.white)
+                    .scaleEffect(0.625 * handleScale)
+                    .rotationEffect(.degrees(handle == .resize ? rotationDegrees : 0))
+                    .frame(width: 26 * handleScale, height: 26 * handleScale)
+                    .overlay(Circle().stroke(.white.opacity(0.9), lineWidth: 0.75))
+                    .shadow(color: .black.opacity(0.3), radius: 1, y: 0.5)
+                    .opacity(activeHandle == nil || activeHandle == handle ? 1 : 0.5)
+                    .frame(width: 44, height: 44)
+                    .contentShape(handleHitArea(handle))
+                    .highPriorityGesture(handleGesture(handle))
+                    .allowsHitTesting(activeHandle == nil || activeHandle == handle)
+                    .position(handlePosition(handle))
+                    .accessibilityElement()
+                    .accessibilityLabel(handle.title)
+                    .accessibilityValue(handle == .resize
+                        ? "\(Int((scale * 100).rounded()))%"
+                        : "\(Int(rotationDegrees.rounded()))度")
+                    .accessibilityAdjustableAction { direction in
+                        let increment: Double
+                        switch direction {
+                        case .increment: increment = 1
+                        case .decrement: increment = -1
+                        @unknown default: return
+                        }
+                        if handle == .resize {
+                            let nextScale = min(max(scale + increment * 0.1, 0.3), 3)
+                            guard nextScale != scale else { return }
+                            onTransformStart()
+                            scale = nextScale
+                        } else {
+                            onTransformStart()
+                            rotationDegrees += increment * 15
+                        }
+                        onChange()
+                    }
+            }
+        }
+        .onChange(of: activeHandle != nil) { _, active in
+            isHandleActive = active
+            if !active { start = nil }
+        }
+        .onDisappear { isHandleActive = false }
+    }
+
+    private func handlePosition(_ handle: CanvasTransformHandle) -> CGPoint {
+        let direction: CGFloat = handle == .rotate ? -1 : 1
+        let x = selectionSize.width / (2 * sqrt(2)) * direction
+        let y = selectionSize.height / (2 * sqrt(2)) * direction
+        let angle = rotationDegrees * .pi / 180
+        let point = CGPoint(x: center.x + x * cos(angle) - y * sin(angle),
+                            y: center.y + x * sin(angle) + y * cos(angle))
+        // 手柄靠近画布边缘时仍保留完整触摸范围，并避开底部工具。
+        let visibleX = min(max(point.x, 22), max(22, canvasSize.width - 22))
+        let visibleY = min(max(point.y, 22), max(22, canvasSize.height - 72))
+        return CGPoint(x: size.width / 2 + visibleX - center.x,
+                       y: size.height / 2 + visibleY - center.y)
+    }
+
+    private func handleHitArea(_ handle: CanvasTransformHandle) -> Path {
+        let point = handlePosition(handle)
+        let other = handlePosition(handle == .rotate ? .resize : .rotate)
+        let distance = hypot(other.x - point.x, other.y - point.y)
+        guard distance < 44 else { return Path(ellipseIn: CGRect(x: 0, y: 0, width: 44, height: 44)) }
+        // 用中垂线分开重叠的触摸范围，两个手柄中心都能准确命中。
+        let angle = atan2(Double(other.y - point.y), Double(other.x - point.x))
+        let spread = acos(Double(distance / 44))
+        var path = Path()
+        path.addArc(center: CGPoint(x: 22, y: 22), radius: 22,
+                    startAngle: .radians(angle + spread), endAngle: .radians(angle + 2 * .pi - spread), clockwise: false)
+        path.closeSubpath()
+        return path
+    }
+
+    private func handleGesture(_ handle: CanvasTransformHandle) -> some Gesture {
+        DragGesture(minimumDistance: 0, coordinateSpace: .named("mealCanvas"))
+            .updating($activeHandle) { _, active, transaction in
+                if active == nil || active == handle { active = handle }
+                transaction.animation = nil
+            }
+            .onChanged { value in
+                guard activeHandle == nil || activeHandle == handle else { return }
+                if start == nil {
+                    let point = handlePosition(handle)
+                    let vector = CGPoint(x: point.x - size.width / 2, y: point.y - size.height / 2)
+                    let grabOffset = CGSize(width: value.startLocation.x - center.x - vector.x,
+                                            height: value.startLocation.y - center.y - vector.y)
+                    let nearest = (rotationDegrees / 90).rounded() * 90
+                    start = HandleStart(center: center, grabOffset: grabOffset,
+                        scale: scale, distance: max(hypot(vector.x, vector.y), 8),
+                        angle: atan2(vector.y, vector.x), rotationDegrees: rotationDegrees,
+                        snappedAngle: abs(rotationDegrees - nearest) <= 3 ? nearest : nil)
+                    Haptics.light()
+                }
+                guard var start else { return }
+                guard start.hasMoved || value.translation != .zero else { return }
+                start.hasMoved = true
+                let vector = CGPoint(x: value.location.x - start.grabOffset.width - start.center.x,
+                                     y: value.location.y - start.grabOffset.height - start.center.y)
+                withTransaction(Transaction(animation: nil)) {
+                    if handle == .resize {
+                        let distance = max(hypot(vector.x, vector.y), 8)
+                        let requested = start.scale * distance / start.distance
+                        let nextScale = min(max(requested, 0.3), 3)
+                        if nextScale != scale, !start.hasChanged {
+                            onTransformStart()
+                            start.hasChanged = true
+                        }
+                        scale = nextScale
+                        if requested != scale {
+                            start.scale = scale
+                            start.distance = distance
+                        }
+                    } else if hypot(vector.x, vector.y) >= 8 {
+                        let angle = atan2(vector.y, vector.x)
+                        let delta = atan2(sin(angle - start.angle), cos(angle - start.angle))
+                        start.rotationDegrees += delta * 180 / .pi
+                        start.angle = angle
+                        let placement = CanvasRotationPlacement(degrees: start.rotationDegrees, previousSnap: start.snappedAngle)
+                        if let target = placement.snappedAngle, target != start.snappedAngle { Haptics.light() }
+                        start.snappedAngle = placement.snappedAngle
+                        if placement.degrees != rotationDegrees, !start.hasChanged {
+                            onTransformStart()
+                            start.hasChanged = true
+                        }
+                        rotationDegrees = placement.degrees
+                    }
+                }
+                self.start = start
+            }
+    }
+}
+
 private enum CanvasSelection: Hashable {
     case sticker(UUID)
     case note(UUID)
 }
 
+private struct CanvasTransformUndo: Equatable {
+    let selection: CanvasSelection
+    let position: CanvasPoint
+    let scale: CGFloat
+    let rotationDegrees: Double
+}
+
+private struct CanvasElementBoundsKey: PreferenceKey {
+    static var defaultValue: [CanvasSelection: CGRect] { [:] }
+    static func reduce(value: inout [CanvasSelection: CGRect], nextValue: () -> [CanvasSelection: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
+    }
+}
+
+private struct CanvasElementBoundsReporter: ViewModifier {
+    let selection: CanvasSelection
+    let canvasSize: CGSize
+    let position: CanvasPoint
+    let scale: CGFloat
+    let rotation: Double
+    let isEnabled: Bool
+    var contentRatio: CGFloat = 1
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if isEnabled {
+                GeometryReader { proxy in
+                    let angle = rotation * .pi / 180
+                    let width = proxy.size.width * min(max(scale, 0.3), 3) * contentRatio
+                    let height = proxy.size.height * min(max(scale, 0.3), 3) * contentRatio
+                    let rotatedWidth = abs(cos(angle)) * width + abs(sin(angle)) * height
+                    let rotatedHeight = abs(sin(angle)) * width + abs(cos(angle)) * height
+                    Color.clear
+                        .allowsHitTesting(false)
+                        .preference(key: CanvasElementBoundsKey.self, value: [selection: CGRect(
+                            x: position.x * canvasSize.width - rotatedWidth / 2,
+                            y: position.y * canvasSize.height - rotatedHeight / 2,
+                            width: rotatedWidth, height: rotatedHeight)])
+                }
+            }
+        }
+    }
+}
+
+private struct CanvasMarqueeSelection: View {
+    let canvasSize: CGSize
+    let bounds: [CanvasSelection: CGRect]
+    let layers: [CanvasSelection]
+    @Binding var selection: Set<CanvasSelection>
+    let transforms: [CanvasTransformUndo]
+    let onMoveStart: ([CanvasTransformUndo]) -> Void
+    let onMove: ([CanvasTransformUndo], CGSize) -> Void
+    let onChange: () -> Void
+
+    @GestureState(resetTransaction: Transaction(animation: nil)) private var isDragging = false
+    @State private var drag: SelectionDrag?
+
+    private struct SelectionDrag {
+        let origin: CGPoint
+        var rectangle: CGRect?
+        var movement: GroupMovement?
+    }
+
+    private struct GroupMovement {
+        let transforms: [CanvasTransformUndo]
+        var translation: CGSize = .zero
+        var offset: CGSize = .zero
+        var appliedOffset: CGSize = .zero
+        var didChange = false
+    }
+
+    private var groupBounds: CGRect? {
+        let rect = selection.compactMap { bounds[$0] }.reduce(CGRect.null) { $0.union($1) }
+        guard !rect.isNull else { return nil }
+        return rect.insetBy(dx: -8, dy: -8)
+            .intersection(CGRect(origin: .zero, size: canvasSize).insetBy(dx: 4, dy: 4))
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear
+            ForEach(layers.filter { selection.contains($0) }, id: \.self) { item in
+                if let rect = bounds[item] {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(.white.opacity(0.65), lineWidth: 0.7)
+                        .frame(width: rect.width, height: rect.height)
+                        .position(x: rect.midX, y: rect.midY)
+                }
+            }
+            if let rect = drag?.rectangle ?? groupBounds {
+                RoundedRectangle(cornerRadius: drag?.rectangle == nil ? 8 : 2)
+                    .stroke(.white, style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                    .shadow(color: .black.opacity(0.25), radius: 1)
+                    .frame(width: rect.width, height: rect.height)
+                    .position(x: rect.midX, y: rect.midY)
+            }
+        }
+        .frame(width: canvasSize.width, height: canvasSize.height)
+        .contentShape(Rectangle())
+        .gesture(selectionGesture)
+        .transaction { $0.animation = nil; $0.disablesAnimations = true }
+        .preference(key: CanvasElementInteractionKey.self, value: isDragging)
+        .onChange(of: isDragging) { _, active in
+            guard !active, let drag else { return }
+            if drag.movement?.didChange == true { onChange() }
+            if drag.movement?.didChange == true || (drag.movement == nil && !selection.isEmpty) { Haptics.light() }
+            self.drag = nil
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("框选画布内容")
+        .accessibilityValue("已选 \(selection.count) 项")
+        .accessibilityHint("拖出范围选中内容，拖动选区整体移动；点按内容可补选或取消")
+    }
+
+    private var selectionGesture: some Gesture {
+        DragGesture(minimumDistance: 3, coordinateSpace: .named("mealCanvas"))
+            .updating($isDragging) { _, active, _ in active = true }
+            .onChanged { value in
+                guard canvasSize.width > 0, canvasSize.height > 0 else { return }
+                var drag = self.drag ?? SelectionDrag(origin: value.startLocation,
+                    movement: groupBounds?.contains(value.startLocation) == true && !transforms.isEmpty
+                        ? GroupMovement(transforms: transforms) : nil)
+                if var movement = drag.movement {
+                    let requested = CGSize(
+                        width: movement.offset.width + (value.translation.width - movement.translation.width) / canvasSize.width,
+                        height: movement.offset.height + (value.translation.height - movement.translation.height) / canvasSize.height)
+                    let xs = movement.transforms.map(\.position.x)
+                    let ys = movement.transforms.map(\.position.y)
+                    let offset = CGSize(
+                        width: min(max(requested.width, min(0, 0.02 - (xs.min() ?? 0))), max(0, 0.98 - (xs.max() ?? 1))),
+                        height: min(max(requested.height, min(0, 0.02 - (ys.min() ?? 0))), max(0, 0.98 - (ys.max() ?? 1))))
+                    if offset != movement.appliedOffset {
+                        if !movement.didChange { onMoveStart(movement.transforms) }
+                        onMove(movement.transforms, offset)
+                        movement.appliedOffset = offset
+                        movement.didChange = true
+                    }
+                    if requested.width != offset.width {
+                        movement.offset.width = offset.width
+                        movement.translation.width = value.translation.width
+                    }
+                    if requested.height != offset.height {
+                        movement.offset.height = offset.height
+                        movement.translation.height = value.translation.height
+                    }
+                    drag.movement = movement
+                } else {
+                    let end = CGPoint(x: min(max(value.location.x, 0), canvasSize.width),
+                        y: min(max(value.location.y, 0), canvasSize.height))
+                    let rect = CGRect(x: min(drag.origin.x, end.x), y: min(drag.origin.y, end.y),
+                        width: abs(end.x - drag.origin.x), height: abs(end.y - drag.origin.y))
+                    drag.rectangle = rect
+                    selection = Set(bounds.compactMap { rect.intersects($0.value) ? $0.key : nil })
+                }
+                self.drag = drag
+            }
+            .exclusively(before: SpatialTapGesture(coordinateSpace: .named("mealCanvas"))
+                .onEnded { value in
+                    if let item = layers.first(where: { bounds[$0]?.contains(value.location) == true }) {
+                        if selection.contains(item) { selection.remove(item) } else { selection.insert(item) }
+                        Haptics.light()
+                    } else {
+                        selection.removeAll()
+                    }
+                })
+    }
+}
+
 private enum CanvasEditorPanel: String, CaseIterable, Identifiable {
+    case transform
     case insert
     case emoji
     case effects
@@ -1498,9 +2342,10 @@ private enum CanvasEditorPanel: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .transform: return "大小与角度"
         case .insert: return "文字"
         case .emoji: return "贴纸"
-        case .effects: return "动效"
+        case .effects: return "特效"
         case .brush: return "画笔"
         case .background: return "背景"
         }
@@ -1508,6 +2353,7 @@ private enum CanvasEditorPanel: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .transform: return "arrow.up.left.and.arrow.down.right"
         case .insert: return "plus"
         case .emoji: return "face.smiling"
         case .effects: return "sparkles"
@@ -1536,11 +2382,21 @@ private enum CanvasEmojiCategory: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .recent: return "最近"
+        case .recent: return "常用"
         case .mood: return "情绪"
         case .food: return "美食"
         case .nature: return "自然"
         case .symbols: return "符号"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .recent: return "square.grid.2x2"
+        case .mood: return "face.smiling"
+        case .food: return "fork.knife"
+        case .nature: return "leaf"
+        case .symbols: return "heart"
         }
     }
 
@@ -1582,7 +2438,7 @@ private enum CanvasEmojiCategory: String, CaseIterable, Identifiable, Hashable {
                 "🫶", "💖", "💗", "💛", "💚", "💙", "💜", "🤎",
                 "🖤", "🤍", "💯", "💥", "💬", "🔔", "🎁", "🎀",
                 "🎨", "📸", "🎬", "🎧", "🎤", "🎶", "🪩", "🕯️",
-                "💎", "🪄", "🧡", "💜", "🩷", "🩵", "🤝", "🩶"
+                "💎", "🪄", "🧡", "🩷", "🩵", "🤝", "🩶"
             ]
         }
     }
@@ -1591,51 +2447,61 @@ private enum CanvasEmojiCategory: String, CaseIterable, Identifiable, Hashable {
 /// 画布里的按钮都用同一套轻触反馈：缩小、变淡、回弹，避免 SwiftUI 默认的“点了没反应”。
 private struct CanvasPressStyle: ButtonStyle {
     var scale: CGFloat = 0.96
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? scale : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? scale : 1)
             .opacity(configuration.isPressed ? 0.72 : 1)
-            .animation(.spring(response: 0.20, dampingFraction: 0.72), value: configuration.isPressed)
+            .animation(reduceMotion ? nil : .spring(response: 0.20, dampingFraction: 0.82), value: configuration.isPressed)
     }
 }
 
 private enum CanvasEffectPreviewKind {
-    case sticker(CanvasEffect)
-    case text(CanvasTextEffect)
+    case sticker(CanvasEffect, CanvasSticker)
+    case text(CanvasTextEffect, CanvasNote)
 }
 
 private struct CanvasEffectPreview: View {
     let kind: CanvasEffectPreviewKind
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var isAnimated: Bool {
+        switch kind {
+        case .sticker(let effect, _): return effect.isAnimated
+        case .text(let effect, _): return effect != .plain
+        }
+    }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion || scenePhase != .active || !isAnimated)) { context in
             let time = context.date.timeIntervalSinceReferenceDate
             switch kind {
-            case .text(let effect):
-                let visible = effect.visibleText("今晚吃点好的", time: time, reduceMotion: reduceMotion)
-                Text(visible.isEmpty ? "今晚…" : visible)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(CanvasPalette.ink)
-                    .lineLimit(1)
+            case .text(let effect, let note):
+                let visible = effect.visibleText(note.text, time: time, reduceMotion: reduceMotion)
+                Text(visible.isEmpty ? "…" : visible)
+                    .font(note.isEmoji ? .system(size: 31) : note.font.font(size: 13, weight: .semibold))
+                    .foregroundStyle(note.color == .white ? CanvasPalette.ink : note.color.color)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
                     .minimumScaleFactor(0.55)
                     .opacity(effect.opacity(time: time, reduceMotion: reduceMotion))
                     .offset(effect.offset(time: time, reduceMotion: reduceMotion))
                     .scaleEffect(x: effect.scaleX(time: time, reduceMotion: reduceMotion), y: effect.scaleY(time: time, reduceMotion: reduceMotion))
                     .rotationEffect(.degrees(effect.rotation(time: time, reduceMotion: reduceMotion)))
-            case .sticker(let effect):
-                Text("🍓")
-                    .font(.system(size: 31))
-                    .scaleEffect(effect == .bounce && !reduceMotion ? 1 + abs(sin(time * 2.1)) * 0.10 : 1)
-                    .rotationEffect(.degrees(effect == .shake && !reduceMotion ? sin(time * 9) * 4 : 0))
+            case .sticker(let effect, let sticker):
+                StickerImageView(assetName: sticker.assetName, image: sticker.image, name: sticker.name)
+                    .frame(width: 44, height: 44)
+                    .scaleEffect(effect.scale(time: time, reduceMotion: reduceMotion))
+                    .rotationEffect(.degrees(effect.rotation(time: time, reduceMotion: reduceMotion)))
+                    .offset(effect.offset(time: time, reduceMotion: reduceMotion))
                     .shadow(color: effect == .glow ? CanvasPalette.accent.opacity(0.78) : .clear, radius: effect == .glow ? 10 : 0)
                     .overlay {
                         if effect == .outline {
-                            Text("🍓")
-                                .font(.system(size: 31))
-                                .foregroundStyle(.clear)
-                                .overlay(Text("🍓").font(.system(size: 31)).foregroundStyle(.clear).shadow(color: CanvasPalette.ink.opacity(0.7), radius: 0, x: 1, y: 0))
+                            StickerBlobShape(index: sticker.shapeIndex)
+                                .stroke(CanvasPalette.accent, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
+                                .frame(width: 48, height: 48)
                         }
                     }
             }
@@ -1672,7 +2538,7 @@ private struct CanvasInlineEditorCard: View {
                     CanvasEffectPreview(kind: previewKind)
                         .frame(maxWidth: .infinity)
                         .frame(height: 54)
-                        .background(isSelected ? CanvasPalette.accent.opacity(0.16) : CanvasPalette.page, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .accessibilityHidden(true)
                 } else {
                     Image(systemName: icon)
                         .font(.system(size: 17, weight: .semibold))
@@ -1693,13 +2559,14 @@ private struct CanvasInlineEditorCard: View {
             }
             .frame(maxWidth: .infinity)
             .frame(height: subtitle == nil ? 76 : 88)
-            .background(isSelected ? CanvasPalette.accent.opacity(0.12) : Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .background(isSelected ? Color.paperGreen : Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(isSelected ? CanvasPalette.accent : CanvasPalette.ink.opacity(0.08), lineWidth: isSelected ? 1.2 : 0.8)
             }
         }
         .buttonStyle(CanvasPressStyle(scale: 0.95))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .animation(.spring(response: 0.24, dampingFraction: 0.80), value: isSelected)
     }
 }
@@ -1711,6 +2578,8 @@ private enum CanvasLayerMove: Equatable {
 private struct CanvasLayerEntry {
     let selection: CanvasSelection
     let layer: Int
+    let title: String
+    let icon: String
 }
 
 private enum CanvasBrushColor: String, CaseIterable, Identifiable, Codable {
@@ -1726,17 +2595,6 @@ private enum CanvasBrushColor: String, CaseIterable, Identifiable, Codable {
         case .sky: return "海盐蓝"
         case .mint: return "薄荷绿"
         case .ink: return "墨黑"
-        }
-    }
-
-    var shortTitle: String {
-        switch self {
-        case .white: return "白"
-        case .butter: return "黄"
-        case .coral: return "红"
-        case .sky: return "蓝"
-        case .mint: return "绿"
-        case .ink: return "黑"
         }
     }
 
@@ -1892,6 +2750,7 @@ private struct CanvasDocument: Codable {
     var stickers: [CanvasSticker]
     var notes: [CanvasNote]
     var strokes: [CanvasStroke]
+    var size: CGSize?
 
     init(
         background: String,
@@ -1899,7 +2758,8 @@ private struct CanvasDocument: Codable {
         customBackgroundData: Data? = nil,
         stickers: [CanvasSticker],
         notes: [CanvasNote],
-        strokes: [CanvasStroke] = []
+        strokes: [CanvasStroke] = [],
+        size: CGSize? = nil
     ) {
         self.background = background
         self.blur = blur
@@ -1907,10 +2767,11 @@ private struct CanvasDocument: Codable {
         self.stickers = stickers
         self.notes = notes
         self.strokes = strokes
+        self.size = size
     }
 
     private enum CodingKeys: String, CodingKey {
-        case background, blur, customBackgroundData, stickers, notes, strokes
+        case background, blur, customBackgroundData, stickers, notes, strokes, size
     }
 
     init(from decoder: Decoder) throws {
@@ -1921,6 +2782,7 @@ private struct CanvasDocument: Codable {
         stickers = try container.decode([CanvasSticker].self, forKey: .stickers)
         notes = try container.decode([CanvasNote].self, forKey: .notes)
         strokes = try container.decodeIfPresent([CanvasStroke].self, forKey: .strokes) ?? []
+        size = try container.decodeIfPresent(CGSize.self, forKey: .size)
     }
 }
 
@@ -1946,8 +2808,8 @@ func mealCanvasDocumentExists(mealID: UInt) -> Bool {
 private struct CanvasMediaBackground: View {
     let source: CanvasBackground
     let blur: Double
-    let reduceMotion: Bool
     let customData: Data?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -1960,12 +2822,13 @@ private struct CanvasMediaBackground: View {
                     .resizable()
                     .scaledToFill()
             } else if let url = source.url {
-                AsyncImage(url: url) { phase in
+                AsyncImage(url: url, transaction: Transaction(animation: reduceMotion ? nil : .easeInOut(duration: 0.25))) { phase in
                     switch phase {
                     case .success(let image):
                         image
                             .resizable()
                             .scaledToFill()
+                            .transition(.opacity)
                     case .empty:
                         fallback
                             .overlay(ProgressView().tint(.white.opacity(0.8)))
@@ -1985,42 +2848,8 @@ private struct CanvasMediaBackground: View {
                     .fill(.ultraThinMaterial)
                     .opacity(min(0.42, blur / 20))
             }
-            LinearGradient(
-                colors: [.black.opacity(0.02), .black.opacity(0.30)],
-                startPoint: .top,
-                endPoint: .bottom
-            )
         }
-        // 手账的底图要有空气感，压低一点数码照片的饱和度，让菜品和手绘
-        // 元素成为主角，而不是被背景抢走注意力。
-        .saturation(0.94)
-        .contrast(1.02)
         .clipped()
-        .overlay {
-            // A barely-there warm wash keeps downloaded photos in the same
-            // paper world as the page instead of letting neon colors take over.
-            Rectangle()
-                .fill(Color(red: 0.83, green: 0.86, blue: 0.70).opacity(0.045))
-                .blendMode(.softLight)
-
-            if !reduceMotion {
-                TimelineView(.animation(minimumInterval: 1.0 / 20.0)) { context in
-                    let phase = context.date.timeIntervalSinceReferenceDate
-                    RadialGradient(
-                        colors: [.white.opacity(0.075), .white.opacity(0.0)],
-                        center: .center,
-                        startRadius: 8,
-                        endRadius: 118
-                    )
-                    .frame(width: 190, height: 270)
-                    .blur(radius: 18)
-                    .rotationEffect(.degrees(14))
-                    .offset(x: CGFloat(sin(phase / 3.2) * 250), y: CGFloat(cos(phase / 4.1) * 230))
-                    .blendMode(.screen)
-                }
-                .allowsHitTesting(false)
-            }
-        }
     }
 
     private var fallback: some View {
@@ -2114,6 +2943,7 @@ private enum CanvasEffect: String, CaseIterable, Identifiable, Codable {
     case glow
     case shake
     case bounce
+    case float
 
     var id: String { rawValue }
 
@@ -2121,9 +2951,10 @@ private enum CanvasEffect: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .none: return "无"
         case .outline: return "描边"
-        case .glow: return "星闪"
+        case .glow: return "柔光"
         case .shake: return "抖动"
         case .bounce: return "弹跳"
+        case .float: return "漂浮"
         }
     }
 
@@ -2134,7 +2965,27 @@ private enum CanvasEffect: String, CaseIterable, Identifiable, Codable {
         case .glow: return "sparkles"
         case .shake: return "waveform.path.ecg"
         case .bounce: return "arrow.up.and.down"
+        case .float: return "wind"
         }
+    }
+
+    var isAnimated: Bool { self == .shake || self == .bounce || self == .float }
+
+    func offset(time: TimeInterval, reduceMotion: Bool) -> CGSize {
+        guard !reduceMotion else { return .zero }
+        switch self {
+        case .float: return CGSize(width: 0, height: sin(time * 1.5) * 6)
+        case .bounce: return CGSize(width: 0, height: -abs(sin(time * 2.1)) * 5)
+        default: return .zero
+        }
+    }
+
+    func rotation(time: TimeInterval, reduceMotion: Bool) -> Double {
+        self == .shake && !reduceMotion ? sin(time * 9) * 3 : 0
+    }
+
+    func scale(time: TimeInterval, reduceMotion: Bool) -> CGFloat {
+        self == .bounce && !reduceMotion ? 1 + abs(sin(time * 2.1)) * 0.04 : 1
     }
 }
 
@@ -2225,115 +3076,114 @@ private struct CanvasStickerView: View {
     let canvasSize: CGSize
     let isSelected: Bool
     let reduceMotion: Bool
+    var reportsBounds = false
+    var alignmentTargets: [CanvasPoint] = []
+    var onTransformStart: () -> Void = {}
     let onSelect: () -> Void
+    let onTransform: () -> Void
     let onLayerMove: (CanvasLayerMove) -> Void
     let onDelete: () -> Void
     let onChange: () -> Void
 
-    @GestureState private var drag: CGSize = .zero
-    @GestureState private var pinch: CGFloat = 1
-    @GestureState private var twist: Angle = .zero
-    @State private var animationPhase = false
+    @State private var isGestureActive = false
+    @State private var hasAppeared = false
+    @State private var isHandleActive = false
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var isManipulating: Bool { isGestureActive || isHandleActive }
 
     private var baseSize: CGFloat {
-        max(74, min(canvasSize.width, canvasSize.height) * 0.23)
+        max(110, min(canvasSize.width, canvasSize.height) * 0.37)
     }
 
     var body: some View {
-        let x = canvasSize.width * sticker.position.x + drag.width
-        let y = canvasSize.height * sticker.position.y + drag.height
+        let x = canvasSize.width * sticker.position.x
+        let y = canvasSize.height * sticker.position.y
 
-        ZStack(alignment: .topTrailing) {
-            StickerImageView(assetName: sticker.assetName, name: sticker.name)
-                .frame(width: baseSize * 1.12, height: baseSize * 1.12)
-                .overlay {
-                    // 每道菜都保留一圈很轻的手绘轮廓，让透明图像像贴纸而不是
-                    // 生硬地漂浮在照片上；选中或显式描边时再提高对比度。
-                    if sticker.effect == .outline || isSelected {
-                        StickerBlobShape(index: sticker.shapeIndex)
-                            .stroke(
-                                .white.opacity(isSelected || sticker.effect == .outline ? 0.94 : 0.46),
-                                style: StrokeStyle(
-                                    lineWidth: isSelected ? 2 : 1.6,
-                                    lineCap: .round,
-                                    dash: [5, 4]
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion || scenePhase != .active || isSelected || isManipulating || !sticker.effect.isAnimated)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            let effectsPaused = reduceMotion || isSelected || isManipulating
+            ZStack(alignment: .topTrailing) {
+                StickerImageView(assetName: sticker.assetName, image: sticker.image, name: sticker.name)
+                    .frame(width: baseSize * 1.12, height: baseSize * 1.12)
+                    .overlay {
+                        if sticker.effect == .outline {
+                            StickerBlobShape(index: sticker.shapeIndex)
+                                .stroke(
+                                    .white.opacity(0.94),
+                                    style: StrokeStyle(
+                                        lineWidth: 1.6,
+                                        lineCap: .round,
+                                        dash: [5, 4]
+                                    )
                                 )
-                            )
+                        }
                     }
-                }
-                .shadow(
-                    color: sticker.effect == .glow
-                        ? .white.opacity(0.8)
-                        : Color(red: 0.20, green: 0.16, blue: 0.12).opacity(0.24),
-                    radius: sticker.effect == .glow ? 20 : 8,
-                    y: 6
-                )
+                    .shadow(
+                        color: sticker.effect == .glow
+                            ? .white.opacity(0.8)
+                            : Color(red: 0.20, green: 0.16, blue: 0.12).opacity(0.24),
+                        radius: sticker.effect == .glow ? 20 : 8,
+                        y: 6
+                    )
+                    .scaleEffect(sticker.effect.scale(time: time, reduceMotion: effectsPaused))
+                    .rotationEffect(.degrees(sticker.effect.rotation(time: time, reduceMotion: effectsPaused)))
+                    .offset(sticker.effect.offset(time: time, reduceMotion: effectsPaused))
 
+            }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isSelected)
         }
         .frame(width: baseSize * 1.34, height: baseSize * 1.34)
-        .scaleEffect(sticker.scale * pinch * bounceScale)
-        .rotationEffect(.degrees(sticker.rotationDegrees) + twist + shakeAngle)
-        .position(x: x, y: y)
         .contentShape(Rectangle())
-        .animation(.spring(response: 0.30, dampingFraction: 0.76), value: isSelected)
+        .scaleEffect(min(max(sticker.scale, 0.3), 3) * (hasAppeared || reduceMotion ? 1 : 0.86))
+        .rotationEffect(.degrees(sticker.rotationDegrees))
+        .opacity(hasAppeared || reduceMotion ? 1 : 0)
+        .onTapGesture(perform: onSelect)
         .animation(.spring(response: 0.34, dampingFraction: 0.74), value: sticker.effect)
-        // 画布外层有 ScrollView，移动必须优先交给当前选中的元素。
-        .highPriorityGesture(dragGesture)
-        .simultaneousGesture(magnifyGesture)
-        .simultaneousGesture(rotationGesture)
         .contextMenu {
             elementContextMenu
         }
         .accessibilityLabel(sticker.name)
-        .accessibilityHint("先点按选中，再拖动移动；双指缩放或旋转；长按管理层级或删除")
-        .accessibilityAddTraits(.isButton)
+        .accessibilityValue("\(Int((sticker.scale * 100).rounded()))%，\(sticker.effect.title)")
+        .accessibilityHint("拖动内容移动，选中后拖动旋转或缩放手柄；双指可缩放或旋转")
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { onSelect() }
-        .onAppear { startEffectAnimation() }
-        .onChange(of: sticker.effect) { _, _ in startEffectAnimation() }
-    }
-
-    private var dragGesture: some Gesture {
-        DragGesture()
-            .updating($drag) { value, state, _ in
-                guard isSelected else { return }
-                state = value.translation
+        .onAppear {
+            withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.72)) {
+                hasAppeared = true
             }
-            .onEnded { value in
-                guard isSelected, canvasSize.width > 0, canvasSize.height > 0 else { return }
-                sticker.position.x = min(max(sticker.position.x + value.translation.width / canvasSize.width, 0.10), 0.90)
-                sticker.position.y = min(max(sticker.position.y + value.translation.height / canvasSize.height, 0.10), 0.90)
-                onChange()
+        }
+        .overlay {
+            if isSelected {
+                GeometryReader { proxy in
+                    Color.clear
+                        .allowsHitTesting(false)
+                        .preference(key: CanvasTransformOverlayKey.self, value: CanvasTransformOverlay(
+                            selection: .sticker(sticker.id),
+                            controls: CanvasTransformControls(size: proxy.size, canvasSize: canvasSize,
+                                rotationDegrees: $sticker.rotationDegrees,
+                                position: $sticker.position,
+                                scale: $sticker.scale, isHandleActive: $isHandleActive,
+                                onTransformStart: onTransformStart,
+                                onChange: onChange),
+                            size: proxy.size))
+                }
             }
-    }
-
-    private var magnifyGesture: some Gesture {
-        MagnificationGesture()
-            .updating($pinch) { value, state, _ in
-                guard isSelected else { return }
-                state = value
-            }
-            .onEnded { value in
-                guard isSelected else { return }
-                sticker.scale = min(max(sticker.scale * value, 0.55), 1.75)
-                onChange()
-            }
-    }
-
-    private var rotationGesture: some Gesture {
-        RotationGesture()
-            .updating($twist) { value, state, _ in
-                guard isSelected else { return }
-                state = value
-            }
-            .onEnded { value in
-                guard isSelected else { return }
-                sticker.rotationDegrees += value.degrees
-                onChange()
-            }
+        }
+        .modifier(CanvasElementBoundsReporter(selection: .sticker(sticker.id), canvasSize: canvasSize,
+            position: sticker.position, scale: sticker.scale, rotation: sticker.rotationDegrees,
+            isEnabled: reportsBounds, contentRatio: 1.12 / 1.34))
+        .modifier(CanvasManipulation(position: $sticker.position, scale: $sticker.scale,
+            rotationDegrees: $sticker.rotationDegrees, isGestureActive: $isGestureActive,
+            canvasSize: canvasSize, alignmentTargets: alignmentTargets, isSelected: isSelected, isHandleActive: isHandleActive,
+            onTransformStart: onTransformStart,
+            onSelect: onSelect, onChange: onChange))
+        .position(x: x, y: y)
     }
 
     @ViewBuilder
     private var elementContextMenu: some View {
+        Button("精细调整", systemImage: "arrow.up.left.and.arrow.down.right", action: onTransform)
         Section("层级") {
             Button("置顶", systemImage: "arrow.up.to.line") {
                 onLayerMove(.front)
@@ -2351,50 +3201,62 @@ private struct CanvasStickerView: View {
         Button("删除", systemImage: "trash", role: .destructive, action: onDelete)
     }
 
-    private var shakeAngle: Angle {
-        guard sticker.effect == .shake, !reduceMotion, animationPhase else { return .zero }
-        return .degrees(-2)
-    }
-
-    private var bounceScale: CGFloat {
-        guard sticker.effect == .bounce, !reduceMotion, animationPhase else { return 1 }
-        return 1.045
-    }
-
-    private func startEffectAnimation() {
-        guard !reduceMotion, sticker.effect == .shake || sticker.effect == .bounce else {
-            animationPhase = false
-            return
-        }
-        withAnimation(.easeInOut(duration: 0.65).repeatForever(autoreverses: true)) {
-            animationPhase.toggle()
-        }
-    }
 }
 
-/// 画布只使用真正带 alpha 的贴纸资源；菜单封面图不再被硬切成贴纸。
+/// 真实菜品照片、透明食物素材和菜名使用相同的操作区域。
 private struct StickerImageView: View {
     let assetName: String?
+    let image: String?
     let name: String
+    @State private var loadedPhoto: UIImage?
+    @State private var finishedLoading = false
 
     var body: some View {
         Group {
-            if let assetName {
-                Image(assetName)
-                    .resizable()
-                    .scaledToFit()
-            } else {
-                placeholder
+            if APIConfig.imageURL(image) != nil {
+                GeometryReader { proxy in
+                    Group {
+                        if let loadedPhoto {
+                            Image(uiImage: loadedPhoto).resizable().scaledToFill()
+                        } else if finishedLoading {
+                            fallback
+                        } else {
+                            ProgressView().tint(.white)
+                        }
+                    }
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                }
+            } else { fallback }
+        }
+        .task(id: image) {
+            guard loadedPhoto == nil, let url = APIConfig.imageURL(image) else { return }
+            finishedLoading = false
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                guard !Task.isCancelled else { return }
+                if (response as? HTTPURLResponse)?.statusCode == 200 {
+                    loadedPhoto = UIImage(data: data)
+                }
+                finishedLoading = true
+            } catch {
+                if !Task.isCancelled { finishedLoading = true }
             }
         }
-        .background(Color.clear)
     }
 
-    private var placeholder: some View {
-        Image(systemName: "fork.knife.circle")
-            .font(.system(size: 34, weight: .light))
-            .foregroundStyle(.white.opacity(0.78))
-            .shadow(color: .black.opacity(0.22), radius: 4, y: 2)
+    @ViewBuilder
+    private var fallback: some View {
+        if let assetName {
+            Image(assetName).resizable().scaledToFit()
+        } else {
+            Text(name)
+                .font(.system(size: 17, weight: .semibold))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white)
+                .padding(14)
+                .background(.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 18))
+        }
     }
 }
 
@@ -2537,16 +3399,26 @@ private struct CanvasNoteView: View {
     @Binding var note: CanvasNote
     let canvasSize: CGSize
     let isSelected: Bool
+    var freezesMotion = false
+    var reportsBounds = false
+    var alignmentTargets: [CanvasPoint] = []
+    var onTransformStart: () -> Void = {}
     let onSelect: () -> Void
+    let onEdit: () -> Void
+    let onTransform: () -> Void
     let onLayerMove: (CanvasLayerMove) -> Void
     let onDelete: () -> Void
     let onChange: () -> Void
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    private var reduceMotion: Bool { freezesMotion || systemReduceMotion }
 
-    @GestureState private var drag: CGSize = .zero
-    @GestureState private var pinch: CGFloat = 1
-    @GestureState private var twist: Angle = .zero
+    @State private var isGestureActive = false
+    @State private var hasAppeared = false
+    @State private var isHandleActive = false
+
+    private var isManipulating: Bool { isGestureActive || isHandleActive }
 
     private var textFontSize: CGFloat {
         let count = note.text.count
@@ -2556,9 +3428,13 @@ private struct CanvasNoteView: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: note.textEffect == .plain ? 1 : 1.0 / 24.0)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: reduceMotion || scenePhase != .active || isSelected || isManipulating || note.textEffect == .plain)) { context in
             let time = context.date.timeIntervalSinceReferenceDate
-            Text(note.textEffect.visibleText(note.text, time: time, reduceMotion: reduceMotion))
+            let effectsPaused = reduceMotion || isSelected || isManipulating
+            ZStack {
+                Text(note.text).hidden()
+                Text(note.textEffect.visibleText(note.text, time: time, reduceMotion: effectsPaused))
+            }
                 .font(note.isEmoji ? .system(size: 38) : note.font.font(size: textFontSize, weight: .semibold))
                 .tracking(note.isEmoji ? 0 : 0.35)
                 .multilineTextAlignment(.center)
@@ -2569,94 +3445,72 @@ private struct CanvasNoteView: View {
                 .padding(.horizontal, note.isEmoji ? 0 : 5)
                 .padding(.vertical, note.isEmoji ? 0 : 3)
                 .background(.clear)
-                .overlay(alignment: .bottom) {
-                    if !note.isEmoji && !note.text.isEmpty {
-                        CanvasNoteUnderline()
-                            .stroke(
-                                .white.opacity(0.72),
-                                style: StrokeStyle(lineWidth: 1.15, lineCap: .round)
-                            )
-                            .frame(height: 7)
-                            .padding(.horizontal, 3)
-                            .offset(y: 5)
-                    }
-                }
-                .overlay {
-                    if isSelected {
-                        RoundedRectangle(cornerRadius: note.isEmoji ? 18 : 9, style: .continuous)
-                            .stroke(.white.opacity(0.92), style: StrokeStyle(lineWidth: 1.6, dash: [4, 3]))
-                            .padding(note.isEmoji ? -6 : -3)
-                    }
-                }
-                .opacity(note.textEffect.opacity(time: time, reduceMotion: reduceMotion))
-                .offset(note.textEffect.offset(time: time, reduceMotion: reduceMotion))
-                .scaleEffect(x: note.textEffect.scaleX(time: time, reduceMotion: reduceMotion), y: note.textEffect.scaleY(time: time, reduceMotion: reduceMotion))
-                .rotationEffect(.degrees(note.textEffect.rotation(time: time, reduceMotion: reduceMotion)))
+                .opacity(note.textEffect.opacity(time: time, reduceMotion: effectsPaused))
+                .offset(note.textEffect.offset(time: time, reduceMotion: effectsPaused))
+                .scaleEffect(x: note.textEffect.scaleX(time: time, reduceMotion: effectsPaused), y: note.textEffect.scaleY(time: time, reduceMotion: effectsPaused))
+                .rotationEffect(.degrees(note.textEffect.rotation(time: time, reduceMotion: effectsPaused)))
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isSelected)
         }
-        // Typewriter starts with an empty prefix. Keep a stable hit target so
-        // the layer remains selectable while it is being revealed.
+        // 完整文字保留排版尺寸，打字过程中选中框和触摸区域保持稳定。
         .padding(.horizontal, note.isEmoji ? 10 : 16)
         .padding(.vertical, note.isEmoji ? 10 : 12)
         .frame(minWidth: note.isEmoji ? 64 : 136, minHeight: note.isEmoji ? 64 : 64)
-        .position(
-            x: canvasSize.width * note.position.x + drag.width,
-            y: canvasSize.height * note.position.y + drag.height
-        )
-        .scaleEffect(note.scale * pinch)
-        .rotationEffect(.degrees(note.rotationDegrees) + twist)
         .contentShape(Rectangle())
-        .animation(.spring(response: 0.30, dampingFraction: 0.76), value: isSelected)
+        .scaleEffect(min(max(note.scale, 0.3), 3) * (hasAppeared || reduceMotion ? 1 : 0.86))
+        .rotationEffect(.degrees(note.rotationDegrees))
+        .opacity(hasAppeared || reduceMotion ? 1 : 0)
+        .onTapGesture(perform: onSelect)
         .animation(.spring(response: 0.34, dampingFraction: 0.74), value: note.textEffect)
-        // 画布外层有 ScrollView，移动必须优先交给当前选中的元素。
-        .highPriorityGesture(
-            DragGesture()
-                .updating($drag) { value, state, _ in
-                    guard isSelected else { return }
-                    state = value.translation
-                }
-                .onEnded { value in
-                    guard isSelected, canvasSize.width > 0, canvasSize.height > 0 else { return }
-                    note.position.x = min(max(note.position.x + value.translation.width / canvasSize.width, 0.08), 0.92)
-                    note.position.y = min(max(note.position.y + value.translation.height / canvasSize.height, 0.08), 0.92)
-                    onChange()
-                }
-        )
-        .simultaneousGesture(
-            MagnificationGesture()
-                .updating($pinch) { value, state, _ in
-                    guard isSelected else { return }
-                    state = value
-                }
-                .onEnded { value in
-                    guard isSelected else { return }
-                    note.scale = min(max(note.scale * value, 0.55), 1.75)
-                    onChange()
-                }
-        )
-        .simultaneousGesture(
-            RotationGesture()
-                .updating($twist) { value, state, _ in
-                    guard isSelected else { return }
-                    state = value
-                }
-                .onEnded { value in
-                    guard isSelected else { return }
-                    note.rotationDegrees += value.degrees
-                    onChange()
-                }
-        )
         .contextMenu {
             elementContextMenu
         }
         .accessibilityLabel(note.isEmoji ? "\(note.text)表情" : "画布文字")
-        .accessibilityValue(note.textEffect.title)
-        .accessibilityHint("先点按选中，再拖动移动；双指缩放或旋转；长按管理层级或删除")
-        .accessibilityAddTraits(.isButton)
+        .accessibilityValue("\(Int((note.scale * 100).rounded()))%，\(note.textEffect.title)")
+        .accessibilityHint("拖动内容移动，选中后拖动旋转或缩放手柄；双指可缩放或旋转")
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { onSelect() }
+        .onAppear {
+            withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.72)) {
+                hasAppeared = true
+            }
+        }
+        .overlay {
+            if isSelected {
+                GeometryReader { proxy in
+                    Color.clear
+                        .allowsHitTesting(false)
+                        .preference(key: CanvasTransformOverlayKey.self, value: CanvasTransformOverlay(
+                            selection: .note(note.id),
+                            controls: CanvasTransformControls(size: proxy.size, canvasSize: canvasSize,
+                                rotationDegrees: $note.rotationDegrees,
+                                position: $note.position,
+                                scale: $note.scale, isHandleActive: $isHandleActive,
+                                onTransformStart: onTransformStart,
+                                onChange: onChange),
+                            size: proxy.size))
+                }
+            }
+        }
+        .modifier(CanvasElementBoundsReporter(selection: .note(note.id), canvasSize: canvasSize,
+            position: note.position, scale: note.scale, rotation: note.rotationDegrees,
+            isEnabled: reportsBounds))
+        .modifier(CanvasManipulation(position: $note.position, scale: $note.scale,
+            rotationDegrees: $note.rotationDegrees, isGestureActive: $isGestureActive,
+            canvasSize: canvasSize, alignmentTargets: alignmentTargets, isSelected: isSelected, isHandleActive: isHandleActive,
+            onTransformStart: onTransformStart,
+            onSelect: onSelect, onChange: onChange))
+        .position(
+            x: canvasSize.width * note.position.x,
+            y: canvasSize.height * note.position.y
+        )
     }
 
     @ViewBuilder
     private var elementContextMenu: some View {
+        if !note.isEmoji {
+            Button("编辑文字", systemImage: "pencil", action: onEdit)
+        }
+        Button("精细调整", systemImage: "arrow.up.left.and.arrow.down.right", action: onTransform)
         Section("层级") {
             Button("置顶", systemImage: "arrow.up.to.line") {
                 onLayerMove(.front)
@@ -2672,22 +3526,6 @@ private struct CanvasNoteView: View {
             }
         }
         Button("删除", systemImage: "trash", role: .destructive, action: onDelete)
-    }
-}
-
-/// A tiny irregular underline makes a text note feel drawn onto the page,
-/// while staying quiet enough to disappear into the background when unselected.
-private struct CanvasNoteUnderline: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let y = rect.midY
-        path.move(to: CGPoint(x: rect.minX, y: y + 0.6))
-        path.addCurve(
-            to: CGPoint(x: rect.maxX, y: y - 0.4),
-            control1: CGPoint(x: rect.width * 0.28, y: y - 1.8),
-            control2: CGPoint(x: rect.width * 0.72, y: y + 1.6)
-        )
-        return path
     }
 }
 
@@ -2801,35 +3639,28 @@ private struct CanvasDrawingView: View {
     }
 }
 
-private struct LiveControlLabel: View {
-    let title: String
-    let icon: String?
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Text(title)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-            if let icon {
-                Image(systemName: icon)
-                    .font(.system(size: 10, weight: .bold))
-            }
-        }
-        .foregroundStyle(.white)
-        .frame(width: 52, height: 31)
-        .background(.black.opacity(0.28), in: Capsule())
-        .overlay(
-            Capsule()
-                .stroke(.white.opacity(0.16), lineWidth: 0.8)
-        )
-    }
-}
-
 private struct LiveControlButton: View {
-    let title: String?
-    let icon: String?
+    let title: String
+    let icon: String
     var isActive = false
     var isDisabled = false
     let action: () -> Void
+
+    private var glyph: ProductIcon.Kind? {
+        switch icon {
+        case "plus": return .add
+        case "textformat": return .text
+        case "face.smiling": return .sticker
+        case "pencil": return .draw
+        case "photo": return .background
+        case "arrow.uturn.backward": return .undo
+        case "slider.horizontal.3": return .adjust
+        case "checkmark": return .check
+        case "selection": return .select
+        case "selection.all": return .selectAll
+        default: return nil
+        }
+    }
 
     var body: some View {
         Button {
@@ -2837,92 +3668,125 @@ private struct LiveControlButton: View {
             action()
         } label: {
             Group {
-                if let title, let icon {
-                    Label(title, systemImage: icon)
-                        .labelStyle(.titleAndIcon)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                } else if let title {
-                    Text(title)
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                } else if let icon {
+                if let glyph {
+                    ProductIcon(kind: glyph)
+                } else {
                     Image(systemName: icon)
-                        .font(.system(size: 14, weight: .semibold))
+                        .font(.system(size: 20, weight: .regular))
                 }
             }
-            .foregroundStyle(isDisabled ? .white.opacity(0.38) : .white)
-            .frame(width: title == nil ? 34 : 43, height: 31)
-            .background(isActive ? .white.opacity(0.24) : .black.opacity(0.28), in: Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(isActive ? .white.opacity(0.72) : .white.opacity(0.16), lineWidth: 0.8)
-            )
+            .scaleEffect(0.88)
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .background {
+                Circle()
+                    .fill(isActive ? CanvasPalette.accent : .black.opacity(0.44))
+                    .frame(width: 34, height: 34)
+            }
+            .contentShape(Circle())
+            .opacity(isDisabled ? 0.4 : 1)
         }
-        .buttonStyle(CanvasPressStyle(scale: 0.94))
+        .buttonStyle(CanvasPressStyle(scale: 0.90))
         .disabled(isDisabled)
-        .accessibilityLabel(accessibilityTitle)
-    }
-
-    private var accessibilityTitle: String {
-        if let title { return title }
-        switch icon {
-        case "sparkles": return "特效"
-        case "face.smiling": return "贴纸"
-        case "pencil.tip": return isActive ? "关闭画笔" : "打开画笔"
-        case "photo": return "背景"
-        case "speaker.slash", "speaker.wave.2": return "声音"
-        default: return "画布工具"
-        }
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }
 
-/// 编辑文字或画笔时的轻量全屏聚焦层。它不是一个可点击的模态遮罩，
-/// 只用 Material 和极低对比度把页面压软，保留画布的实时可操作性。
 private struct CanvasElementActionBar: View {
+    let canEditText: Bool
+    let isDeleting: Bool
+    let layers: [CanvasLayerEntry]
+    let selection: CanvasSelection
+    let onSelect: (CanvasSelection) -> Void
+    let onEditText: () -> Void
     let onEdit: () -> Void
     let onLayerMove: (CanvasLayerMove) -> Void
     let onDelete: () -> Void
 
     var body: some View {
         HStack(spacing: 3) {
-            Button(action: onEdit) {
-                Label("动效", systemImage: "sparkles")
-                    .labelStyle(.titleAndIcon)
+            if canEditText {
+                Button {
+                    Haptics.light()
+                    onEditText()
+                } label: {
+                    ProductIcon(kind: .draw)
+                        .frame(minWidth: 44, minHeight: 44)
+                }
+                .accessibilityLabel("编辑文字")
             }
-            .accessibilityLabel("编辑动效")
+            Button {
+                Haptics.light()
+                onEdit()
+            } label: {
+                ProductIcon(kind: .effects)
+                    .foregroundStyle(CanvasPalette.accent)
+                    .frame(minWidth: 44, minHeight: 44)
+            }
+            .accessibilityLabel("添加特效")
 
             Menu {
                 Section("层级") {
                     Button("置顶", systemImage: "arrow.up.to.line") {
                         onLayerMove(.front)
                     }
+                    .disabled(layers.first?.selection == selection)
                     Button("上移一层", systemImage: "chevron.up") {
                         onLayerMove(.forward)
                     }
+                    .disabled(layers.first?.selection == selection)
                     Button("下移一层", systemImage: "chevron.down") {
                         onLayerMove(.backward)
                     }
+                    .disabled(layers.last?.selection == selection)
                     Button("置底", systemImage: "arrow.down.to.line") {
                         onLayerMove(.back)
                     }
+                    .disabled(layers.last?.selection == selection)
+                }
+                Menu("选择内容", systemImage: "square.stack") {
+                    ForEach(layers, id: \.selection) { entry in
+                        Button(entry.title, systemImage: entry.selection == selection ? "checkmark" : entry.icon) {
+                            onSelect(entry.selection)
+                        }
+                        .accessibilityAddTraits(entry.selection == selection ? .isSelected : [])
+                    }
                 }
             } label: {
-                Image(systemName: "square.3.layers.3d")
+                ProductIcon(kind: .layers)
+                    .frame(width: 44, height: 44)
             }
             .accessibilityLabel("调整图层")
+            .accessibilityHint("可选择被遮住的内容，或调整前后层级")
 
-            Button(role: .destructive, action: onDelete) {
-                Image(systemName: "trash")
+            Button(role: .destructive) {
+                Haptics.light()
+                onDelete()
+            } label: {
+                Group {
+                    if isDeleting {
+                        ProgressView().tint(CanvasPalette.accent)
+                    } else {
+                        ProductIcon(kind: .trash)
+                    }
+                }
+                .frame(width: 44, height: 44)
             }
             .accessibilityLabel("删除元素")
         }
-        .font(.system(size: 13, weight: .bold))
-        .foregroundStyle(.white)
-        .padding(5)
-        .background(.black.opacity(0.64), in: Capsule())
+        .font(.system(size: 13, weight: .medium))
+        .lineLimit(1)
+        .foregroundStyle(CanvasPalette.ink)
+        .padding(4)
+        .background(.white.opacity(0.96), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
-            Capsule().stroke(.white.opacity(0.42), lineWidth: 0.8)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(CanvasPalette.ink.opacity(0.06), lineWidth: 0.8)
         }
+        .shadow(color: CanvasPalette.ink.opacity(0.14), radius: 8, y: 3)
         .buttonStyle(CanvasPressStyle(scale: 0.88))
+        .disabled(isDeleting)
     }
 }
 

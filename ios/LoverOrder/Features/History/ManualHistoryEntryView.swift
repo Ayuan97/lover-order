@@ -11,6 +11,7 @@ struct ManualHistoryEntryView: View {
     @State private var note = ""
     @State private var comment = ""
     @State private var photoLinks: [String] = []
+    @State private var photosUploading = false
     @State private var isSaving = false
     @State private var errorMessage: String?
 
@@ -25,7 +26,6 @@ struct ManualHistoryEntryView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    scenePicker
                     inputCard
                     photosCard
                     if let errorMessage {
@@ -43,37 +43,35 @@ struct ManualHistoryEntryView: View {
                 PrimaryButton(title: isSaving ? "正在保存" : "记下这顿", isLoading: isSaving) {
                     Task { await save() }
                 }
-                .disabled(isSaving)
+                .disabled(isSaving || photosUploading)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
                 .background(Color.cardBackground)
             }
+            .interactiveDismissDisabled(isSaving || photosUploading)
             .navigationTitle("记一顿")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("取消") { dismiss() }
                         .foregroundStyle(Color.inkSecondary)
+                        .disabled(isSaving || photosUploading)
                 }
             }
         }
     }
 
-    private var scenePicker: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("和谁一起")
-                .font(AppFont.headline(15))
-                .foregroundStyle(Color.inkPrimary)
-            Picker("和谁一起", selection: $scene) {
-                Text("家人一起吃").tag(MealScene.household)
-                Text("朋友聚餐").tag(MealScene.dining)
-            }
-            .pickerStyle(.segmented)
-        }
-    }
-
     private var inputCard: some View {
         VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                FieldLabel("和谁一起")
+                Spacer()
+                Picker("和谁一起", selection: $scene) {
+                    Text("家人一起吃").tag(MealScene.household)
+                    Text("朋友聚餐").tag(MealScene.dining)
+                }
+                .tint(Color.brandGreen)
+            }
             FieldLabel("标题")
             TextField("比如：周五晚饭、生日聚餐", text: $title)
                 .font(AppFont.body(15))
@@ -108,7 +106,7 @@ struct ManualHistoryEntryView: View {
         .padding(16)
         .background(Color.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.black.opacity(0.08), lineWidth: 1))
+
     }
 
     private var photosCard: some View {
@@ -116,7 +114,7 @@ struct ManualHistoryEntryView: View {
             Text("这顿饭的照片")
                 .font(AppFont.headline(15))
                 .foregroundStyle(Color.inkPrimary)
-            MultiPhotoPicker(urls: $photoLinks, maxCount: 9)
+            MultiPhotoPicker(urls: $photoLinks, maxCount: 9) { photosUploading = $0 }
         }
     }
 

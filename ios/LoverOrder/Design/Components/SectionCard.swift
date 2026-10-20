@@ -16,8 +16,6 @@ struct SectionCard<Content: View>: View {
             RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .fill(Color.cardBackground)
         )
-        .hairline(radius)
-        .appCardShadow()
     }
 }
 
