@@ -45,11 +45,14 @@ struct MealCanvasView: View {
     @State private var insertMode: CanvasInsertItem?
     @State private var draftText = ""
     @State private var emojiCategory: CanvasEmojiCategory = .recent
+    @State private var stickerSource: CanvasStickerSource = .favorites
+    @State private var stickerFavorites: [StickerFavorite] = []
+    @State private var isLoadingStickerFavorites = false
+    @State private var stickerFavoritesError: String?
+    @State private var deletingStickerFavorites: Set<UInt> = []
     @Namespace private var emojiCategoryHighlight
     @State private var backgroundPhotoItem: PhotosPickerItem?
     @State private var showPhotoSticker = false
-    @State private var photoStickerMealID: UInt?
-    @State private var didInsertPhotoSticker = false
     @FocusState private var textEditorFocused: Bool
 
     var body: some View {
@@ -147,16 +150,10 @@ struct MealCanvasView: View {
                     .presentationCornerRadius(28)
                     .presentationBackground(Color.white)
                     .presentationBackgroundInteraction(.enabled)
-                    .fullScreenCover(isPresented: $showPhotoSticker, onDismiss: {
-                        if didInsertPhotoSticker { closeEditor() }
-                    }) {
-                        PhotoStickerSheet { path in
-                            guard photoStickerMealID == vm.meal?.id else {
-                                vm.tipMessage = "这一顿已切换，请重新添加贴图"
-                                return
-                            }
-                            insertPhotoSticker(path)
-                            didInsertPhotoSticker = true
+                    .fullScreenCover(isPresented: $showPhotoSticker) {
+                        PhotoStickerSheet { saved in
+                            rememberStickerFavorite(saved)
+                            stickerSource = .favorites
                         }
                     }
             }
@@ -348,6 +345,10 @@ struct MealCanvasView: View {
                         onDelete: {
                             deleteElement(.sticker(sticker.id))
                         },
+                        onFavorite: sticker.mealDishID == nil ? {
+                            guard let image = sticker.image else { return }
+                            Task { await saveCanvasStickerFavorite(image) }
+                        } : nil,
                         onChange: saveDocument
                     )
                     .transition(.opacity)
@@ -716,10 +717,43 @@ struct MealCanvasView: View {
     }
 
     private var emojiEditorContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 8) {
+                ForEach(CanvasStickerSource.allCases) { source in
+                    Button {
+                        Haptics.light()
+                        stickerSource = source
+                    } label: {
+                        Text(source.rawValue)
+                            .font(AppFont.body(15))
+                            .foregroundStyle(stickerSource == source ? CanvasPalette.accent : CanvasPalette.muted)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .background {
+                                if stickerSource == source {
+                                    RoundedRectangle(cornerRadius: 14)
+                                        .fill(Color.paperGreen)
+                                        .matchedGeometryEffect(id: "stickerSource", in: emojiCategoryHighlight)
+                                }
+                            }
+                    }
+                    .buttonStyle(SoftPressStyle())
+                    .accessibilityAddTraits(stickerSource == source ? .isSelected : [])
+                }
+            }
+            if stickerSource == .favorites {
+                favoriteStickerContent
+            } else {
+                systemStickerContent
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: stickerSource)
+        .task { await loadStickerFavorites() }
+    }
+
+    private var favoriteStickerContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             Button {
-                photoStickerMealID = vm.meal?.id
-                didInsertPhotoSticker = false
                 showPhotoSticker = true
             } label: {
                 Label("拍照做贴图", systemImage: "camera")
@@ -730,7 +764,81 @@ struct MealCanvasView: View {
                     .background(CanvasPalette.page, in: RoundedRectangle(cornerRadius: 14))
             }
             .buttonStyle(SoftPressStyle())
-            .disabled(vm.meal == nil)
+            if let stickerFavoritesError {
+                HStack {
+                    Text(stickerFavoritesError)
+                        .font(AppFont.caption())
+                        .foregroundStyle(Color.errorInk)
+                    Spacer(minLength: 8)
+                    Button("重试") { Task { await loadStickerFavorites() } }
+                        .foregroundStyle(CanvasPalette.accent)
+                        .frame(minHeight: 44)
+                        .disabled(isLoadingStickerFavorites)
+                }
+            }
+            if isLoadingStickerFavorites && stickerFavorites.isEmpty {
+                ProgressView().tint(CanvasPalette.accent)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if stickerFavorites.isEmpty && stickerFavoritesError == nil {
+                VStack(spacing: 10) {
+                    Image(systemName: "star")
+                        .font(.system(size: 28))
+                        .foregroundStyle(CanvasPalette.muted)
+                    Text("还没有收藏的贴图")
+                        .font(AppFont.body(15))
+                        .foregroundStyle(CanvasPalette.ink)
+                    Text("拍照抠图后先存到这里，想用时再放到画布。")
+                        .font(AppFont.caption())
+                        .foregroundStyle(CanvasPalette.muted)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                Text("点贴图添加到画布，长按可取消收藏")
+                    .font(AppFont.caption())
+                    .foregroundStyle(CanvasPalette.muted)
+                ScrollView(.vertical, showsIndicators: false) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                        ForEach(stickerFavorites) { favorite in
+                            Button {
+                                insertPhotoSticker(favorite.image)
+                                closeEditor()
+                            } label: {
+                                AsyncImage(url: APIConfig.imageURL(favorite.image)) { phase in
+                                    if let image = phase.image {
+                                        image.resizable().scaledToFit()
+                                    } else if phase.error != nil {
+                                        Image(systemName: "photo.badge.exclamationmark")
+                                            .foregroundStyle(CanvasPalette.muted)
+                                    } else {
+                                        ProgressView().tint(CanvasPalette.accent)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity)
+                                .frame(height: 84)
+                                .padding(8)
+                                .background(CanvasPalette.page, in: RoundedRectangle(cornerRadius: 14))
+                            }
+                            .buttonStyle(CanvasPressStyle(scale: 0.94))
+                            .disabled(vm.meal == nil || deletingStickerFavorites.contains(favorite.id))
+                            .opacity(deletingStickerFavorites.contains(favorite.id) ? 0.4 : 1)
+                            .accessibilityLabel("添加收藏贴图到画布")
+                            .contextMenu {
+                                Button("取消收藏", systemImage: "star.slash", role: .destructive) {
+                                    Task { await deleteStickerFavorite(favorite) }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.bottom, 6)
+                }
+                .refreshable { await loadStickerFavorites() }
+            }
+        }
+    }
+
+    private var systemStickerContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 4) {
                 ForEach(CanvasEmojiCategory.allCases) { item in
                     Button {
@@ -1309,6 +1417,7 @@ struct MealCanvasView: View {
 
     private func openEditor(_ panel: CanvasEditorPanel) {
         finishSelecting()
+        if panel == .emoji { stickerSource = .favorites }
         transformEditorHasChanges = false
         withAnimation(.spring(response: 0.28, dampingFraction: 0.80)) {
             activeEditor = panel
@@ -1521,6 +1630,46 @@ struct MealCanvasView: View {
         selectedNoteID = nil
         saveDocument()
         Haptics.light()
+    }
+
+    @MainActor
+    private func loadStickerFavorites() async {
+        guard !isLoadingStickerFavorites else { return }
+        isLoadingStickerFavorites = true
+        stickerFavoritesError = nil
+        defer { isLoadingStickerFavorites = false }
+        do {
+            let items = try await StickerFavoriteService.shared.list()
+            guard !Task.isCancelled else { return }
+            stickerFavorites = items
+        } catch {
+            if !Task.isCancelled { stickerFavoritesError = error.localizedDescription }
+        }
+    }
+
+    private func rememberStickerFavorite(_ favorite: StickerFavorite) {
+        stickerFavorites.removeAll { $0.id == favorite.id }
+        stickerFavorites.insert(favorite, at: 0)
+        stickerFavoritesError = nil
+    }
+
+    @MainActor
+    private func saveCanvasStickerFavorite(_ image: String) async {
+        do {
+            let saved = try await StickerFavoriteService.shared.save(image: image)
+            rememberStickerFavorite(saved)
+            vm.tipMessage = "贴图已存到收藏"
+        } catch { vm.errorMessage = error.localizedDescription }
+    }
+
+    @MainActor
+    private func deleteStickerFavorite(_ favorite: StickerFavorite) async {
+        guard deletingStickerFavorites.insert(favorite.id).inserted else { return }
+        defer { deletingStickerFavorites.remove(favorite.id) }
+        do {
+            try await StickerFavoriteService.shared.delete(id: favorite.id)
+            stickerFavorites.removeAll { $0.id == favorite.id }
+        } catch { stickerFavoritesError = error.localizedDescription }
     }
 
     private func syncStickers() {
@@ -2419,6 +2568,13 @@ private enum CanvasEditorPanel: String, CaseIterable, Identifiable {
     }
 }
 
+private enum CanvasStickerSource: String, CaseIterable, Identifiable {
+    case favorites = "收藏"
+    case system = "系统自带"
+
+    var id: String { rawValue }
+}
+
 private enum CanvasEmojiCatalog {
     static let items = [
         "♥︎", "♡", "😊", "😍", "🥰", "😋", "🤤", "🫶",
@@ -3143,6 +3299,7 @@ private struct CanvasStickerView: View {
     let onTransform: () -> Void
     let onLayerMove: (CanvasLayerMove) -> Void
     let onDelete: () -> Void
+    var onFavorite: (() -> Void)? = nil
     let onChange: () -> Void
 
     @State private var isGestureActive = false
@@ -3244,6 +3401,9 @@ private struct CanvasStickerView: View {
     @ViewBuilder
     private var elementContextMenu: some View {
         Button("精细调整", systemImage: "arrow.up.left.and.arrow.down.right", action: onTransform)
+        if let onFavorite {
+            Button("收藏贴图", systemImage: "star", action: onFavorite)
+        }
         Section("层级") {
             Button("置顶", systemImage: "arrow.up.to.line") {
                 onLayerMove(.front)

@@ -70,6 +70,7 @@ func registerRoutes(r *gin.Engine) {
 	mealH := api.NewMealHandler()
 	uploadH := api.NewUploadHandler()
 	diningH := api.NewDiningHandler()
+	stickerFavoriteH := api.NewStickerFavoriteHandler()
 
 	v1 := r.Group("/api/v1")
 	{
@@ -106,6 +107,13 @@ func registerRoutes(r *gin.Engine) {
 			upload := secured.Group("/upload")
 			{
 				upload.POST("/image", uploadH.Image)
+			}
+
+			stickerFavorites := secured.Group("/sticker-favorites")
+			{
+				stickerFavorites.GET("/list", stickerFavoriteH.List)
+				stickerFavorites.POST("/create", stickerFavoriteH.Create)
+				stickerFavorites.POST("/:id/delete", stickerFavoriteH.Delete)
 			}
 
 			dining := secured.Group("/dining")

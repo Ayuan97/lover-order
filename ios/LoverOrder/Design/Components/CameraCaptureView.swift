@@ -185,7 +185,7 @@ struct CameraCaptureView: View {
                 .frame(width: 100)
                 .disabled(isProcessing || isSaving)
                 PrimaryButton(
-                    title: previewSample != nil ? "重播动效" : mode == .sticker ? "添加到画布" : cutoutError != nil ? "保留照片" : "使用照片",
+                    title: previewSample != nil ? "重播动效" : mode == .sticker ? "保存到收藏" : cutoutError != nil ? "保留照片" : "使用照片",
                     isLoading: isSaving
                 ) {
                     if previewSample != nil { generationID = UUID() }

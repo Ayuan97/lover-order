@@ -79,6 +79,7 @@ func AutoMigrate() error {
 		&RecipeCategory{},
 		&Recipe{},
 		&Favorite{},
+		&StickerFavorite{},
 		&MealSession{},
 		&MealDish{},
 		&MealReview{},
