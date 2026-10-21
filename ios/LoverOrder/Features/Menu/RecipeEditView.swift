@@ -27,7 +27,7 @@ struct RecipeEditView: View {
     @State private var steps: [CookingStep] = []
     @State private var flavorTags: Set<String> = []
     @State private var moodTags: Set<Mood> = []
-    @State private var sceneTags: Set<MealScene> = []
+    @State private var sceneTags: Set<String> = []
 
     @State private var categories: [RecipeCategory] = []
     @State private var categoryId: UInt?
@@ -258,8 +258,8 @@ struct RecipeEditView: View {
                 .padding(.top, AppSpacing.xs)
             FlowLayout(spacing: AppSpacing.sm) {
                 ForEach(MealScene.productCases, id: \.self) { s in
-                    chipButton(title: s.label, isSelected: sceneTags.contains(s)) {
-                        toggleSet(&sceneTags, value: s)
+                    chipButton(title: s.label, isSelected: sceneTags.contains(s.rawValue)) {
+                        toggleSet(&sceneTags, value: s.rawValue)
                     }
                 }
             }

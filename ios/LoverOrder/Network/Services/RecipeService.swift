@@ -35,7 +35,7 @@ struct RecipeInput: Encodable {
     var tips: String?
     var tags: [String]?
     var moodTags: [Mood]?
-    var sceneTags: [MealScene]?
+    var sceneTags: [String]?
 
     enum CodingKeys: String, CodingKey {
         case name

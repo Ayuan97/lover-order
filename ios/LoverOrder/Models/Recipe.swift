@@ -80,7 +80,8 @@ struct Recipe: Codable, Identifiable, Hashable {
     var tips: String?
     var tags: [String]?
     var moodTags: [Mood]?
-    var sceneTags: [MealScene]?
+    // 保留旧菜谱中的原始标签，未知值不应导致整张菜谱解析失败。
+    var sceneTags: [String]?
     var viewCount: Int?
     var useCount: Int?
     var lastUsedAt: Date?
