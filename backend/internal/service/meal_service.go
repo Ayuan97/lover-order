@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"lover-order-backend/internal/model"
 )
 
@@ -289,21 +290,36 @@ func (s *MealService) AddDish(householdID, userID, id uint, in DishInput) (*mode
 
 // RemoveDish 移除一道菜
 func (s *MealService) RemoveDish(householdID, mealID, dishID uint) error {
-	m, err := s.load(householdID, mealID)
-	if err != nil {
-		return err
-	}
-	if err := errIfCannotRemoveDish(m.Status, len(m.Dishes)); err != nil {
-		return err
-	}
-	res := model.DB.Where("id = ? AND meal_session_id = ?", dishID, mealID).Delete(&model.MealDish{})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return errors.New("这道菜不存在")
-	}
-	return nil
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		var m model.MealSession
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND household_id = ?", mealID, householdID).
+			Preload("Dishes").First(&m).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("这一顿不存在")
+			}
+			return err
+		}
+		status := m.Status
+		// 删掉已定下的最后一道时，保留画布并回到挑菜。
+		if status == model.MealStatusConfirmed && len(m.Dishes) <= 1 {
+			status = model.MealStatusPlanning
+		}
+		if err := errIfCannotRemoveDish(status, len(m.Dishes)); err != nil {
+			return err
+		}
+		res := tx.Where("id = ? AND meal_session_id = ?", dishID, mealID).Delete(&model.MealDish{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return errors.New("这道菜不存在")
+		}
+		if status != m.Status {
+			return tx.Model(&m).Updates(map[string]any{"status": status, "confirmed_at": nil}).Error
+		}
+		return nil
+	})
 }
 
 // AddReview 一顿吃完后留下评价
