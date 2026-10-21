@@ -7,10 +7,14 @@ struct PhotoPickerField: View {
     @Binding var imageURL: String
     var label: String = "选张图"
     var height: CGFloat = 140
+    var cutoutImageURL: Binding<String>?
+    var isProcessing: Binding<Bool> = .constant(false)
 
     @State private var pickerItem: PhotosPickerItem?
     @State private var isUploading: Bool = false
     @State private var errorMessage: String?
+    @State private var showCamera = false
+    @State private var processingMessage = "正在保存照片"
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppSpacing.sm) {
@@ -41,21 +45,57 @@ struct PhotoPickerField: View {
                     if isUploading {
                         ZStack {
                             Color.black.opacity(0.25)
-                            ProgressView().tint(.white)
+                            VStack(spacing: 8) {
+                                ProgressView().tint(.white)
+                                Text(processingMessage).font(AppFont.caption()).foregroundStyle(.white)
+                            }
                         }
                         .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
                     }
                 }
             }
             .buttonStyle(.plain)
+            .disabled(isUploading)
 
-            if !imageURL.isEmpty {
+            HStack {
                 Button {
-                    imageURL = ""
+                    showCamera = true
                 } label: {
-                    Label("清掉这张图", systemImage: "trash")
-                        .font(AppFont.caption(12))
-                        .foregroundStyle(Color.inkMuted)
+                    Label("拍照", systemImage: "camera")
+                }
+                Spacer()
+                if !imageURL.isEmpty {
+                    Button {
+                        imageURL = ""
+                        cutoutImageURL?.wrappedValue = ""
+                    } label: {
+                        Label("清掉这张图", systemImage: "trash")
+                    }
+                }
+            }
+            .font(AppFont.caption(12))
+            .foregroundStyle(Color.brandGreen)
+            .buttonStyle(.plain)
+            .frame(minHeight: 44)
+            .disabled(isUploading)
+
+            if let cutoutImageURL, !imageURL.isEmpty, !isUploading {
+                if !cutoutImageURL.wrappedValue.isEmpty {
+                    HStack(spacing: AppSpacing.md) {
+                        AsyncImage(url: APIConfig.imageURL(cutoutImageURL.wrappedValue)) { image in
+                            image.resizable().scaledToFit()
+                        } placeholder: { ProgressView() }
+                        .frame(width: 72, height: 72)
+                        .background(Color.paperGreen, in: RoundedRectangle(cornerRadius: AppRadius.sm))
+                        Text("画布贴图已生成")
+                            .font(AppFont.caption())
+                            .foregroundStyle(Color.inkSecondary)
+                    }
+                } else {
+                    Button("重新生成画布贴图") { Task { await regenerateCutout() } }
+                        .font(AppFont.caption())
+                        .foregroundStyle(Color.brandGreen)
+                        .frame(minHeight: 44)
                 }
             }
             if let errorMessage {
@@ -68,24 +108,97 @@ struct PhotoPickerField: View {
             guard let item else { return }
             Task { await loadAndUpload(item) }
         }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraCaptureView(mode: cutoutImageURL == nil ? .photo : .dish) { photo in
+                try await upload(photo)
+            }
+            .ignoresSafeArea()
+        }
     }
 
+    @MainActor
     private func loadAndUpload(_ item: PhotosPickerItem) async {
+        guard !isUploading else { return }
+        setProcessing(true)
+        defer { setProcessing(false) }
         errorMessage = nil
-        isUploading = true
-        defer { isUploading = false }
         do {
-            guard let data = try await item.loadTransferable(type: Data.self) else {
+            guard let data = try await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data) else {
                 errorMessage = "图片为空"
                 return
             }
-            let compressed = compress(data: data)
-            let uploaded = try await UploadService.shared.uploadImage(compressed)
-            // 存相对路径 换 IP / 模拟器真机混用时图都不挂
-            imageURL = uploaded.path
-        } catch {
-            errorMessage = error.localizedDescription
+            try await savePhoto(data: data)
+            if cutoutImageURL != nil { await generateCutout(from: image) }
+        } catch { errorMessage = error.localizedDescription }
+        pickerItem = nil
+    }
+
+    @MainActor
+    private func upload(_ photo: CameraPhoto) async throws {
+        guard !isUploading, let data = photo.image.jpegData(compressionQuality: 0.95) else {
+            throw CocoaError(.fileWriteUnknown)
         }
+        setProcessing(true)
+        defer { setProcessing(false) }
+        errorMessage = nil
+        try await savePhoto(data: data)
+        if let png = photo.cutoutData {
+            await uploadCutout(png)
+        } else if let message = photo.cutoutError {
+            errorMessage = "照片已保留，画布贴图生成失败：\(message)"
+        }
+    }
+
+    @MainActor
+    private func savePhoto(data: Data) async throws {
+        let uploaded = try await UploadService.shared.uploadImage(compress(data: data))
+        // 存相对路径 换 IP / 模拟器真机混用时图都不挂
+        imageURL = uploaded.path
+        cutoutImageURL?.wrappedValue = ""
+    }
+
+    @MainActor
+    private func generateCutout(from image: UIImage) async {
+        processingMessage = "正在生成画布贴图"
+        do {
+            let png = try await ImageCutoutService.shared.makePNG(from: image)
+            await uploadCutout(png)
+        } catch {
+            errorMessage = "照片已保留，画布贴图生成失败：\(error.localizedDescription)"
+        }
+    }
+
+    @MainActor
+    private func uploadCutout(_ png: Data) async {
+        do {
+            let uploaded = try await UploadService.shared.uploadImage(png, filename: "cutout.png", mime: "image/png")
+            cutoutImageURL?.wrappedValue = uploaded.path
+        } catch {
+            errorMessage = "照片已保留，画布贴图上传失败：\(error.localizedDescription)"
+        }
+    }
+
+    @MainActor
+    private func regenerateCutout() async {
+        guard !isUploading, let url = APIConfig.imageURL(imageURL) else { return }
+        setProcessing(true)
+        defer { setProcessing(false) }
+        errorMessage = nil
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200, let image = UIImage(data: data) else {
+                errorMessage = "无法读取主图，请重新选择照片"
+                return
+            }
+            await generateCutout(from: image)
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func setProcessing(_ value: Bool) {
+        isUploading = value
+        isProcessing.wrappedValue = value
+        processingMessage = "正在保存照片"
     }
 
     private func compress(data: Data) -> Data {

@@ -147,6 +147,7 @@ func (s *DiningService) AddDish(userID, mealID uint, in DishInput) (*model.MealS
 		if err := model.DB.Where("id = ? AND household_id = ?", *in.RecipeID, m.HouseholdID).First(&r).Error; err == nil {
 			dish.RecipeName = r.Name
 			dish.RecipeImage = r.CoverImage
+			dish.RecipeCutoutImage = r.CutoutImage
 		} else {
 			// 菜谱缺失或不在 host 家：断开关联，避免脏 RecipeID 落库
 			dish.RecipeID = nil

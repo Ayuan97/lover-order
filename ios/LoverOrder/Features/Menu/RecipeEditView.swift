@@ -16,6 +16,8 @@ struct RecipeEditView: View {
     @State private var name: String = ""
     @State private var description: String = ""
     @State private var coverImage: String = ""
+    @State private var cutoutImage: String = ""
+    @State private var isProcessingPhoto = false
     @State private var cookingTime: String = ""
     @State private var servings: Int = 2
     @State private var difficulty: Difficulty = .easy
@@ -83,9 +85,11 @@ struct RecipeEditView: View {
                     } label: {
                         Text("取消").foregroundStyle(Color.inkSecondary)
                     }
+                    .disabled(isSaving || isProcessingPhoto)
                 }
             }
         }
+        .interactiveDismissDisabled(isSaving || isProcessingPhoto)
     }
 
     // 标题
@@ -112,8 +116,15 @@ struct RecipeEditView: View {
 
     private var coverSection: some View {
         SectionCard {
-            FieldLabel("封面图", required: false)
-            PhotoPickerField(imageURL: $coverImage, label: "选张这道菜的照片")
+            FieldLabel("菜品主图", required: false)
+            Text("保留实拍照片，同时自动生成画布用的透明贴图。")
+                .font(AppFont.caption())
+                .foregroundStyle(Color.inkMuted)
+            PhotoPickerField(
+                imageURL: $coverImage, label: "选张这道菜的成品照",
+                cutoutImageURL: $cutoutImage, isProcessing: $isProcessingPhoto
+            )
+            .disabled(isSaving)
         }
     }
 
@@ -351,6 +362,9 @@ struct RecipeEditView: View {
                                     .foregroundStyle(Color.inkMuted)
                             }
                         }
+                        Text("步骤 \(step.index) 的照片")
+                            .font(AppFont.caption())
+                            .foregroundStyle(Color.inkSecondary)
                         PhotoPickerField(
                             imageURL: Binding(
                                 get: { step.image ?? "" },
@@ -380,6 +394,7 @@ struct RecipeEditView: View {
         PrimaryButton(title: isEdit ? "保存修改" : "创建菜谱", isLoading: isSaving) {
             Task { await save() }
         }
+        .disabled(isProcessingPhoto)
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, AppSpacing.sm)
         .background(Color.appBackground)
@@ -444,6 +459,7 @@ struct RecipeEditView: View {
         name = r.name
         description = r.description ?? ""
         coverImage = r.coverImage ?? ""
+        cutoutImage = r.cutoutImage ?? ""
         cookingTime = r.cookingTime.map { String($0) } ?? ""
         servings = r.servings ?? 2
         difficulty = r.difficulty ?? .easy
@@ -457,6 +473,7 @@ struct RecipeEditView: View {
     }
 
     private func save() async {
+        guard !isSaving, !isProcessingPhoto else { return }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedName.isEmpty {
             errorMessage = "请先填写菜名"
@@ -468,6 +485,7 @@ struct RecipeEditView: View {
         var input = RecipeInput(name: trimmedName)
         input.description = description.isEmpty ? nil : description
         input.coverImage = coverImage.isEmpty ? nil : coverImage
+        input.cutoutImage = cutoutImage
         input.categoryId = categoryId
         input.cookingTime = Int(cookingTime)
         input.difficulty = difficulty

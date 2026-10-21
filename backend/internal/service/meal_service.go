@@ -271,6 +271,7 @@ func (s *MealService) AddDish(householdID, userID, id uint, in DishInput) (*mode
 		if err := model.DB.Where("id = ? AND household_id = ?", *in.RecipeID, householdID).First(&r).Error; err == nil {
 			dish.RecipeName = r.Name
 			dish.RecipeImage = r.CoverImage
+			dish.RecipeCutoutImage = r.CutoutImage
 			_ = r.MarkUsed()
 		} else {
 			// 菜谱删了也不挡复刻往顿:退回用调用方带的快照 只断开关联

@@ -26,13 +26,13 @@
 
 依据：[历史详情](../../ios/LoverOrder/Features/History/HistoryDetailView.swift)、[画布存储与回看](../../ios/LoverOrder/Features/Meal/MealCanvasView.swift)。
 
-## 4. 自由内容尚无独立图片元素
+## 4. 已接入拍照抠图，独立图片仍有范围缺口
 
-现有画布能编辑文字、表情、笔画和背景。相册图片只能用作背景，尚无独立图片元素。
+贴纸面板已增加“拍照做贴图”，使用苹果原生能力抠出主体，预览确认后上传透明 PNG，作为独立元素添加到画布。独立贴图可移动、缩放、旋转和删除，增删菜品时不会被清除；排版仍保存在本机画布文档中。菜谱主图也会自动生成独立保存的透明图，加入一顿时写入菜品快照供画布使用。
 
-影响：想把多张图片自由摆放在这一顿画布上的操作还没有入口，现状不能被描述成已经支持任意内容。
+剩余差距：相册图片仍只能用作背景；独立图片入口目前只覆盖拍照抠图。画布整体共享和跨设备恢复仍受第 1、3 项所述本机存储限制，不能据此描述成已经支持任意图片或完整共同编辑。
 
-依据：[相册背景入口](../../ios/LoverOrder/Features/Meal/MealCanvasView.swift)。
+依据：[画布与独立贴图](../../ios/LoverOrder/Features/Meal/MealCanvasView.swift)、[拍照贴图入口](../../ios/LoverOrder/Design/Components/PhotoStickerSheet.swift)、[原生主体分割](../../ios/LoverOrder/Network/Services/ImageCutoutService.swift)、[菜谱主图](../../ios/LoverOrder/Features/Menu/RecipeEditView.swift)。
 
 ## 5. 备注和多图分散在餐次与个人评价中
 

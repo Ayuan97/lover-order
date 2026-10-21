@@ -24,6 +24,7 @@ struct RecipeInput: Encodable {
     var name: String
     var description: String?
     var coverImage: String?
+    var cutoutImage: String?
     var images: [String]?
     var categoryId: UInt?
     var cookingTime: Int?
@@ -40,6 +41,7 @@ struct RecipeInput: Encodable {
         case name
         case description
         case coverImage = "cover_image"
+        case cutoutImage = "cutout_image"
         case images
         case categoryId = "category_id"
         case cookingTime = "cooking_time"

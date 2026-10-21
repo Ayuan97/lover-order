@@ -47,6 +47,9 @@ struct MealCanvasView: View {
     @State private var emojiCategory: CanvasEmojiCategory = .recent
     @Namespace private var emojiCategoryHighlight
     @State private var backgroundPhotoItem: PhotosPickerItem?
+    @State private var showPhotoSticker = false
+    @State private var photoStickerMealID: UInt?
+    @State private var didInsertPhotoSticker = false
     @FocusState private var textEditorFocused: Bool
 
     var body: some View {
@@ -144,6 +147,18 @@ struct MealCanvasView: View {
                     .presentationCornerRadius(28)
                     .presentationBackground(Color.white)
                     .presentationBackgroundInteraction(.enabled)
+                    .fullScreenCover(isPresented: $showPhotoSticker, onDismiss: {
+                        if didInsertPhotoSticker { closeEditor() }
+                    }) {
+                        PhotoStickerSheet { path in
+                            guard photoStickerMealID == vm.meal?.id else {
+                                vm.tipMessage = "这一顿已切换，请重新添加贴图"
+                                return
+                            }
+                            insertPhotoSticker(path)
+                            didInsertPhotoSticker = true
+                        }
+                    }
             }
         }
     }
@@ -702,6 +717,20 @@ struct MealCanvasView: View {
 
     private var emojiEditorContent: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Button {
+                photoStickerMealID = vm.meal?.id
+                didInsertPhotoSticker = false
+                showPhotoSticker = true
+            } label: {
+                Label("拍照做贴图", systemImage: "camera")
+                    .font(AppFont.body(14))
+                    .foregroundStyle(CanvasPalette.ink)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 44)
+                    .background(CanvasPalette.page, in: RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(SoftPressStyle())
+            .disabled(vm.meal == nil)
             HStack(spacing: 4) {
                 ForEach(CanvasEmojiCategory.allCases) { item in
                     Button {
@@ -1189,7 +1218,7 @@ struct MealCanvasView: View {
     }
 
     private var layerEntries: [CanvasLayerEntry] {
-        stickers.map { CanvasLayerEntry(selection: .sticker($0.id), layer: $0.layer, title: $0.name, icon: "fork.knife") }
+        stickers.map { CanvasLayerEntry(selection: .sticker($0.id), layer: $0.layer, title: $0.name, icon: $0.mealDishID == nil ? "photo" : "fork.knife") }
             + notes.map {
                 CanvasLayerEntry(selection: .note($0.id), layer: $0.layer,
                     title: $0.isEmoji ? "\($0.text) 贴纸" : String($0.text.replacingOccurrences(of: "\n", with: " ").prefix(16)),
@@ -1243,8 +1272,15 @@ struct MealCanvasView: View {
     private func deleteElement(_ selected: CanvasSelection) {
         switch selected {
         case .sticker(let id):
+            guard let sticker = stickers.first(where: { $0.id == id }) else { return }
+            if sticker.mealDishID == nil {
+                stickers.removeAll { $0.id == id }
+                selectedStickerID = nil
+                closeEditor()
+                saveDocument()
+                return
+            }
             guard !isRemovingDish,
-                  let sticker = stickers.first(where: { $0.id == id }),
                   let dish = vm.dishes.first(where: { $0.id == sticker.mealDishID }) else { return }
             isRemovingDish = true
             Task {
@@ -1474,8 +1510,24 @@ struct MealCanvasView: View {
         closeEditor()
     }
 
+    private func insertPhotoSticker(_ path: String) {
+        let sticker = CanvasSticker(
+            name: "拍照贴图", image: path, isCutout: true,
+            position: CanvasPoint(x: 0.5, y: 0.5), layer: nextLayerIndex
+        )
+        stickers.append(sticker)
+        finishSelecting()
+        selectedStickerID = sticker.id
+        selectedNoteID = nil
+        saveDocument()
+        Haptics.light()
+    }
+
     private func syncStickers() {
-        let existing = Dictionary(uniqueKeysWithValues: stickers.map { ($0.mealDishID, $0) })
+        let customStickers = stickers.filter { $0.mealDishID == nil }
+        let existing = Dictionary(uniqueKeysWithValues: stickers.compactMap { sticker in
+            sticker.mealDishID.map { ($0, sticker) }
+        })
         var newLayer = nextLayerIndex
         let positions: [CanvasPoint] = [
             CanvasPoint(x: 0.28, y: 0.27),
@@ -1485,8 +1537,11 @@ struct MealCanvasView: View {
             CanvasPoint(x: 0.24, y: 0.74),
             CanvasPoint(x: 0.52, y: 0.78)
         ]
-        stickers = vm.dishes.enumerated().map { index, dish in
+        stickers = customStickers + vm.dishes.enumerated().map { index, dish in
+            let cutout = dish.recipeCutoutImage.flatMap { $0.isEmpty ? nil : $0 }
             if var old = existing[dish.id] {
+                old.image = cutout ?? dish.recipeImage
+                old.isCutout = cutout != nil
                 if old.assetName == nil {
                     old.assetName = stickerAsset(for: dish.recipeName, index: index)
                 }
@@ -1497,7 +1552,8 @@ struct MealCanvasView: View {
             return CanvasSticker(
                 mealDishID: dish.id,
                 name: dish.recipeName,
-                image: dish.recipeImage,
+                image: cutout ?? dish.recipeImage,
+                isCutout: cutout != nil,
                 assetName: stickerAsset(for: dish.recipeName, index: index),
                 position: positions[index % positions.count],
                 scale: [0.92, 0.78, 1.08, 0.86, 0.72, 0.98][index % 6],
@@ -2491,7 +2547,7 @@ private struct CanvasEffectPreview: View {
                     .scaleEffect(x: effect.scaleX(time: time, reduceMotion: reduceMotion), y: effect.scaleY(time: time, reduceMotion: reduceMotion))
                     .rotationEffect(.degrees(effect.rotation(time: time, reduceMotion: reduceMotion)))
             case .sticker(let effect, let sticker):
-                StickerImageView(assetName: sticker.assetName, image: sticker.image, name: sticker.name)
+                StickerImageView(assetName: sticker.assetName, image: sticker.image, name: sticker.name, isCutout: sticker.isCutout)
                     .frame(width: 44, height: 44)
                     .scaleEffect(effect.scale(time: time, reduceMotion: reduceMotion))
                     .rotationEffect(.degrees(effect.rotation(time: time, reduceMotion: reduceMotion)))
@@ -2880,9 +2936,10 @@ private extension UIImage {
 
 private struct CanvasSticker: Identifiable, Codable, Hashable {
     let id: UUID
-    let mealDishID: UInt
+    let mealDishID: UInt?
     let name: String
-    let image: String?
+    var image: String?
+    var isCutout: Bool
     var assetName: String?
     var position: CanvasPoint
     var scale: CGFloat
@@ -2893,9 +2950,10 @@ private struct CanvasSticker: Identifiable, Codable, Hashable {
 
     init(
         id: UUID = UUID(),
-        mealDishID: UInt,
+        mealDishID: UInt? = nil,
         name: String,
         image: String?,
+        isCutout: Bool = false,
         assetName: String? = nil,
         position: CanvasPoint,
         scale: CGFloat = 1,
@@ -2908,6 +2966,7 @@ private struct CanvasSticker: Identifiable, Codable, Hashable {
         self.mealDishID = mealDishID
         self.name = name
         self.image = image
+        self.isCutout = isCutout
         self.assetName = assetName
         self.position = position
         self.scale = scale
@@ -2918,15 +2977,16 @@ private struct CanvasSticker: Identifiable, Codable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, mealDishID, name, image, assetName, position, scale, rotationDegrees, effect, shapeIndex, layer
+        case id, mealDishID, name, image, isCutout, assetName, position, scale, rotationDegrees, effect, shapeIndex, layer
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
-        mealDishID = try container.decode(UInt.self, forKey: .mealDishID)
+        mealDishID = try container.decodeIfPresent(UInt.self, forKey: .mealDishID)
         name = try container.decode(String.self, forKey: .name)
         image = try container.decodeIfPresent(String.self, forKey: .image)
+        isCutout = try container.decodeIfPresent(Bool.self, forKey: .isCutout) ?? false
         assetName = try container.decodeIfPresent(String.self, forKey: .assetName)
         position = try container.decode(CanvasPoint.self, forKey: .position)
         scale = try container.decodeIfPresent(CGFloat.self, forKey: .scale) ?? 1
@@ -3104,7 +3164,7 @@ private struct CanvasStickerView: View {
             let time = context.date.timeIntervalSinceReferenceDate
             let effectsPaused = reduceMotion || isSelected || isManipulating
             ZStack(alignment: .topTrailing) {
-                StickerImageView(assetName: sticker.assetName, image: sticker.image, name: sticker.name)
+                StickerImageView(assetName: sticker.assetName, image: sticker.image, name: sticker.name, isCutout: sticker.isCutout)
                     .frame(width: baseSize * 1.12, height: baseSize * 1.12)
                     .overlay {
                         if sticker.effect == .outline {
@@ -3208,30 +3268,28 @@ private struct StickerImageView: View {
     let assetName: String?
     let image: String?
     let name: String
+    var isCutout = false
     @State private var loadedPhoto: UIImage?
     @State private var finishedLoading = false
 
     var body: some View {
         Group {
             if APIConfig.imageURL(image) != nil {
-                GeometryReader { proxy in
-                    Group {
-                        if let loadedPhoto {
-                            Image(uiImage: loadedPhoto).resizable().scaledToFill()
-                        } else if finishedLoading {
-                            fallback
-                        } else {
-                            ProgressView().tint(.white)
-                        }
+                if isCutout {
+                    photoContent
+                } else {
+                    GeometryReader { proxy in
+                        photoContent
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                     }
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                 }
             } else { fallback }
         }
         .task(id: image) {
-            guard loadedPhoto == nil, let url = APIConfig.imageURL(image) else { return }
+            loadedPhoto = nil
             finishedLoading = false
+            guard let url = APIConfig.imageURL(image) else { return }
             do {
                 let (data, response) = try await URLSession.shared.data(from: url)
                 guard !Task.isCancelled else { return }
@@ -3242,6 +3300,21 @@ private struct StickerImageView: View {
             } catch {
                 if !Task.isCancelled { finishedLoading = true }
             }
+        }
+    }
+
+    @ViewBuilder
+    private var photoContent: some View {
+        if let loadedPhoto {
+            if isCutout {
+                Image(uiImage: loadedPhoto).resizable().scaledToFit()
+            } else {
+                Image(uiImage: loadedPhoto).resizable().scaledToFill()
+            }
+        } else if finishedLoading {
+            fallback
+        } else {
+            ProgressView().tint(.white)
         }
     }
 

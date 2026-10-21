@@ -80,6 +80,7 @@ type Recipe struct {
 	Name        string         `json:"name" gorm:"size:64;not null;comment:菜名"`
 	Description string         `json:"description" gorm:"size:255;comment:简介"`
 	CoverImage  string         `json:"cover_image" gorm:"size:512;comment:封面图"`
+	CutoutImage string         `json:"cutout_image" gorm:"size:512;comment:画布透明贴图"`
 	Images      JSON           `json:"images" gorm:"type:json;comment:图集"`
 	CategoryID  *uint          `json:"category_id" gorm:"index;comment:分类"`
 	CookingTime int            `json:"cooking_time" gorm:"default:0;comment:制作时间 分钟"`

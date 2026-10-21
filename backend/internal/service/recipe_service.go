@@ -21,6 +21,7 @@ type RecipeInput struct {
 	Name        string           `json:"name" binding:"required"`
 	Description string           `json:"description"`
 	CoverImage  string           `json:"cover_image"`
+	CutoutImage *string          `json:"cutout_image"`
 	Images      []string         `json:"images"`
 	CategoryID  *uint            `json:"category_id"`
 	CookingTime int              `json:"cooking_time"`
@@ -162,6 +163,9 @@ func (s *RecipeService) Create(householdID, userID uint, in RecipeInput) (*model
 		HouseholdID: householdID,
 		CreatedBy:   userID,
 	}
+	if in.CutoutImage != nil {
+		r.CutoutImage = *in.CutoutImage
+	}
 	if err := applyRecipeJSON(r, in); err != nil {
 		return nil, err
 	}
@@ -182,7 +186,13 @@ func (s *RecipeService) Update(householdID, id uint, in RecipeInput) (*model.Rec
 	}
 	r.Name = in.Name
 	r.Description = in.Description
+	if r.CoverImage != in.CoverImage {
+		r.CutoutImage = ""
+	}
 	r.CoverImage = in.CoverImage
+	if in.CutoutImage != nil {
+		r.CutoutImage = *in.CutoutImage
+	}
 	r.CategoryID = in.CategoryID
 	r.CookingTime = in.CookingTime
 	if in.Difficulty != "" {

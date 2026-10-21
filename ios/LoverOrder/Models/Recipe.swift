@@ -68,6 +68,7 @@ struct Recipe: Codable, Identifiable, Hashable {
     var name: String
     var description: String?
     var coverImage: String?
+    var cutoutImage: String?
     var images: [String]?
     var categoryId: UInt?
     var category: RecipeCategory?
@@ -92,6 +93,7 @@ struct Recipe: Codable, Identifiable, Hashable {
         case name
         case description
         case coverImage = "cover_image"
+        case cutoutImage = "cutout_image"
         case images
         case categoryId = "category_id"
         case category

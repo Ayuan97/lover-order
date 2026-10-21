@@ -60,15 +60,16 @@ func (MealSession) TableName() string {
 
 // MealDish 一顿里加入的某个菜 保留快照
 type MealDish struct {
-	ID            uint      `json:"id" gorm:"primaryKey"`
-	MealSessionID uint      `json:"meal_session_id" gorm:"not null;index"`
-	RecipeID      *uint     `json:"recipe_id" gorm:"index;comment:菜谱 ID 删除菜谱后可为空"`
-	RecipeName    string    `json:"recipe_name" gorm:"size:64;not null;comment:菜名快照"`
-	RecipeImage   string    `json:"recipe_image" gorm:"size:512;comment:菜图快照"`
-	Note          string    `json:"note" gorm:"size:255;comment:备注 如换换口味"`
-	SortOrder     int       `json:"sort_order" gorm:"default:0"`
-	AddedBy       uint      `json:"added_by" gorm:"not null;index"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID                uint      `json:"id" gorm:"primaryKey"`
+	MealSessionID     uint      `json:"meal_session_id" gorm:"not null;index"`
+	RecipeID          *uint     `json:"recipe_id" gorm:"index;comment:菜谱 ID 删除菜谱后可为空"`
+	RecipeName        string    `json:"recipe_name" gorm:"size:64;not null;comment:菜名快照"`
+	RecipeImage       string    `json:"recipe_image" gorm:"size:512;comment:菜图快照"`
+	RecipeCutoutImage string    `json:"recipe_cutout_image" gorm:"size:512;comment:画布透明贴图快照"`
+	Note              string    `json:"note" gorm:"size:255;comment:备注 如换换口味"`
+	SortOrder         int       `json:"sort_order" gorm:"default:0"`
+	AddedBy           uint      `json:"added_by" gorm:"not null;index"`
+	CreatedAt         time.Time `json:"created_at"`
 
 	Recipe *Recipe `json:"recipe,omitempty" gorm:"foreignKey:RecipeID"`
 	Adder  *User   `json:"adder,omitempty" gorm:"foreignKey:AddedBy"`

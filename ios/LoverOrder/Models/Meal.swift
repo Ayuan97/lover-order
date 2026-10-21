@@ -97,6 +97,7 @@ struct MealDish: Codable, Identifiable, Hashable {
     var recipeId: UInt?
     var recipeName: String
     var recipeImage: String?
+    var recipeCutoutImage: String?
     var note: String?
     var sortOrder: Int
     var addedBy: UInt?
@@ -108,6 +109,7 @@ struct MealDish: Codable, Identifiable, Hashable {
         case recipeId = "recipe_id"
         case recipeName = "recipe_name"
         case recipeImage = "recipe_image"
+        case recipeCutoutImage = "recipe_cutout_image"
         case note
         case sortOrder = "sort_order"
         case addedBy = "added_by"
