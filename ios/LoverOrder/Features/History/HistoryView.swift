@@ -115,9 +115,9 @@ struct HistoryView: View {
                 ForEach(Array(vm.meals.enumerated()), id: \.element.id) { index, meal in
                     NavigationLink { HistoryDetailView(mealId: meal.id) } label: {
                         if index == 0, mealHasPosterArtwork(meal) {
-                            HistoryHeroCard(meal: meal)
+                            HistoryHeroCard(meal: meal, canvasSyncVersion: vm.canvasSyncVersion)
                         } else {
-                            HistoryCard(meal: meal)
+                            HistoryCard(meal: meal, canvasSyncVersion: vm.canvasSyncVersion)
                         }
                     }
                     .buttonStyle(SoftPressStyle())
@@ -127,7 +127,8 @@ struct HistoryView: View {
     }
 
     private func mealHasPosterArtwork(_ meal: MealSession) -> Bool {
-        mealCanvasDocumentExists(mealID: meal.id) || (meal.reviews?.compactMap({ $0.photos?.first }).first != nil)
+        _ = vm.canvasSyncVersion
+        return mealCanvasDocumentExists(mealID: meal.id) || (meal.reviews?.compactMap({ $0.photos?.first }).first != nil)
     }
 }
 
@@ -149,6 +150,7 @@ extension MealScene {
 
 private struct HistoryHeroCard: View {
     let meal: MealSession
+    let canvasSyncVersion: Int
 
     private var summaryTitle: String {
         if let title = meal.title, !title.isEmpty { return title }
@@ -214,8 +216,9 @@ private struct HistoryHeroCard: View {
 
     @ViewBuilder
     private var heroArtwork: some View {
-        if mealCanvasDocumentExists(mealID: meal.id) {
+        if canvasSyncVersion >= 0, mealCanvasDocumentExists(mealID: meal.id) {
             MealCanvasSnapshotView(mealID: meal.id, fillsContainer: true)
+                .id("hero-\(meal.id)-\(canvasSyncVersion)")
         } else if let photo = meal.reviews?.compactMap({ $0.photos?.first }).first {
             GeometryReader { proxy in
                 AsyncImageView(url: photo, name: "这一顿")
@@ -228,6 +231,7 @@ private struct HistoryHeroCard: View {
 
 private struct HistoryCard: View {
     let meal: MealSession
+    let canvasSyncVersion: Int
 
     private var summaryTitle: String {
         if let title = meal.title, !title.isEmpty { return title }
@@ -285,8 +289,9 @@ private struct HistoryCard: View {
 
     @ViewBuilder
     private var artwork: some View {
-        if mealCanvasDocumentExists(mealID: meal.id) {
+        if canvasSyncVersion >= 0, mealCanvasDocumentExists(mealID: meal.id) {
             MealCanvasSnapshotView(mealID: meal.id, fillsContainer: true)
+                .id("card-\(meal.id)-\(canvasSyncVersion)")
         } else if let photo = meal.reviews?.compactMap({ $0.photos?.first }).first {
             GeometryReader { proxy in
                 AsyncImageView(url: photo, name: "这一顿")
@@ -354,6 +359,7 @@ final class HistoryViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var loadFailed = false
     @Published var errorMessage: String?
+    @Published var canvasSyncVersion: Int = 0
 
     func load(filter: HistoryView.Filter) async {
         isLoading = true; loadFailed = false; defer { isLoading = false }
@@ -367,6 +373,17 @@ final class HistoryViewModel: ObservableObject {
             }
             let result = try await MealService.shared.list(q)
             meals = result.items
+            let syncTargets = Array(result.items.prefix(12).filter { !mealCanvasDocumentExists(mealID: $0.id) })
+            if !syncTargets.isEmpty {
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    for item in syncTargets {
+                        if await syncRemoteMealCanvasIfNeeded(mealID: item.id) {
+                            self.canvasSyncVersion += 1
+                        }
+                    }
+                }
+            }
         } catch {
             loadFailed = true; errorMessage = error.localizedDescription
         }

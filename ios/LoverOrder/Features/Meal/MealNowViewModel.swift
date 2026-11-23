@@ -152,12 +152,28 @@ final class MealNowViewModel: ObservableObject {
         }
         guard !byOther.isEmpty else { return }
 
+        let actorLabel = resolvedActorLabel(for: byOther)
         if byOther.count == 1, let name = byOther.first?.recipeName, !name.isEmpty {
-            tipMessage = "Ta 加了 \(name)"
+            tipMessage = "\(actorLabel) 加了 \(name)"
         } else {
-            tipMessage = "Ta 加了 \(byOther.count) 道菜"
+            tipMessage = "\(actorLabel) 加了 \(byOther.count) 道菜"
         }
         Haptics.light()
+    }
+
+    private func resolvedActorLabel(for dishes: [MealDish]) -> String {
+        let userIds = Set(dishes.compactMap(\.addedBy))
+        if userIds.count > 1 {
+            return "大家"
+        }
+        let names = Set(dishes.compactMap { dish -> String? in
+            let trimmed = dish.adder?.nickname.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        })
+        if names.count > 1 {
+            return "大家"
+        }
+        return names.first ?? "Ta"
     }
 
     // confirmed 的单被对方收掉:同 id 变 completed 直接提醒;换了新单要回查旧单

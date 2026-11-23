@@ -85,6 +85,7 @@ func AutoMigrate() error {
 		&MealReview{},
 		&MealDishReview{},
 		&MealParticipant{},
+		&MealCanvas{},
 		&DeviceToken{},
 		&NotificationEvent{},
 	}

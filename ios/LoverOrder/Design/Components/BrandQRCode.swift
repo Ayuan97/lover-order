@@ -37,14 +37,28 @@ enum LoverScanLink {
     }
 }
 
-// 定制二维码 墨绿码点 + 透明底 + 中心心形 不做成白底黑码
+// 定制二维码 曜石黑码点 + 透明底 + 中心徽标（入伙心形 / 聚餐餐具）
 struct BrandQRCode: View {
+    enum BadgeStyle {
+        case heart
+        case dining
+
+        var systemImage: String {
+            switch self {
+            case .heart: return "heart.fill"
+            case .dining: return "fork.knife"
+            }
+        }
+    }
+
     let content: String
     var size: CGFloat = 200
+    var badge: BadgeStyle = .heart
+    var dotColor: CIColor = CIColor(red: 0.078, green: 0.078, blue: 0.086)
 
     var body: some View {
         ZStack {
-            if let img = Self.render(content) {
+            if let img = Self.render(content, dotColor: dotColor) {
                 Image(uiImage: img)
                     .interpolation(.none)
                     .resizable()
@@ -55,19 +69,23 @@ struct BrandQRCode: View {
                     .fill(Color.appBackground)
                     .frame(width: size, height: size)
             }
-            // 中心心形 米底圆压住中央码点 高容错下不影响扫描
+            // 中心白底圆徽标压住中央码点 高容错下不影响扫描
             ZStack {
                 Circle()
-                    .fill(Color.cardBackground)
+                    .fill(Color.white)
                     .frame(width: size * 0.24, height: size * 0.24)
-                Image(systemName: "heart.fill")
-                    .font(.system(size: size * 0.12))
-                    .foregroundStyle(Color.brandGreen)
+                    .overlay {
+                        Circle()
+                            .strokeBorder(Color.black.opacity(0.08), lineWidth: 0.8)
+                    }
+                Image(systemName: badge.systemImage)
+                    .font(.system(size: size * 0.115, weight: .semibold))
+                    .foregroundStyle(Color.actionInk)
             }
         }
     }
 
-    private static func render(_ string: String) -> UIImage? {
+    private static func render(_ string: String, dotColor: CIColor) -> UIImage? {
         let ctx = CIContext()
         let qr = CIFilter.qrCodeGenerator()
         qr.message = Data(string.utf8)
@@ -77,8 +95,8 @@ struct BrandQRCode: View {
 
         let color = CIFilter.falseColor()
         color.inputImage = scaled
-        color.color0 = CIColor(red: 0.318, green: 0.420, blue: 0.290) // 墨绿码点 #516B4A
-        color.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)   // 透明底 透出米色卡片
+        color.color0 = dotColor
+        color.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)   // 透明底
         guard let out = color.outputImage,
               let cg = ctx.createCGImage(out, from: out.extent) else { return nil }
         return UIImage(cgImage: cg)

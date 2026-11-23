@@ -2,37 +2,35 @@
 
 本清单以[产品方向](../product-flow.md)为依据，记录对当前工作区的静态代码核对结果（2026-10-19 初版，后续随画布与抠图对齐迭代同步更新）。清单记录待对齐项；当前可操作的入口与行为见[画布功能说明](../features/home-canvas/feature.md)。
 
-## 1. 双方共享的是菜单，完整画布仍各存本机
+## 1. 日常双方与画布已接入实时多人协同（已对齐）
 
-首页轮询餐次和菜单，变化判断包含状态、房间信息和菜 ID。布局、文字、背景、贴纸和笔画保存在本机 `UserDefaults`；后端餐次模型和路由没有对应的画布存储或读写能力。
+后端新增 `meal_canvases` 表与 `CanvasHub` / `CanvasService`，提供 `GET/POST /api/v1/meals/:id/canvas` 与 `WS /api/v1/meals/:id/canvas/ws`。客户端 `MealCanvasView` 通过 `CanvasRealtimeSession` 在打开当前餐次时建立 WebSocket 连接（并保留 4 秒餐次轮询与 REST 全量保存在断网重连时兜底），将贴纸、菜品贴纸、文字、手绘涂鸦、Normalized 笔迹、背景/滤镜/虚化及拖动/旋转/缩放实时预览（`live_preview`）实时广播给同餐次所有在线成员。
 
-影响：两人无法看到对方完整的画布操作；菜单同步不能视为同一张画布已经可以协作。画布同步暂不调整。
+结果：日常两人（及家庭其他成员）在各自手机打开「这一顿」时可实时共同编辑同一张自由画布，不再局限于仅同步菜单列表。
 
-依据：[餐次同步](../../ios/LoverOrder/Features/Meal/MealNowView.swift)、[同步判断](../../ios/LoverOrder/Models/Meal.swift)、[本机画布存储](../../ios/LoverOrder/Features/Meal/MealCanvasView.swift)、[后端餐次模型](../../backend/internal/model/meal.go)、[餐次路由](../../backend/cmd/server/main.go)。
+依据：[后端画布模型](../../backend/internal/model/canvas.go)、[画布服务与网关](../../backend/internal/service/canvas_service.go)、[画布处理器](../../backend/internal/api/canvas_handler.go)、[WebSocket 会话](../../ios/LoverOrder/Network/Services/MealService.swift)、[协同画布视图](../../ios/LoverOrder/Features/Meal/MealCanvasView.swift)。
 
-## 2. 来客仍进入独立点菜列表
+## 2. 临时来客已直接进入主家实时画布，身份与留存规则待定（部分对齐）
 
-加入成功后打开 `DiningGuestView`，页面只有参与信息、已点菜和点菜入口。外链与分享层面已补齐 `lo://room/<code>` URL Scheme 直达、`DiningHostView` 分享出口及来客入房/点菜动态通知；来客 API 也仅提供房间、菜谱和加减菜能力，没有共享画布内容操作。房间参与关系有时效，当前来客仍须登录。
+加入成功后打开的 `DiningGuestView` 已内嵌访客模式 `MealCanvasView(isGuestMode: true)`；来客可与主家日常成员实时共编画布全部元素，且可通过 `DiningDishPicker` 或画布删除菜品贴纸移除桌上任意菜品（后端 `DiningService.RemoveDish` 已放开为房间成员平等移除，同时增删菜、关房/进退房均通过 `BroadcastMealSync` 实时推送同步信号）。主家的流程操作（定下这一顿、吃完了、收摊关房、邀请一起点、买菜清单、补写记录）仅保留在家庭端，来客端仅保留「收起」与「退出」。
 
-影响：来客只能完善菜单，不能和日常参与者共同完善画布。来客能力暂不调整。是否需要免登录身份尚未确定，不能把“临时身份”直接解释成必须新增匿名账户。此外，主家提前关房会删除 `MealParticipant` 参与记录，历史详情通过合并家庭成员、加菜人和创建者兜底展示同行者，但来客权限与长期参与记录仍待产品规则明确。
+未对齐/待用户决定事项：来客目前仍须先登录账号；临时身份是否允许免登录、除共同编辑外的细粒度权限、来客参与有效期（当前房间仍为 6 小时），以及主家提前关房会删除 `MealParticipant` 参与记录的留存规则尚未由用户最终确定。
 
-依据：[入房后页面](../../ios/LoverOrder/Features/Meal/DiningJoinView.swift)、[来客页面](../../ios/LoverOrder/Features/Meal/DiningGuestView.swift)、[来客 API 与鉴权范围](../../backend/cmd/server/main.go)。
+依据：[来客协同画布](../../ios/LoverOrder/Features/Meal/DiningGuestView.swift)、[来客点菜器](../../ios/LoverOrder/Features/Meal/DiningDishPicker.swift)、[点菜房服务](../../backend/internal/service/dining_service.go)、[餐次路由](../../backend/cmd/server/main.go)。
 
-## 3. 历史画布依赖本机文档
+## 3. 历史画布已接入云端回看与跨设备还原（已对齐，历史再编辑待定）
 
-记录卡片和详情已接入画布回看，按保存的尺寸还原背景、菜品、文字、图层和笔迹。画布文档仍按餐次存于当前手机；没有本机文档时省略画布区域。
+`HistoryView`、`HistoryDetailView`、`MealCanvasSnapshotView` 与分享海报渲染均会在本地缺少缓存时调用 `syncRemoteMealCanvasIfNeeded` 从后端 `GET /api/v1/meals/:id/canvas` 拉取云端保存的 `CanvasDocument`（并在进入详情时强制与云端校准），按原画布尺寸与百分比坐标还原背景、氛围滤镜、菜品与独立贴纸、手绘文字与笔迹，并支持只读 Live 播放与 Live Photo / 海报导出。
 
-影响：换手机或由另一位日常参与者打开历史时，不能据此取回这张画布。这个差距需要共享存储，按用户要求暂缓。
+剩余未决定事项：历史画布是否允许在完成后再次编辑，目前按产品边界保持只读回看。
 
-依据：[历史详情](../../ios/LoverOrder/Features/History/HistoryDetailView.swift)、[画布存储与回看](../../ios/LoverOrder/Features/Meal/MealCanvasView.swift)。
+依据：[历史列表](../../ios/LoverOrder/Features/History/HistoryView.swift)、[历史详情](../../ios/LoverOrder/Features/History/HistoryDetailView.swift)、[画布快照与同步](../../ios/LoverOrder/Features/Meal/MealCanvasView.swift)。
 
-## 4. 已接入拍照与相册抠图，完整画布共享仍受本机存储限制
+## 4. 拍照/相册抠图、自选背景与全部创作元素均已支持跨设备持久化与实时同步（已对齐）
 
-贴纸面板已按“手绘贴纸 → 我的贴图 → 表情”排列：内置 16 枚矢量/排版手绘 Plog 贴纸可自由上色与添加动效；“表情”标签已升级为 36 枚水粉白边模切手绘贴纸（按**精选 / 情绪 / 食光 / 氛围** 4 组陈列）；“我的贴图”同时提供“相册抠图”与“拍照做贴图”双入口——拍照与相册选图均调用苹果原生主体分割 `ImageCutoutService`（相册图片在主体分割失败时自动回退保留普通照片），上传后存入账号收藏并可直接添加到画布。收藏保存在账号下，可跨餐次和设备复用；独立贴图可移动、缩放、旋转、加特效、切换风格、复制、调图层、框选、20 步多步撤销/重做和删除，增删菜品时不会被清除，排版仍保存在本机画布文档中。菜谱主图也会自动生成独立保存的透明图，加入一顿时写入菜品快照供画布使用。
+贴纸面板按“手绘贴纸 → 我的贴图 → 表情”排列：内置 16 枚矢量/排版手绘 Plog 贴纸、36 枚水粉白边模切贴纸（`StickerEmoji_*`）及“相册抠图 / 拍照做贴图”生成的透明 PNG / 照片贴纸均通过服务端文件路径与元素操作同步；自定义相册背景在立即本地预览的同时后台通过 `UploadService` 上传原图并将 `customBackgroundURL` 经 `update_background` 广播并持久化，跨设备进入画布或查看历史时可通过 `RemoteImageCache` 自动加载展示。
 
-剩余差距：非菜品的贴纸、文字、涂鸦与画布整体排版仍受第 1、3 项所述本机存储限制，尚未做到两人或来客实时跨设备共同编辑。
-
-依据：[画布与独立贴图](../../ios/LoverOrder/Features/Meal/MealCanvasView.swift)、[拍照贴图入口](../../ios/LoverOrder/Design/Components/PhotoStickerSheet.swift)、[原生主体分割](../../ios/LoverOrder/Network/Services/ImageCutoutService.swift)、[菜谱主图](../../ios/LoverOrder/Features/Menu/RecipeEditView.swift)。
+依据：[画布与实时操作](../../ios/LoverOrder/Features/Meal/MealCanvasView.swift)、[拍照贴图入口](../../ios/LoverOrder/Design/Components/PhotoStickerSheet.swift)、[原生主体分割](../../ios/LoverOrder/Network/Services/ImageCutoutService.swift)、[上传服务](../../ios/LoverOrder/Network/Services/UploadService.swift)。
 
 ## 5. 备注和多图分散在餐次与个人评价中
 

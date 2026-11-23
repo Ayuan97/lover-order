@@ -31,6 +31,20 @@ enum APIConfig {
         comp?.query = nil
         return comp?.url
     }
+
+    // 构造 WebSocket 连接地址（http->ws / https->wss）
+    static func webSocketURL(path: String, query: [String: String] = [:]) -> URL? {
+        var comp = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
+        if comp?.scheme == "https" {
+            comp?.scheme = "wss"
+        } else if comp?.scheme == "http" {
+            comp?.scheme = "ws"
+        }
+        if !query.isEmpty {
+            comp?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        }
+        return comp?.url
+    }
 }
 
 // 统一 HTTP 客户端 只支持 POST / GET 与后端约定一致
@@ -41,10 +55,8 @@ final class APIClient {
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
 
-    init(session: URLSession = .shared) {
-        self.session = session
+    static func makeDecoder() -> JSONDecoder {
         let dec = JSONDecoder()
-        let enc = JSONEncoder()
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         let fallback = ISO8601DateFormatter()
@@ -56,9 +68,19 @@ final class APIClient {
             if let date = APIClient.altParse(s) { return date }
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "无法解析日期：\(s)")
         }
+        return dec
+    }
+
+    static func makeEncoder() -> JSONEncoder {
+        let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
-        self.decoder = dec
-        self.encoder = enc
+        return enc
+    }
+
+    init(session: URLSession = .shared) {
+        self.session = session
+        self.decoder = Self.makeDecoder()
+        self.encoder = Self.makeEncoder()
     }
 
     // GET 请求 查询参数走 query

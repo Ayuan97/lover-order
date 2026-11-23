@@ -72,6 +72,7 @@ func registerRoutes(r *gin.Engine) {
 	diningH := api.NewDiningHandler()
 	stickerFavoriteH := api.NewStickerFavoriteHandler()
 	notificationH := api.NewNotificationHandler()
+	canvasH := api.NewCanvasHandler()
 
 	v1 := r.Group("/api/v1")
 	{
@@ -85,6 +86,9 @@ func registerRoutes(r *gin.Engine) {
 				auth.POST("/dev", authH.DevLogin)
 			}
 		}
+
+		// WebSocket 握手在处理器内兼容 Header Bearer 与 ?token= 鉴权
+		v1.GET("/meals/:id/canvas/ws", canvasH.WebSocket)
 
 		secured := v1.Group("")
 		secured.Use(middleware.AuthRequired())
@@ -138,6 +142,13 @@ func registerRoutes(r *gin.Engine) {
 				dining.POST("/:id/dishes/add", diningH.AddDish)
 				dining.POST("/:id/dishes/:dish_id/remove", diningH.RemoveDish)
 				dining.GET("/:id/recipes", diningH.Recipes)
+			}
+
+			// 画布读写允许家庭成员与房内来客共用，权限在 CanvasService 中校验
+			canvas := secured.Group("/meals/:id/canvas")
+			{
+				canvas.GET("", canvasH.Get)
+				canvas.POST("", canvasH.Save)
 			}
 
 			inHousehold := secured.Group("")

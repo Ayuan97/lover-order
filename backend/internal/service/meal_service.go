@@ -212,6 +212,7 @@ func (s *MealService) Confirm(householdID, actorUserID, id uint) (*model.MealSes
 		dishNames = append(dishNames, d.RecipeName)
 	}
 	NewNotificationService().NotifyMealConfirmed(householdID, actorUserID, m.ID, dishNames)
+	GlobalCanvasHub().BroadcastMealSync(m.ID, "confirmed", actorUserID)
 	return m, nil
 }
 
@@ -237,6 +238,8 @@ func (s *MealService) Complete(householdID, actorUserID, id uint) (*model.MealSe
 		return nil, err
 	}
 	NewNotificationService().NotifyMealCompleted(householdID, actorUserID, m.ID, m.Title)
+	GlobalCanvasHub().BroadcastMealSync(m.ID, "completed", actorUserID)
+	GlobalCanvasHub().EvictGuests(m.ID)
 	return m, nil
 }
 
@@ -252,7 +255,12 @@ func (s *MealService) Cancel(householdID, id uint) error {
 	m.Status = model.MealStatusCancelled
 	m.RoomCode = ""
 	m.RoomExpiresAt = nil
-	return model.DB.Save(m).Error
+	if err := model.DB.Save(m).Error; err != nil {
+		return err
+	}
+	GlobalCanvasHub().BroadcastMealSync(m.ID, "cancelled", 0)
+	GlobalCanvasHub().EvictGuests(m.ID)
+	return nil
 }
 
 // AddDish 加入一道菜
@@ -292,12 +300,13 @@ func (s *MealService) AddDish(householdID, userID, id uint, in DishInput) (*mode
 		return nil, err
 	}
 	NewNotificationService().NotifyMealDishAdded(householdID, userID, m.ID, dish.RecipeName)
+	GlobalCanvasHub().BroadcastMealSync(m.ID, "dish_added", userID)
 	return dish, nil
 }
 
 // RemoveDish 移除一道菜
 func (s *MealService) RemoveDish(householdID, mealID, dishID uint) error {
-	return model.DB.Transaction(func(tx *gorm.DB) error {
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		var m model.MealSession
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("id = ? AND household_id = ?", mealID, householdID).
@@ -326,7 +335,11 @@ func (s *MealService) RemoveDish(householdID, mealID, dishID uint) error {
 			return tx.Model(&m).Updates(map[string]any{"status": status, "confirmed_at": nil}).Error
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	GlobalCanvasHub().BroadcastMealSync(mealID, "dish_removed", 0)
+	return nil
 }
 
 // AddReview 一顿吃完后留下评价

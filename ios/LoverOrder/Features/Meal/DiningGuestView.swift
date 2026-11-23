@@ -1,13 +1,19 @@
 import SwiftUI
 
-// 访客端聚餐:临时在别人家的这一顿里点菜 离开就走 不影响自己的家
+// 访客端聚餐：直接进入同一张自由画布实时协同，保留收起与退出，不含主人流程控制
 struct DiningGuestView: View {
     @EnvironmentObject private var appState: AppState
     @State var meal: MealSession
     @Environment(\.dismiss) private var dismiss
+
+    @StateObject private var canvasVM = MealNowViewModel()
     @State private var showPicker = false
+    @State private var showLeaveConfirm = false
+    @State private var removingDishIDs: Set<UInt> = []
     @State private var ended = false
+    @State private var canvasIsLightSurface = false
     @State private var errorMessage: String?
+    @State private var tipMessage: String?
 
     private var dishes: [MealDish] { meal.dishes ?? [] }
     private var participants: [MealParticipant] { meal.participants ?? [] }
@@ -18,21 +24,48 @@ struct DiningGuestView: View {
             if ended {
                 endedView
             } else {
-                VStack(spacing: 0) {
-                    header
-                    ScrollView {
-                        VStack(spacing: AppSpacing.lg) {
-                            dishesCard
-                            Color.clear.frame(height: 80)
-                        }
-                        .padding(.horizontal, AppSpacing.lg)
-                        .padding(.top, AppSpacing.md)
+                MealCanvasView(
+                    vm: canvasVM,
+                    pendingReviewMealId: nil,
+                    onAddDish: { showPicker = true },
+                    onReview: { _ in },
+                    onConfirm: {},
+                    onShoppingList: {},
+                    onDining: {},
+                    onRetry: { await refresh() },
+                    isGuestMode: true,
+                    guestHostName: meal.creator?.displayName,
+                    guestParticipants: participants,
+                    onGuestCollapse: { dismiss() },
+                    onGuestLeave: { showLeaveConfirm = true },
+                    onDeleteDish: { dish in
+                        await removeDishFromCanvas(dish)
+                    },
+                    onRemoteMealSync: {
+                        Task { await refresh() }
+                    },
+                    onGuestLightSurfaceChange: { isLight in
+                        canvasIsLightSurface = isLight
                     }
-                }
-                .safeAreaInset(edge: .bottom) { addBar }
+                )
             }
         }
+        .preferredColorScheme((ended || canvasIsLightSurface) ? .light : .dark)
+        .onAppear {
+            canvasVM.meal = meal
+        }
         .toast($errorMessage)
+        .toast($canvasVM.errorMessage)
+        .tipToast($tipMessage)
+        .tipToast($canvasVM.tipMessage)
+        .confirmationDialog("退出这个点菜房？", isPresented: $showLeaveConfirm) {
+            Button("退出房间", role: .destructive) {
+                Task { await leave() }
+            }
+            Button("再待会儿", role: .cancel) {}
+        } message: {
+            Text("退出后需要重新扫码或输房间号，你点过的菜仍会留在桌上")
+        }
         .task {
             await refresh()
             while !Task.isCancelled {
@@ -42,23 +75,46 @@ struct DiningGuestView: View {
             }
         }
         .sheet(isPresented: $showPicker, onDismiss: { Task { await refresh() } }) {
-            DiningDishPicker(mealId: meal.id)
+            DiningDishPicker(
+                mealId: meal.id,
+                initialDishes: dishes,
+                currentUserId: appState.currentUser?.id,
+                hostName: meal.creator?.displayName
+            ) {
+                Task { await refresh() }
+            }
+            .preferredColorScheme(.light)
         }
     }
+
+    // MARK: - 主人已收摊态
 
     private var endedView: some View {
         VStack(spacing: AppSpacing.lg) {
             Spacer()
-            Image(systemName: "checkmark.seal")
-                .font(.system(size: 42, weight: .light))
-                .foregroundStyle(Color.brandGreen)
-            Text("不能再点了")
+            Image("StickerEmoji_mood_full_cat")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 82, height: 82)
+                .shadow(color: Color.black.opacity(0.10), radius: 10, y: 4)
+            Text("点菜已经收摊啦")
                 .font(AppFont.title(24))
                 .foregroundStyle(Color.inkPrimary)
-            Text("主人收摊了\n你点过的还在桌上")
+            Text("主人关掉了房间，你点过的菜都留在桌上啦")
                 .multilineTextAlignment(.center)
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
+            if !dishes.isEmpty {
+                Text("本桌共点了 \(dishes.count) 道菜")
+                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.inkSecondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Color.cardBackground, in: Capsule())
+                    .overlay {
+                        Capsule().strokeBorder(Color.dividerLine.opacity(0.7), lineWidth: 0.7)
+                    }
+            }
             Spacer()
             PrimaryButton(title: "返回") {
                 dismiss()
@@ -68,105 +124,14 @@ struct DiningGuestView: View {
         .padding(.horizontal, AppSpacing.xl)
     }
 
-    private var header: some View {
-        VStack(spacing: AppSpacing.sm) {
-            HStack {
-                Button { Task { await leave() } } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "arrow.left")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("离开")
-                            .font(.system(size: 13.5, weight: .semibold, design: .rounded))
-                    }
-                    .foregroundStyle(Color.inkPrimary)
-                    .padding(.horizontal, 12)
-                    .frame(height: 36)
-                    .background(Color.cardBackground, in: Capsule())
-                    .overlay {
-                        Capsule().strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
-                    }
-                }
-                .buttonStyle(SoftPressStyle())
-                Spacer()
-            }
-            Text("在点菜")
-                .font(AppFont.title(24))
-                .foregroundStyle(Color.inkPrimary)
-            Text("跟 \(meal.creator?.displayName ?? "朋友") 一起")
-                .font(AppFont.caption(12))
-                .foregroundStyle(Color.inkMuted)
-            HStack(spacing: -8) {
-                ForEach(participants.prefix(6)) { p in
-                    AvatarView(user: p.user, size: 26, ring: true)
-                }
-            }
-            Text("\(participants.count) 个人 · \(dishes.count) 道")
-                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.inkSecondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Color.cardBackground, in: Capsule())
-                .overlay {
-                    Capsule().strokeBorder(Color.dividerLine.opacity(0.65), lineWidth: 0.6)
-                }
-        }
-        .padding(.horizontal, AppSpacing.lg)
-        .padding(.vertical, AppSpacing.md)
-    }
-
-    private var dishesCard: some View {
-        SectionCard {
-            if dishes.isEmpty {
-                Text("还没点 下面挑")
-                    .font(AppFont.caption())
-                    .foregroundStyle(Color.inkMuted)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, AppSpacing.lg)
-            } else {
-                ForEach(Array(dishes.enumerated()), id: \.element.id) { idx, dish in
-                    HStack(spacing: AppSpacing.md) {
-                        DishThumb(name: dish.recipeName, image: dish.recipeImage)
-                        Text(dish.recipeName)
-                            .font(AppFont.body(15))
-                            .foregroundStyle(Color.inkPrimary)
-                        Spacer()
-                        if let adder = dish.adder {
-                            AvatarView(user: adder, size: 22)
-                        }
-                        if let myId = appState.currentUser?.id, dish.addedBy == myId {
-                            Button {
-                                Task { await removeDish(dish) }
-                            } label: {
-                                Image(systemName: "minus.circle")
-                                    .foregroundStyle(Color.inkMuted)
-                            }
-                        }
-                    }
-                    if idx < dishes.count - 1 {
-                        Divider().background(Color.dividerLine.opacity(0.5))
-                    }
-                }
-            }
-        }
-    }
-
-    private var addBar: some View {
-        PrimaryButton(title: "我要点菜", icon: "fork.knife") {
-            showPicker = true
-        }
-        .padding(.horizontal, AppSpacing.lg)
-        .padding(.vertical, AppSpacing.sm)
-        .background(Color.appBackground)
-        .overlay(alignment: .top) {
-            Divider().overlay(Color.dividerLine.opacity(0.6))
-        }
-    }
-
     private func refresh() async {
         do {
             if let m = try await DiningService.shared.current() {
                 meal = m
+                canvasVM.meal = m
             } else {
+                showPicker = false
+                showLeaveConfirm = false
                 ended = true
             }
         } catch {
@@ -174,13 +139,23 @@ struct DiningGuestView: View {
         }
     }
 
-    private func removeDish(_ dish: MealDish) async {
+    private func removeDishFromCanvas(_ dish: MealDish) async -> Bool {
+        guard !removingDishIDs.contains(dish.id) else { return false }
+        removingDishIDs.insert(dish.id)
+        defer { removingDishIDs.remove(dish.id) }
         do {
             try await DiningService.shared.removeDish(mealId: meal.id, dishId: dish.id)
-            await refresh()
+            var updated = meal
+            updated.dishes = (updated.dishes ?? []).filter { $0.id != dish.id }
+            meal = updated
+            canvasVM.meal = updated
             Haptics.light()
+            tipMessage = "已移出「\(dish.recipeName)」"
+            await refresh()
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 

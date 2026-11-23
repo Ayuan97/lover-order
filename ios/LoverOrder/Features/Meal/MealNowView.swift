@@ -44,6 +44,16 @@ struct MealNowView: View {
                     if let meal = vm.meal {
                         sharePosterMeal = meal
                     }
+                },
+                onRemoteMealSync: {
+                    Task {
+                        await vm.syncMeal(
+                            scene: householdScene,
+                            mood: appState.currentMood,
+                            selfUserId: appState.currentUser?.id
+                        )
+                        await checkDining()
+                    }
                 }
             )
             .environmentObject(appState)
@@ -177,8 +187,13 @@ struct MealNowView: View {
                 }
             }) {
                 if let mid = vm.meal?.id {
-                    DiningHostView(mealId: mid, didCloseRoom: $diningHostDidCloseRoom)
-                        .preferredColorScheme(.light)
+                    DiningHostView(
+                        mealId: mid,
+                        didCloseRoom: $diningHostDidCloseRoom,
+                        householdName: appState.household?.name,
+                        hostName: appState.currentUser?.displayName
+                    )
+                    .preferredColorScheme(.light)
                 }
             }
             .fullScreenCover(item: $resumeDining, onDismiss: {
@@ -186,7 +201,6 @@ struct MealNowView: View {
             }) { m in
                 DiningGuestView(meal: m)
                     .environmentObject(appState)
-                    .preferredColorScheme(.light)
             }
             .sheet(item: $sharePosterMeal) { meal in
                 MealSharePosterSheet(meal: meal)
@@ -202,29 +216,49 @@ struct MealNowView: View {
         }
     }
 
-    // 客人路径续进：只有正在参与外客房间时才显示
+    // 客人路径续进：只有正在参与外客房间时才显示，自适应画布明暗透光玻璃
     private var diningResumeEntry: some View {
-        Button {
+        let isLight = appState.canvasIsLightSurface
+        let ink = isLight ? Color(red: 0.067, green: 0.067, blue: 0.075) : Color.white
+        let dotColor = isLight ? Color(red: 0.16, green: 0.62, blue: 0.34) : Color(red: 0.44, green: 0.88, blue: 0.56)
+        return Button {
             if let d = ongoingDining {
                 resumeDining = d
             }
         } label: {
             HStack(spacing: 5) {
                 Circle()
-                    .fill(Color.liveOlive)
-                    .frame(width: 7, height: 7)
-                Text("在点菜")
-                    .font(AppFont.caption(12))
-                    .foregroundStyle(Color.liveOlive)
+                    .fill(dotColor)
+                    .frame(width: 6, height: 6)
+                Text("回到点菜房")
+                    .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .opacity(0.75)
             }
-            .padding(.horizontal, AppSpacing.md)
-            .frame(height: 36)
-            .background(Color.cardBackground)
-            .clipShape(Capsule())
-            .appCardShadow()
+            .foregroundStyle(ink)
+            .padding(.horizontal, 11)
+            .frame(height: 30)
+            .background {
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        Capsule()
+                            .fill(isLight ? Color.white.opacity(0.76) : Color.black.opacity(0.24))
+                    }
+                    .overlay {
+                        Capsule()
+                            .strokeBorder(
+                                isLight ? Color.black.opacity(0.08) : Color.white.opacity(0.38),
+                                lineWidth: isLight ? 0.6 : 0.85
+                            )
+                    }
+                    .shadow(color: Color.black.opacity(isLight ? 0.08 : 0.22), radius: isLight ? 10 : 12, y: isLight ? 3 : 4)
+            }
         }
-        .padding(.trailing, 20)
-        .padding(.top, 98)
+        .buttonStyle(SoftPressStyle())
+        .padding(.trailing, 18)
+        .padding(.top, 92)
     }
 
     private func checkDining() async {

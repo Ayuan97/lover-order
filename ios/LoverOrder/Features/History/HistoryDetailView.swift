@@ -19,14 +19,16 @@ struct HistoryDetailView: View {
     @State private var repeatedToast: String?
     @State private var tabBarToken = UUID()
     @State private var viewingGallery: HistoryPhotoGalleryItem?
+    @State private var canvasSyncTick: Int = 0
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: AppSpacing.lg) {
                 if let meal {
                     titleBlock(meal)
-                    if mealCanvasDocumentExists(mealID: meal.id) {
+                    if canvasSyncTick >= 0, mealCanvasDocumentExists(mealID: meal.id) {
                         MealCanvasSnapshotView(mealID: meal.id, allowLivePlayback: true)
+                            .id("\(meal.id)-\(canvasSyncTick)")
                     }
                     dishesCard(meal)
                     reviewsCard(meal)
@@ -454,10 +456,15 @@ struct HistoryDetailView: View {
     private func load() async {
         isLoading = true
         defer { isLoading = false }
+        async let detailTask = MealService.shared.detail(id: mealId)
+        async let canvasTask = syncRemoteMealCanvasIfNeeded(mealID: mealId, forceRefresh: true)
         do {
-            meal = try await MealService.shared.detail(id: mealId)
+            meal = try await detailTask
         } catch {
             errorMessage = error.localizedDescription
+        }
+        if await canvasTask {
+            canvasSyncTick += 1
         }
     }
 
@@ -686,10 +693,11 @@ struct MealSharePosterSheet: View {
     @State private var isExportingPoster: Bool = false
     @State private var shareActivityItems: SharePosterActivityItem?
     @State private var liveExportProgress: Double?
+    @State private var hasSyncedCanvas: Bool = false
     @State private var tipMessage: String?
 
     private var hasCanvas: Bool {
-        mealCanvasDocumentExists(mealID: meal.id)
+        hasSyncedCanvas || mealCanvasDocumentExists(mealID: meal.id)
     }
 
     private var activeCoverCandidate: MealPosterCoverCandidate? {
@@ -1157,8 +1165,10 @@ struct MealSharePosterSheet: View {
         defer { isPreparingMedia = false }
 
         var candidateList: [MealPosterCoverCandidate] = []
-        if mealCanvasDocumentExists(mealID: meal.id),
-           let canvasImg = await renderMealCanvasStillImage(mealID: meal.id) {
+        if await syncRemoteMealCanvasIfNeeded(mealID: meal.id) {
+            hasSyncedCanvas = true
+        }
+        if let canvasImg = await renderMealCanvasStillImage(mealID: meal.id) {
             candidateList.append(MealPosterCoverCandidate(label: "自由画布", image: canvasImg, isCanvas: true))
         }
 

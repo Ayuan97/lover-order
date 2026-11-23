@@ -55,6 +55,28 @@ struct AppUser: Codable, Identifiable, Hashable {
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
     }
 
+    init(
+        id: UInt,
+        nickname: String,
+        avatar: String? = nil,
+        email: String? = nil,
+        gender: Int8? = nil,
+        householdId: UInt? = nil
+    ) {
+        self.id = id
+        self.nickname = nickname
+        self.avatar = avatar
+        self.email = email
+        self.gender = gender
+        self.householdId = householdId
+        self.defaultScene = nil
+        self.defaultMood = nil
+        self.tastePrefs = nil
+        self.isActive = true
+        self.lastLoginAt = nil
+        self.createdAt = nil
+    }
+
     var displayName: String {
         nickname.isEmpty ? "美食家" : nickname
     }
