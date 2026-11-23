@@ -15,81 +15,131 @@ struct HouseholdSetupView: View {
     enum Mode: Hashable { case create, join }
 
     var body: some View {
-        VStack(spacing: AppSpacing.xl) {
-            header
-
-            Picker("", selection: $mode) {
-                Text("建个家").tag(Mode.create)
-                Text("进 Ta 的家").tag(Mode.join)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, AppSpacing.xl)
-
-            SectionCard {
-                switch mode {
-                case .create:
-                    createSection
-                case .join:
-                    joinSection
-                }
-            }
-            .padding(.horizontal, AppSpacing.xl)
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(AppFont.caption())
-                    .foregroundStyle(Color.errorInk)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, AppSpacing.xl)
-            }
-
-            Spacer()
-
-            PrimaryButton(title: confirmTitle, isLoading: isLoading, action: submit)
-                .padding(.horizontal, AppSpacing.xl)
-
-            // 来蹭饭的朋友不该被迫先建一个家 聚餐参与不要求有家
-            Button {
-                showJoinDining = true
-            } label: {
-                HStack(spacing: 5) {
-                    Image(systemName: "qrcode.viewfinder")
-                    Text("不建家 只去朋友那儿蹭一顿")
-                }
-                .font(AppFont.caption(13))
-                .foregroundStyle(Color.inkMuted)
-            }
-
-            // 卡住时能自救 也能换账号
-            VStack(spacing: AppSpacing.sm) {
-                Button {
-                    Task { await resync() }
-                } label: {
-                    HStack(spacing: 5) {
-                        if isSyncing {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                        }
-                        Text("好像卡住了 再试一次")
+        ScrollView {
+            VStack(spacing: 0) {
+                ZStack(alignment: .bottomLeading) {
+                    GeometryReader { proxy in
+                        Image("ProfileHeroCover")
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            .clipped()
                     }
-                    .font(AppFont.caption(13))
-                    .foregroundStyle(Color.brandGreen)
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.28), Color.black.opacity(0.68)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    header
+                        .padding(.horizontal, AppSpacing.xl)
+                        .padding(.bottom, 42)
                 }
-                .disabled(isSyncing)
+                .frame(height: 204)
 
-                Button {
-                    Task { await appState.didLogout() }
-                } label: {
-                    Text("换个账号")
-                        .font(AppFont.caption(13))
-                        .foregroundStyle(Color.inkMuted)
+                VStack(spacing: AppSpacing.xl) {
+                    Picker("", selection: $mode) {
+                        Text("建个家").tag(Mode.create)
+                        Text("进 Ta 的家").tag(Mode.join)
+                    }
+                    .pickerStyle(.segmented)
+
+                    SectionCard {
+                        switch mode {
+                        case .create:
+                            createSection
+                        case .join:
+                            joinSection
+                        }
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous)
+                            .strokeBorder(Color.dividerLine.opacity(0.65), lineWidth: 0.7)
+                    }
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(AppFont.caption())
+                            .foregroundStyle(Color.errorInk)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    PrimaryButton(title: confirmTitle, isLoading: isLoading, action: submit)
+
+                    // 来蹭饭的朋友不该被迫先建一个家 聚餐参与不要求有家
+                    Button {
+                        showJoinDining = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "qrcode.viewfinder")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(Color.inkPrimary)
+                            Text("不建家，只去朋友那儿蹭一顿")
+                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .foregroundStyle(Color.inkPrimary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Color.inkMuted)
+                        }
+                        .padding(.horizontal, 16)
+                        .frame(height: 48)
+                        .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .strokeBorder(Color.dividerLine.opacity(0.65), lineWidth: 0.7)
+                        }
+                    }
+                    .buttonStyle(SoftPressStyle())
+
+                    // 卡住时能自救 也能换账号
+                    HStack(spacing: AppSpacing.lg) {
+                        Button {
+                            Task { await resync() }
+                        } label: {
+                            HStack(spacing: 5) {
+                                if isSyncing {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Image(systemName: "arrow.triangle.2.circlepath")
+                                }
+                                Text("好像卡住了 再试一次")
+                            }
+                            .font(AppFont.caption(13))
+                            .foregroundStyle(Color.inkPrimary)
+                        }
+                        .disabled(isSyncing)
+
+                        Text("·").foregroundStyle(Color.inkMuted.opacity(0.5))
+
+                        Button {
+                            Task { await appState.didLogout() }
+                        } label: {
+                            Text("换个账号")
+                                .font(AppFont.caption(13))
+                                .foregroundStyle(Color.inkMuted)
+                        }
+                    }
+                    .padding(.top, 4)
+                    .padding(.bottom, AppSpacing.xxl)
                 }
+                .padding(.horizontal, AppSpacing.xl)
+                .padding(.top, 24)
+                .background(
+                    Color.appBackground,
+                    in: UnevenRoundedRectangle(
+                        topLeadingRadius: 28,
+                        bottomLeadingRadius: 0,
+                        bottomTrailingRadius: 0,
+                        topTrailingRadius: 28,
+                        style: .continuous
+                    )
+                )
+                .padding(.top, -24)
             }
-            .padding(.bottom, AppSpacing.xxl)
         }
-        .padding(.top, AppSpacing.xxl)
+        .ignoresSafeArea(edges: .top)
         .background(Color.appBackground.ignoresSafeArea())
+        .scrollIndicators(.hidden)
         .fullScreenCover(isPresented: $showScanner) {
             QRScannerScreen(hint: "对准对方餐券上的二维码", manualEntryTitle: "改为手输邀请码") { code in
                 handleScannedInvite(code)
@@ -99,16 +149,29 @@ struct HouseholdSetupView: View {
             DiningJoinView()
                 .environmentObject(appState)
         }
+        .onAppear {
+            consumePendingInviteCode()
+        }
+        .onChange(of: appState.pendingJoinHomeCode) { _, _ in
+            consumePendingInviteCode()
+        }
+    }
+
+    private func consumePendingInviteCode() {
+        guard let code = appState.pendingJoinHomeCode, !code.isEmpty else { return }
+        mode = .join
+        inviteCode = code
+        appState.pendingJoinHomeCode = nil
     }
 
     private var header: some View {
-        VStack(spacing: AppSpacing.sm) {
-            Text("先有个家")
-                .font(AppFont.title(28))
-                .foregroundStyle(Color.inkPrimary)
-            Text("和 Ta 一起完善每一顿的画布")
-                .font(AppFont.body())
-                .foregroundStyle(Color.inkMuted)
+        VStack(alignment: .leading, spacing: 6) {
+            Text("欢迎来到我们这顿")
+                .font(.system(size: 27, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+            Text("建一个属于你们的小厨房，或者加入 Ta 的家")
+                .font(.system(size: 13.5, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.88))
         }
     }
 

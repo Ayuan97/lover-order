@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"lover-order-backend/internal/model"
 )
 
@@ -87,6 +88,7 @@ func (s *DiningService) Join(userID uint, roomCode string) (*model.MealSession, 
 		if err := model.DB.Create(p).Error; err != nil {
 			return nil, err
 		}
+		NewNotificationService().NotifyDiningJoined(m.HouseholdID, userID, m.ID, m.RoomCode)
 	} else if err != nil {
 		return nil, err
 	}
@@ -159,34 +161,49 @@ func (s *DiningService) AddDish(userID, mealID uint, in DishInput) (*model.MealS
 	if err := model.DB.Create(dish).Error; err != nil {
 		return nil, err
 	}
+	NewNotificationService().NotifyDiningDishAdded(m.HouseholdID, userID, m.ID, dish.RecipeName)
 	return s.detail(m.ID)
 }
 
 // RemoveDish 聚餐里移除自己加的菜
 func (s *DiningService) RemoveDish(userID, mealID, dishID uint) error {
-	var m model.MealSession
-	if err := model.DB.First(&m, mealID).Error; err != nil {
-		return errors.New("聚餐不存在")
-	}
-	// 房间过期/关闭或一顿已终态时禁止改历史，避免吃完后还能删菜
-	if !roomAlive(&m) {
-		return errors.New("点菜房间已关闭或过期")
-	}
-	if m.Status == model.MealStatusCompleted || m.Status == model.MealStatusCancelled {
-		return errors.New("这一顿已结束 无法修改")
-	}
-	if !s.canParticipate(userID, &m) {
-		return errors.New("你不在这个聚餐里")
-	}
-	res := model.DB.Where("id = ? AND meal_session_id = ? AND added_by = ?", dishID, mealID, userID).
-		Delete(&model.MealDish{})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return errors.New("只能移除自己点的菜")
-	}
-	return nil
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		var m model.MealSession
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", mealID).
+			Preload("Dishes").First(&m).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("聚餐不存在")
+			}
+			return err
+		}
+		// 房间过期/关闭或一顿已终态时禁止改历史，避免吃完后还能删菜
+		if !roomAlive(&m) {
+			return errors.New("点菜房间已关闭或过期")
+		}
+		if m.Status == model.MealStatusCompleted || m.Status == model.MealStatusCancelled {
+			return errors.New("这一顿已结束 无法修改")
+		}
+		if !s.canParticipate(userID, &m) {
+			return errors.New("你不在这个聚餐里")
+		}
+		res := tx.Where("id = ? AND meal_session_id = ? AND added_by = ?", dishID, mealID, userID).
+			Delete(&model.MealDish{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return errors.New("只能移除自己点的菜")
+		}
+		// 删空已定下的餐次后退回挑菜态，避免出现 confirmed 且 0 道菜。
+		if m.Status == model.MealStatusConfirmed && len(m.Dishes) <= 1 {
+			return tx.Model(&m).Updates(map[string]any{
+				"status":       model.MealStatusPlanning,
+				"confirmed_at": nil,
+			}).Error
+		}
+		return nil
+	})
 }
 
 // Recipes 聚餐可点的菜 即召集者家的菜单 所有参与者共用同一份

@@ -30,6 +30,31 @@ struct AppUser: Codable, Identifiable, Hashable {
         case createdAt = "created_at"
     }
 
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UInt.self, forKey: .id)
+        nickname = try c.decode(String.self, forKey: .nickname)
+        avatar = try c.decodeIfPresent(String.self, forKey: .avatar)
+        email = try c.decodeIfPresent(String.self, forKey: .email)
+        gender = try c.decodeIfPresent(Int8.self, forKey: .gender)
+        householdId = try c.decodeIfPresent(UInt.self, forKey: .householdId)
+        // 保留未知历史场景值为 nil，避免老账号登录或加载成员/菜谱创建者时解码失败
+        if let rawScene = try c.decodeIfPresent(String.self, forKey: .defaultScene) {
+            defaultScene = MealScene(rawValue: rawScene)
+        } else {
+            defaultScene = nil
+        }
+        if let rawMood = try c.decodeIfPresent(String.self, forKey: .defaultMood) {
+            defaultMood = Mood(rawValue: rawMood)
+        } else {
+            defaultMood = nil
+        }
+        tastePrefs = try c.decodeIfPresent([String].self, forKey: .tastePrefs)
+        isActive = try c.decodeIfPresent(Bool.self, forKey: .isActive)
+        lastLoginAt = try c.decodeIfPresent(Date.self, forKey: .lastLoginAt)
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
+    }
+
     var displayName: String {
         nickname.isEmpty ? "美食家" : nickname
     }

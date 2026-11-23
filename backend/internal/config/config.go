@@ -13,6 +13,7 @@ type Config struct {
 	Database DatabaseConfig `mapstructure:"database"`
 	JWT      JWTConfig      `mapstructure:"jwt"`
 	Apple    AppleConfig    `mapstructure:"apple"`
+	APNs     APNsConfig     `mapstructure:"apns"`
 	Upload   UploadConfig   `mapstructure:"upload"`
 	Log      LogConfig      `mapstructure:"log"`
 	CORS     CORSConfig     `mapstructure:"cors"`
@@ -53,6 +54,16 @@ type AppleConfig struct {
 	PrivateKeyPath string `mapstructure:"private_key_path"`
 	JWKSURL        string `mapstructure:"jwks_url"`
 	Issuer         string `mapstructure:"issuer"`
+}
+
+// APNsConfig Apple 推送通知配置（可选；未填写 .p8 密钥时仅落库并发出干跑日志）
+type APNsConfig struct {
+	Enabled        bool   `mapstructure:"enabled"`
+	TeamID         string `mapstructure:"team_id"`
+	KeyID          string `mapstructure:"key_id"`
+	BundleID       string `mapstructure:"bundle_id"`
+	PrivateKeyPath string `mapstructure:"private_key_path"`
+	Production     bool   `mapstructure:"production"`
 }
 
 type UploadConfig struct {
@@ -117,6 +128,10 @@ func setDefaults() {
 
 	viper.SetDefault("apple.jwks_url", "https://appleid.apple.com/auth/keys")
 	viper.SetDefault("apple.issuer", "https://appleid.apple.com")
+
+	viper.SetDefault("apns.enabled", false)
+	viper.SetDefault("apns.bundle_id", "com.loverorder.app")
+	viper.SetDefault("apns.production", false)
 
 	viper.SetDefault("upload.path", "./uploads")
 	viper.SetDefault("upload.max_size", 10485760)

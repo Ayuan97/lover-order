@@ -15,10 +15,11 @@ struct RecipeDetailView: View {
     @State private var errorMessage: String?
     @State private var showEdit: Bool = false
     @State private var confirmDelete: Bool = false
+    @State private var tabBarToken = UUID()
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: AppSpacing.lg) {
+            VStack(alignment: .leading, spacing: 0) {
                 heroGallery
                 if let recipe {
                     VStack(alignment: .leading, spacing: AppSpacing.lg) {
@@ -27,23 +28,43 @@ struct RecipeDetailView: View {
                         stepsToggle(recipe)
                         if let tips = recipe.tips, !tips.isEmpty { tipsSection(tips) }
                         reviewsSection(recipe)
+                        Color.clear.frame(height: 16)
                     }
                     .padding(.horizontal, AppSpacing.lg)
+                    .padding(.top, 22)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        Color.appBackground,
+                        in: UnevenRoundedRectangle(
+                            topLeadingRadius: 26,
+                            bottomLeadingRadius: 0,
+                            bottomTrailingRadius: 0,
+                            topTrailingRadius: 26,
+                            style: .continuous
+                        )
+                    )
+                    .padding(.top, -22)
                 }
             }
-            .padding(.top, 0)
         }
+        .ignoresSafeArea(edges: .top)
         .background {
             Color.appBackground.ignoresSafeArea()
         }
         .safeAreaInset(edge: .bottom) {
             bottomBar
         }
+        .onAppear {
+            appState.setTabBarHidden(true, token: tabBarToken)
+        }
+        .onDisappear {
+            appState.setTabBarHidden(false, token: tabBarToken)
+        }
         .task {
             await load()
         }
         .navigationBarTitleDisplayMode(.inline)
-        .navigationTitle(recipe?.name ?? "菜品")
+        .navigationTitle("")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 HStack(spacing: AppSpacing.md) {
@@ -87,6 +108,7 @@ struct RecipeDetailView: View {
         } message: {
             Text("删除后这道菜不会再出现在菜单里 但已经记下的历史不受影响")
         }
+        .toast($errorMessage)
     }
 
     private var heroGallery: some View {
@@ -95,15 +117,24 @@ struct RecipeDetailView: View {
             ForEach(Array(images.enumerated()), id: \.offset) { _, image in
                 AsyncImageView(url: image, name: recipe?.name ?? "菜品")
                     .frame(maxWidth: .infinity)
-                    .frame(height: 300)
+                    .frame(height: 340)
                     .clipped()
             }
         }
-        .frame(height: 300)
+        .frame(height: 340)
         .tabViewStyle(.page(indexDisplayMode: images.count > 1 ? .automatic : .never))
+        .overlay(alignment: .top) {
+            LinearGradient(
+                colors: [Color.white.opacity(0.42), Color.white.opacity(0.14), .clear],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 96)
+            .allowsHitTesting(false)
+        }
         .overlay(alignment: .bottomLeading) {
-            LinearGradient(colors: [.clear, .black.opacity(0.32)], startPoint: .top, endPoint: .bottom)
-                .frame(height: 90)
+            LinearGradient(colors: [.clear, .black.opacity(0.28)], startPoint: .top, endPoint: .bottom)
+                .frame(height: 80)
                 .allowsHitTesting(false)
         }
     }
@@ -128,6 +159,35 @@ struct RecipeDetailView: View {
                     .font(AppFont.body())
                     .foregroundStyle(Color.inkSecondary)
             }
+            if (r.cookingTime ?? 0) > 0 || (r.useCount ?? 0) > 0 || !(r.tags ?? []).isEmpty {
+                HStack(spacing: 6) {
+                    if let time = r.cookingTime, time > 0 {
+                        Label("\(time) 分钟", systemImage: "clock")
+                            .font(AppFont.caption(11.5))
+                            .foregroundStyle(Color.inkSecondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.cardBackground, in: Capsule())
+                    }
+                    if let used = r.useCount, used > 0 {
+                        Text("做过 \(used) 次")
+                            .font(AppFont.caption(11.5))
+                            .foregroundStyle(Color.inkSecondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.cardBackground, in: Capsule())
+                    }
+                    ForEach((r.tags ?? []).prefix(2), id: \.self) { tag in
+                        Text(tag)
+                            .font(AppFont.caption(11.5))
+                            .foregroundStyle(Color.inkMuted)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.cardBackground, in: Capsule())
+                    }
+                }
+                .padding(.top, 2)
+            }
         }
     }
 
@@ -145,10 +205,11 @@ struct RecipeDetailView: View {
                 }
             }
             if let items = r.ingredients, !items.isEmpty {
-                ForEach(items) { ing in
-                    HStack {
-                        Image(systemName: "leaf.circle")
-                            .foregroundStyle(Color.brandGreen)
+                ForEach(Array(items.enumerated()), id: \.element.id) { idx, ing in
+                    HStack(spacing: 10) {
+                        Circle()
+                            .fill(Color.inkPrimary.opacity(0.28))
+                            .frame(width: 6, height: 6)
                         Text(ing.name)
                             .font(AppFont.body(14))
                             .foregroundStyle(Color.inkPrimary)
@@ -157,7 +218,9 @@ struct RecipeDetailView: View {
                             .font(AppFont.body(14))
                             .foregroundStyle(Color.inkMuted)
                     }
-                    Divider().background(Color.dividerLine.opacity(0.5))
+                    if idx < items.count - 1 {
+                        Divider().background(Color.dividerLine.opacity(0.5))
+                    }
                 }
             } else {
                 Text("还没列出食材").font(AppFont.caption()).foregroundStyle(Color.inkMuted)
@@ -167,14 +230,16 @@ struct RecipeDetailView: View {
 
     // 做法 NavigationLink 进入独立步骤页
     private func stepsToggle(_ r: Recipe) -> some View {
-        NavigationLink {
+        let obsidian = Color(red: 0.067, green: 0.067, blue: 0.075)
+        return NavigationLink {
             RecipeStepsView(recipe: r)
         } label: {
             HStack(spacing: AppSpacing.md) {
                 ZStack {
-                    Color.brandGreen.opacity(0.12)
+                    obsidian
                     Image(systemName: "list.number")
-                        .foregroundStyle(Color.brandGreen)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
                 }
                 .frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
@@ -189,12 +254,16 @@ struct RecipeDetailView: View {
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Color.inkMuted)
             }
             .padding(AppSpacing.lg)
-            .background(Color.cardBackground.opacity(0.9))
+            .background(Color.cardBackground.opacity(0.95))
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-
+            .overlay {
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .strokeBorder(Color.dividerLine.opacity(0.6), lineWidth: 0.7)
+            }
         }
         .buttonStyle(.plain)
     }
@@ -295,20 +364,62 @@ struct RecipeDetailView: View {
             }
         }
         .padding(AppSpacing.md)
-        .background(Color.cardBackground.opacity(0.84))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.inkPrimary.opacity(0.08), lineWidth: 1))
+        .background(Color.cardBackground.opacity(0.9))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.dividerLine.opacity(0.6), lineWidth: 0.7))
     }
 
     private var bottomBar: some View {
         HStack {
-            PrimaryButton(title: alreadyAdded ? "已加入这一顿" : "加入这一顿", isLoading: isLoading) {
-                Task { await addToMeal() }
+            if alreadyAdded {
+                Button {
+                    Haptics.light()
+                    dismiss()
+                    appState.switchToMealTab()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 13, weight: .bold))
+                        Text("已加入 · 去画布")
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 12, weight: .bold))
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(Color(red: 0.067, green: 0.067, blue: 0.075), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .buttonStyle(SoftPressStyle())
+            } else {
+                Button {
+                    Task { await addToMeal() }
+                } label: {
+                    HStack(spacing: 6) {
+                        if isLoading {
+                            ProgressView().tint(.white).controlSize(.small)
+                        } else {
+                            Image(systemName: "plus")
+                                .font(.system(size: 14, weight: .bold))
+                        }
+                        Text("加入这一顿")
+                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(Color(red: 0.067, green: 0.067, blue: 0.075), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .buttonStyle(SoftPressStyle())
+                .disabled(isLoading)
             }
         }
         .padding(.horizontal, AppSpacing.lg)
-        .padding(.vertical, AppSpacing.sm)
-        .background(Color.cardBackground)
+        .padding(.vertical, 10)
+        .background(Color.appBackground)
+        .overlay(alignment: .top) {
+            Divider().overlay(Color.dividerLine.opacity(0.6))
+        }
     }
 
     private var alreadyAdded: Bool {
@@ -356,6 +467,8 @@ struct RecipeDetailView: View {
         do {
             _ = try await MealService.shared.addDish(mealId: meal.id, dish: DishInput(recipeId: recipe.id))
             self.meal = try await MealService.shared.detail(id: meal.id)
+            Haptics.light()
+            AppNotifications.mealChanged()
         } catch {
             errorMessage = error.localizedDescription
         }

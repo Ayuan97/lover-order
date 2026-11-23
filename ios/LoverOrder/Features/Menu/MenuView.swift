@@ -22,6 +22,7 @@ struct MenuView: View {
                     filterPanel
                     grid_section
                     pinnedSection
+                    Color.clear.frame(height: 150)
                 }
                 .padding(.horizontal, AppSpacing.lg)
                 .padding(.top, AppSpacing.md)
@@ -35,6 +36,11 @@ struct MenuView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 bottomBar
+            }
+            .onChange(of: appState.activeTab) { _, tab in
+                if tab == 1 {
+                    Task { await vm.loadCurrentMeal(scene: .household, mood: appState.currentMood) }
+                }
             }
             .task {
                 await vm.bootstrap(scene: .household, mood: appState.currentMood)
@@ -68,11 +74,16 @@ struct MenuView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .bottom) {
-            VStack(alignment: .leading, spacing: 5) {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text("菜谱")
                     .font(AppFont.title(27))
                     .foregroundStyle(Color.inkPrimary)
+                if !vm.recipes.isEmpty {
+                    Text("共 \(vm.recipes.count) 道菜")
+                        .font(AppFont.caption(12))
+                        .foregroundStyle(Color.inkMuted)
+                }
             }
             Spacer()
             Button {
@@ -86,7 +97,7 @@ struct MenuView: View {
             .buttonStyle(SoftPressStyle())
             .accessibilityLabel("添加菜谱")
         }
-        .frame(height: 52)
+        .frame(minHeight: 54)
     }
 
     private var filterPanel: some View {
@@ -153,8 +164,17 @@ struct MenuView: View {
             } else {
                 LazyVGrid(columns: grid, spacing: AppSpacing.md) {
                     ForEach(vm.recipes) { recipe in
-                        MenuRecipeCard(recipe: recipe, alreadyAdded: alreadyAdded(recipe)) {
-                            Task { await vm.addDish(recipe) }
+                        let pinned = pinnedDish(for: recipe)
+                        MenuRecipeCard(
+                            recipe: recipe,
+                            alreadyAdded: pinned != nil,
+                            canToggle: pinned == nil || canRemovePinnedDish
+                        ) {
+                            if let pinned {
+                                Task { await vm.removeDish(pinned) }
+                            } else {
+                                Task { await vm.addDish(recipe) }
+                            }
                         }
                         .onAppear {
                             if recipe.id == vm.recipes.last?.id {
@@ -200,14 +220,14 @@ struct MenuView: View {
                             .foregroundStyle(Color.inkMuted)
                     }
                     VStack(spacing: AppSpacing.sm) {
-                        ForEach(vm.pinnedDishes) { dish in
+                        ForEach(Array(vm.pinnedDishes.enumerated()), id: \.element.id) { idx, dish in
                             HStack(spacing: AppSpacing.md) {
                                 DishThumb(name: dish.recipeName, image: dish.recipeImage)
                                 Text(dish.recipeName)
                                     .font(AppFont.body(15))
                                     .foregroundStyle(Color.inkPrimary)
                                 Spacer()
-                                // confirmed 最后一道不能删，与首页一致
+                                // 已定下的最后一道也可移除，移除后回到挑菜态
                                 if canRemovePinnedDish {
                                     Button {
                                         Task { await vm.removeDish(dish) }
@@ -217,7 +237,9 @@ struct MenuView: View {
                                     }
                                 }
                             }
-                            Divider().overlay(Color.brandGreen.opacity(0.12))
+                            if idx < vm.pinnedDishes.count - 1 {
+                                Divider().overlay(Color.brandGreen.opacity(0.12))
+                            }
                         }
                     }
                 }
@@ -226,38 +248,81 @@ struct MenuView: View {
         }
     }
 
+    @ViewBuilder
     private var bottomBar: some View {
-        VStack(spacing: 0) {
-            Divider().background(Color.dividerLine)
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("\(vm.pinnedDishes.count) 道菜")
-                        .font(AppFont.headline(15))
-                        .foregroundStyle(Color.inkPrimary)
+        if !vm.pinnedDishes.isEmpty {
+            HStack(spacing: 12) {
+                HStack(spacing: -8) {
+                    ForEach(vm.pinnedDishes.prefix(3)) { dish in
+                        DishThumb(name: dish.recipeName, image: dish.recipeImage, size: 28, radius: 14)
+                            .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
+                    }
                 }
-                Spacer()
-                PrimaryButton(title: confirmTitle) {
-                    Task { await vm.confirmMeal() }
+
+                Text("已选 \(vm.pinnedDishes.count) 道")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.inkPrimary)
+
+                Spacer(minLength: 4)
+
+                if vm.meal?.status == .planning {
+                    Button {
+                        Haptics.light()
+                        Task { await vm.confirmMeal() }
+                    } label: {
+                        Text("定下这顿")
+                            .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 16)
+                            .frame(height: 38)
+                            .background(Color(red: 0.067, green: 0.067, blue: 0.075), in: Capsule())
+                    }
+                    .buttonStyle(SoftPressStyle())
+                } else {
+                    Button {
+                        Haptics.light()
+                        appState.switchToMealTab()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("去画布看看")
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 11, weight: .bold))
+                        }
+                        .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 15)
+                        .frame(height: 38)
+                        .background(Color(red: 0.067, green: 0.067, blue: 0.075), in: Capsule())
+                    }
+                    .buttonStyle(SoftPressStyle())
                 }
-                .frame(width: 132)
-                .disabled(vm.meal?.status != .planning || vm.pinnedDishes.isEmpty)
-                .opacity(vm.meal?.status == .planning ? 1 : 0.55)
             }
-            .padding(.horizontal, AppSpacing.lg)
-            .padding(.vertical, AppSpacing.sm)
+            .padding(.leading, 12)
+            .padding(.trailing, 7)
+            .frame(height: 52)
+            .background {
+                ZStack {
+                    Capsule().fill(.ultraThinMaterial)
+                    Capsule().fill(Color.white.opacity(0.86))
+                }
+            }
+            .overlay {
+                Capsule().strokeBorder(Color.black.opacity(0.08), lineWidth: 0.7)
+            }
+            .shadow(color: Color.black.opacity(0.10), radius: 16, y: 6)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 76)
         }
-        .background(Color.cardBackground)
     }
 
-    private func alreadyAdded(_ recipe: Recipe) -> Bool {
-        vm.pinnedDishes.contains { $0.recipeId == recipe.id }
+    private func pinnedDish(for recipe: Recipe) -> MealDish? {
+        vm.pinnedDishes.first { $0.recipeId == recipe.id }
     }
 
-    // planning 可删任意道；confirmed 至少留一道（与 MealNow 一致）
+    // planning 与 confirmed 均可移除菜品，删空后回到挑菜态
     private var canRemovePinnedDish: Bool {
         guard let status = vm.meal?.status else { return true }
-        if status == .confirmed { return vm.pinnedDishes.count > 1 }
-        return status == .planning
+        return status == .planning || status == .confirmed
     }
 
     private var confirmTitle: String {
@@ -278,28 +343,27 @@ private struct CategoryChip: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            Haptics.light()
+            action()
+        } label: {
             Text(title)
-                .font(AppFont.body(14))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .foregroundStyle(isSelected ? Color.inkPrimary : Color.inkSecondary)
-                .background(isSelected ? Color.brandGreen.opacity(0.14) : Color.cardBackground.opacity(0.88))
-                .clipShape(Capsule())
+                .font(.system(size: 13.5, weight: isSelected ? .semibold : .medium, design: .rounded))
+                .padding(.horizontal, 15)
+                .frame(height: 36)
+                .foregroundStyle(isSelected ? .white : Color.inkSecondary)
+                .background(
+                    isSelected ? Color(red: 0.067, green: 0.067, blue: 0.075) : Color.cardBackground,
+                    in: Capsule()
+                )
                 .overlay {
-                    Capsule()
-                        .stroke(isSelected ? Color.brandGreen.opacity(0.28) : Color.inkPrimary.opacity(0.07), lineWidth: 1)
-                }
-                .overlay(alignment: .topTrailing) {
-                    if isSelected {
-                        Circle()
-                            .fill(Color.liveOlive)
-                            .frame(width: 5, height: 5)
-                            .offset(x: -4, y: 3)
+                    if !isSelected {
+                        Capsule()
+                            .stroke(Color.dividerLine.opacity(0.9), lineWidth: 0.7)
                     }
                 }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SoftPressStyle())
     }
 }
 
@@ -307,6 +371,7 @@ private struct CategoryChip: View {
 private struct MenuRecipeCard: View {
     let recipe: Recipe
     let alreadyAdded: Bool
+    var canToggle: Bool = true
     let onAdd: () -> Void
 
     var body: some View {
@@ -322,21 +387,31 @@ private struct MenuRecipeCard: View {
             .buttonStyle(.plain)
             Button(action: onAdd) {
                 Image(systemName: alreadyAdded ? "checkmark" : "plus")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(.white)
-                    .frame(width: 30, height: 30)
-                    .background(alreadyAdded ? Color.brandGreen : Color.actionInk, in: Circle())
+                    .frame(width: 32, height: 32)
+                    .background(
+                        alreadyAdded ? Color(red: 0.067, green: 0.067, blue: 0.075) : Color.black.opacity(0.68),
+                        in: Circle()
+                    )
+                    .overlay {
+                        Circle().strokeBorder(Color.white.opacity(0.32), lineWidth: 0.7)
+                    }
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(SoftPressStyle())
-            .padding(.top, 96)
+            .padding(.top, 95)
             .padding(.trailing, 3)
-            .disabled(alreadyAdded)
-            .accessibilityLabel(alreadyAdded ? "已加入这一顿" : "加入" + recipe.name)
+            .disabled(!canToggle)
+            .accessibilityLabel(alreadyAdded ? "移出这一顿：" + recipe.name : "加入" + recipe.name)
         }
         .background(Color.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.dividerLine.opacity(0.6), lineWidth: 0.7)
+        }
     }
 
     private var cover: some View {
@@ -344,14 +419,22 @@ private struct MenuRecipeCard: View {
             AsyncImageView(url: recipe.coverImage, name: recipe.name)
                 .frame(width: proxy.size.width, height: 142)
                 .clipped()
+                .overlay(alignment: .bottom) {
+                    LinearGradient(colors: [.clear, Color.black.opacity(0.18)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 46)
+                        .allowsHitTesting(false)
+                }
                 .overlay(alignment: .topLeading) {
                     if let time = recipe.cookingTime, time > 0 {
                         Text("\(time) 分钟")
-                            .font(AppFont.caption(11))
-                            .foregroundStyle(Color.inkSecondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .background(.white.opacity(0.9), in: Capsule())
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 4)
+                            .background(Color.black.opacity(0.48), in: Capsule())
+                            .overlay {
+                                Capsule().strokeBorder(Color.white.opacity(0.28), lineWidth: 0.6)
+                            }
                             .padding(8)
                     }
                 }

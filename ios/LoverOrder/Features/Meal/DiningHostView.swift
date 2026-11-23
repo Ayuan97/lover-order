@@ -12,6 +12,7 @@ struct DiningHostView: View {
     @State private var isActing = false
     @State private var errorMessage: String?
     @State private var showCloseConfirm = false
+    @State private var shareRoomItem: DiningRoomShareItem?
 
     init(mealId: UInt, didCloseRoom: Binding<Bool> = .constant(false)) {
         self.mealId = mealId
@@ -78,6 +79,9 @@ struct DiningHostView: View {
             Button("再等等", role: .cancel) {}
         } message: {
             Text("他们就不能再加了 已经点的还在")
+        }
+        .sheet(item: $shareRoomItem) { item in
+            ShareSheet(items: [item.text])
         }
     }
 
@@ -147,31 +151,69 @@ struct DiningHostView: View {
                     .padding(.top, AppSpacing.xxl)
 
                     // QR 带 lo://room/ 前缀，避免被扫进进家流
-                    BrandQRCode(content: LoverScanLink.roomPayload(code), size: 180)
-                        .padding(AppSpacing.lg)
-                        .background(
-                            RoundedRectangle(cornerRadius: AppRadius.xl, style: .continuous)
-                                .fill(Color.cardBackground)
-                        )
-                        .appCardShadow()
-
-                    VStack(spacing: 2) {
-                        Text("房间号 · 点一下抄走")
-                            .font(AppFont.caption(11))
-                            .foregroundStyle(Color.inkMuted)
-                        // 人不在场的朋友扫不了码 复制房间号发微信
-                        Button {
-                            UIPasteboard.general.string = code
-                            Haptics.light()
-                            errorMessage = "抄好了 发给他们吧"
-                        } label: {
-                            Text(formatRoom(code))
-                                .font(AppFont.mono(30))
-                                .foregroundStyle(Color.brandGreen)
-                                .tracking(3)
+                    let obsidian = Color(red: 0.067, green: 0.067, blue: 0.075)
+                    VStack(spacing: 0) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "fork.knife")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text("聚餐点菜房")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
                         }
-                        .buttonStyle(.plain)
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(obsidian)
+
+                        VStack(spacing: 14) {
+                            BrandQRCode(content: LoverScanLink.roomPayload(code), size: 176)
+                                .padding(12)
+                                .background(Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .strokeBorder(Color.dividerLine.opacity(0.7), lineWidth: 0.7)
+                                }
+
+                            Button {
+                                UIPasteboard.general.string = code
+                                Haptics.light()
+                                errorMessage = "抄好了 发给他们吧"
+                            } label: {
+                                HStack(spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("房间号 · 点一下复制")
+                                            .font(AppFont.caption(10.5))
+                                            .foregroundStyle(Color.inkMuted)
+                                        Text(formatRoom(code))
+                                            .font(.system(size: 24, weight: .bold, design: .monospaced))
+                                            .foregroundStyle(Color.inkPrimary)
+                                            .tracking(2)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "doc.on.doc")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundStyle(Color.inkPrimary)
+                                        .frame(width: 34, height: 34)
+                                        .background(Color.cardBackground, in: Circle())
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                                .background(Color.appBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .strokeBorder(Color.dividerLine.opacity(0.7), lineWidth: 0.7)
+                                }
+                            }
+                            .buttonStyle(SoftPressStyle())
+                        }
+                        .padding(16)
                     }
+                    .background(Color.cardBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .strokeBorder(Color.dividerLine.opacity(0.65), lineWidth: 0.7)
+                    }
+                    .shadow(color: Color.black.opacity(0.06), radius: 14, y: 6)
 
                     participantsRow
                     dishesSection
@@ -180,15 +222,27 @@ struct DiningHostView: View {
                 .padding(.bottom, AppSpacing.lg)
             }
 
-            SecondaryButton(title: "关掉房间", icon: "xmark.circle") {
-                showCloseConfirm = true
+            HStack(spacing: AppSpacing.md) {
+                SecondaryButton(title: "关掉房间", icon: "xmark.circle") {
+                    showCloseConfirm = true
+                }
+                .disabled(isActing)
+                .opacity(isActing ? 0.55 : 1)
+
+                PrimaryButton(title: "发给朋友", icon: "square.and.arrow.up") {
+                    let link = LoverScanLink.roomPayload(code)
+                    shareRoomItem = DiningRoomShareItem(
+                        text: "今晚一起点菜啦！\n房间号：\(code)\n点开直达：\(link)"
+                    )
+                }
             }
-            .disabled(isActing)
-            .opacity(isActing ? 0.55 : 1)
             .padding(.horizontal, AppSpacing.xl)
             .padding(.bottom, AppSpacing.xxl)
             .padding(.top, AppSpacing.sm)
             .background(Color.appBackground)
+            .overlay(alignment: .top) {
+                Divider().overlay(Color.dividerLine.opacity(0.6))
+            }
         }
     }
 
@@ -231,7 +285,7 @@ struct DiningHostView: View {
                     .padding(.vertical, AppSpacing.md)
             } else {
                 VStack(spacing: AppSpacing.sm) {
-                    ForEach(dishes) { dish in
+                    ForEach(Array(dishes.enumerated()), id: \.element.id) { idx, dish in
                         HStack(spacing: AppSpacing.md) {
                             DishThumb(name: dish.recipeName, image: dish.recipeImage)
                             Text(dish.recipeName)
@@ -242,6 +296,9 @@ struct DiningHostView: View {
                             if let adder = dish.adder {
                                 AvatarView(user: adder, size: 22)
                             }
+                        }
+                        if idx < dishes.count - 1 {
+                            Divider().background(Color.dividerLine.opacity(0.5))
                         }
                     }
                 }
@@ -297,4 +354,9 @@ struct DiningHostView: View {
             errorMessage = error.localizedDescription
         }
     }
+}
+
+private struct DiningRoomShareItem: Identifiable {
+    let id = UUID()
+    let text: String
 }

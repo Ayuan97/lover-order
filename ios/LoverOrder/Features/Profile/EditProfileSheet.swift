@@ -34,6 +34,9 @@ struct EditProfileSheet: View {
                 .padding(.horizontal, AppSpacing.lg)
                 .padding(.vertical, AppSpacing.sm)
                 .background(Color.appBackground)
+                .overlay(alignment: .top) {
+                    Divider().overlay(Color.dividerLine.opacity(0.6))
+                }
             }
             .navigationTitle("编辑资料")
             .navigationBarTitleDisplayMode(.inline)
@@ -67,6 +70,10 @@ struct EditProfileSheet: View {
                 .padding(AppSpacing.md)
                 .background(Color.appBackground)
                 .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous)
+                        .strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
+                }
         }
     }
 

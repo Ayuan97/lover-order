@@ -46,7 +46,10 @@ struct ManualHistoryEntryView: View {
                 .disabled(isSaving || photosUploading)
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
-                .background(Color.cardBackground)
+                .background(Color.appBackground)
+                .overlay(alignment: .top) {
+                    Divider().overlay(Color.dividerLine.opacity(0.6))
+                }
             }
             .interactiveDismissDisabled(isSaving || photosUploading)
             .navigationTitle("记一顿")
@@ -62,15 +65,14 @@ struct ManualHistoryEntryView: View {
     }
 
     private var inputCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
+        SectionCard {
+            VStack(alignment: .leading, spacing: 8) {
                 FieldLabel("和谁一起")
-                Spacer()
                 Picker("和谁一起", selection: $scene) {
                     Text("家人一起吃").tag(MealScene.household)
                     Text("朋友聚餐").tag(MealScene.dining)
                 }
-                .tint(Color.brandGreen)
+                .pickerStyle(.segmented)
             }
             FieldLabel("标题")
             TextField("比如：周五晚饭、生日聚餐", text: $title)
@@ -103,10 +105,6 @@ struct ManualHistoryEntryView: View {
                 .background(Color.appBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
-        .padding(16)
-        .background(Color.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-
     }
 
     private var photosCard: some View {

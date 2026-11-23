@@ -39,10 +39,10 @@ xcodegen generate
 open LoverOrder.xcodeproj
 ```
 
-客户端使用 SwiftUI 和系统框架，不依赖第三方 Swift 包。模拟器默认请求 `http://localhost:8081/api/v1`；真机地址由 `Info.plist` 中的 `API_BASE_URL` 提供。
+客户端使用 SwiftUI 和系统框架，不依赖第三方 Swift 包。模拟器默认请求 `http://localhost:8081/api/v1`；真机地址由 `Info.plist` 中的 `API_BASE_URL` 提供服务根地址（不含 `/api/v1`，客户端会自动拼接）。
 
 ## 认证与数据
 
-正式登录使用 Sign in with Apple；iOS Debug 构建显示开发登录，后端仅在非 release 模式提供开发登录接口。后端使用 MySQL、GORM 和自签 JWT。餐次、菜谱、家庭、评价和房间参与关系由后端持久化；完整画布目前存于本机，记录页可回看当前手机保存的餐次画布；共享存储暂缓。
+正式登录使用 Sign in with Apple（正式启用需在 Xcode 工程配置中绑定 `LoverOrder.entitlements`，并在 `backend/config.yaml` 填入 `apple.*` 配置）；iOS Debug 构建显示开发登录，后端仅在非 release 模式提供开发登录接口。后端使用 MySQL、GORM 和自签 JWT。餐次、菜谱、分类、收藏（菜谱与个人贴图收藏）、家庭、评价和房间参与关系由后端持久化；完整画布目前存于本机，记录页可回看当前手机保存的餐次画布；共享存储暂缓。
 
 产品方向以用户明确的决定及同步后的文档为准；当前可用行为以实际可达代码为准。两者不一致时登记到代码对齐清单。

@@ -30,6 +30,15 @@ apple:
   jwks_url: https://appleid.apple.com/auth/keys
   issuer: https://appleid.apple.com
 
+# 填入 Apple 开发者后台导出的 APNs .p8 密钥并将 enabled 改为 true 即可启用真实远端推送
+apns:
+  enabled: false
+  team_id: ""
+  key_id: ""
+  bundle_id: "com.loverorder.app"
+  private_key_path: ""
+  production: false
+
 upload:
   path: ./uploads
   max_size: 10485760

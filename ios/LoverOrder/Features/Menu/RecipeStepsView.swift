@@ -4,7 +4,9 @@ import SwiftUI
 struct RecipeStepsView: View {
     let recipe: Recipe
 
+    @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
+    @State private var tabBarToken = UUID()
 
     var body: some View {
         ScrollView {
@@ -22,6 +24,12 @@ struct RecipeStepsView: View {
         .background(Color.appBackground.ignoresSafeArea())
         .safeAreaInset(edge: .bottom) {
             bottomBar
+        }
+        .onAppear {
+            appState.setTabBarHidden(true, token: tabBarToken)
+        }
+        .onDisappear {
+            appState.setTabBarHidden(false, token: tabBarToken)
         }
         .navigationTitle("做法 · \(recipe.name)")
         .navigationBarTitleDisplayMode(.inline)
@@ -64,26 +72,24 @@ struct RecipeStepsView: View {
                     .font(AppFont.caption())
                     .foregroundStyle(Color.inkMuted)
             } else {
-                let columns = Array(repeating: GridItem(.flexible(), spacing: AppSpacing.md), count: 4)
-                LazyVGrid(columns: columns, spacing: AppSpacing.md) {
+                FlowLayout(spacing: 8) {
                     ForEach(items) { ing in
-                        VStack(spacing: 4) {
-                            ZStack {
-                                Color.appBackground
-                                Image(systemName: "leaf.circle")
-                                    .font(.system(size: 20, weight: .light))
-                                    .foregroundStyle(Color.brandGreen)
-                            }
-                            .frame(width: 44, height: 44)
-                            .clipShape(Circle())
+                        HStack(spacing: 5) {
                             Text(ing.name)
-                                .font(AppFont.caption(11))
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
                                 .foregroundStyle(Color.inkPrimary)
-                                .lineLimit(1)
-                            Text(ing.amount)
-                                .font(AppFont.caption(10))
-                                .foregroundStyle(Color.inkMuted)
-                                .lineLimit(1)
+                            if !ing.amount.isEmpty {
+                                Text(ing.amount)
+                                    .font(.system(size: 12, design: .rounded))
+                                    .foregroundStyle(Color.inkMuted)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Color.appBackground, in: Capsule())
+                        .overlay {
+                            Capsule()
+                                .strokeBorder(Color.dividerLine.opacity(0.7), lineWidth: 0.7)
                         }
                     }
                 }
@@ -124,16 +130,18 @@ struct RecipeStepsView: View {
     }
 
     private func stepCard(_ step: CookingStep) -> some View {
-        VStack(alignment: .leading, spacing: AppSpacing.md) {
+        let obsidian = Color(red: 0.067, green: 0.067, blue: 0.075)
+        return VStack(alignment: .leading, spacing: AppSpacing.md) {
             HStack(alignment: .top, spacing: AppSpacing.md) {
                 Text("\(step.index)")
-                    .font(AppFont.headline(15))
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .monospacedDigit()
                     .frame(width: 28, height: 28)
                     .foregroundStyle(.white)
-        .background(Color.brandGreen)
-                    .clipShape(Circle())
+                    .background(obsidian, in: Circle())
                 Text(step.text)
                     .font(AppFont.body(14))
+                    .lineSpacing(4)
                     .foregroundStyle(Color.inkPrimary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -147,7 +155,10 @@ struct RecipeStepsView: View {
         .padding(AppSpacing.lg)
         .background(Color.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(Color.dividerLine.opacity(0.55), lineWidth: 0.7)
+        }
     }
 
     private func tipsSection(_ tips: String) -> some View {
@@ -179,6 +190,9 @@ struct RecipeStepsView: View {
         }
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, AppSpacing.sm)
-        .background(Color.cardBackground)
+        .background(Color.appBackground)
+        .overlay(alignment: .top) {
+            Divider().overlay(Color.dividerLine.opacity(0.6))
+        }
     }
 }

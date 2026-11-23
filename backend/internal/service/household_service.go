@@ -96,6 +96,7 @@ func (s *HouseholdService) Join(userID uint, in JoinInput) (*model.Household, er
 		if err := model.DB.Model(&user).Update("household_id", household.ID).Error; err != nil {
 			return nil, err
 		}
+		NewNotificationService().NotifyHouseholdJoined(household.ID, userID, household.Name)
 		return &household, nil
 	}
 
@@ -131,6 +132,7 @@ func (s *HouseholdService) Join(userID uint, in JoinInput) (*model.Household, er
 	if err != nil {
 		return nil, err
 	}
+	NewNotificationService().NotifyHouseholdJoined(household.ID, userID, household.Name)
 	return &household, nil
 }
 

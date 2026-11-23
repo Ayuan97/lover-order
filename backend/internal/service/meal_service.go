@@ -193,7 +193,7 @@ func (s *MealService) Update(householdID, id uint, in MealInput) (*model.MealSes
 }
 
 // Confirm 定下这一顿
-func (s *MealService) Confirm(householdID, id uint) (*model.MealSession, error) {
+func (s *MealService) Confirm(householdID, actorUserID, id uint) (*model.MealSession, error) {
 	m, err := s.load(householdID, id)
 	if err != nil {
 		return nil, err
@@ -207,11 +207,16 @@ func (s *MealService) Confirm(householdID, id uint) (*model.MealSession, error) 
 	if err := model.DB.Save(m).Error; err != nil {
 		return nil, err
 	}
+	dishNames := make([]string, 0, len(m.Dishes))
+	for _, d := range m.Dishes {
+		dishNames = append(dishNames, d.RecipeName)
+	}
+	NewNotificationService().NotifyMealConfirmed(householdID, actorUserID, m.ID, dishNames)
 	return m, nil
 }
 
 // Complete 标记吃完
-func (s *MealService) Complete(householdID, id uint) (*model.MealSession, error) {
+func (s *MealService) Complete(householdID, actorUserID, id uint) (*model.MealSession, error) {
 	m, err := s.load(householdID, id)
 	if err != nil {
 		return nil, err
@@ -231,6 +236,7 @@ func (s *MealService) Complete(householdID, id uint) (*model.MealSession, error)
 	if err := model.DB.Save(m).Error; err != nil {
 		return nil, err
 	}
+	NewNotificationService().NotifyMealCompleted(householdID, actorUserID, m.ID, m.Title)
 	return m, nil
 }
 
@@ -285,6 +291,7 @@ func (s *MealService) AddDish(householdID, userID, id uint, in DishInput) (*mode
 	if err := model.DB.Create(dish).Error; err != nil {
 		return nil, err
 	}
+	NewNotificationService().NotifyMealDishAdded(householdID, userID, m.ID, dish.RecipeName)
 	return dish, nil
 }
 
@@ -394,6 +401,7 @@ func (s *MealService) AddReview(householdID, userID, mealID uint, in ReviewInput
 	}); err != nil {
 		return nil, err
 	}
+	NewNotificationService().NotifyMealReviewed(householdID, userID, m.ID, in.Rating, in.Comment, len(in.Photos))
 	return review, nil
 }
 

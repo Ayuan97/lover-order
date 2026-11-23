@@ -3,6 +3,7 @@ import SwiftUI
 // 餐后记录：备注、照片和口味。
 struct MealReviewView: View {
     let mealId: UInt
+    var currentUserId: UInt? = nil
     var onSaved: () -> Void = {}
 
     @Environment(\.dismiss) private var dismiss
@@ -14,8 +15,10 @@ struct MealReviewView: View {
     @State private var meal: MealSession?
     @State private var dishRatings: [UInt: Int] = [:]
     @State private var dishComments: [UInt: String] = [:]
+    @State private var didPrefill: Bool = false
     @State private var isSubmitting: Bool = false
     @State private var errorMessage: String?
+    @State private var sharePosterMeal: MealSession?
 
     var body: some View {
         NavigationStack {
@@ -56,6 +59,12 @@ struct MealReviewView: View {
                     .disabled(isSubmitting || photosUploading)
                 }
             }
+            .sheet(item: $sharePosterMeal, onDismiss: {
+                dismiss()
+            }) { m in
+                MealSharePosterSheet(meal: m)
+                    .preferredColorScheme(.light)
+            }
         }
     }
 
@@ -67,9 +76,9 @@ struct MealReviewView: View {
                     Button {
                         rating = star
                     } label: {
-                        Image(systemName: star <= rating ? "leaf.fill" : "leaf")
-                            .font(.system(size: 28))
-                            .foregroundStyle(star <= rating ? Color.accentWarm : Color.inkMuted)
+                        Image(systemName: star <= rating ? "star.fill" : "star")
+                            .font(.system(size: 26))
+                            .foregroundStyle(star <= rating ? Color.accentWarm : Color.dividerLine)
                     }
                     .buttonStyle(.plain)
                 }
@@ -127,9 +136,9 @@ struct MealReviewView: View {
                 Button {
                     dishRatings[dishId] = star
                 } label: {
-                    Image(systemName: star <= (dishRatings[dishId] ?? rating) ? "leaf.fill" : "leaf")
+                    Image(systemName: star <= (dishRatings[dishId] ?? rating) ? "star.fill" : "star")
                         .font(.system(size: 20))
-                        .foregroundStyle(star <= (dishRatings[dishId] ?? rating) ? Color.accentWarm : Color.inkMuted)
+                        .foregroundStyle(star <= (dishRatings[dishId] ?? rating) ? Color.accentWarm : Color.dividerLine)
                 }
                 .buttonStyle(.plain)
             }
@@ -182,22 +191,61 @@ struct MealReviewView: View {
     }
 
     private var bottomBar: some View {
-        VStack(spacing: AppSpacing.sm) {
+        HStack(spacing: AppSpacing.sm) {
+            Button {
+                Task { await submit(openShareAfterSave: true) }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("保存并分享")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .lineLimit(1)
+                }
+                .foregroundStyle(Color.inkPrimary)
+                .padding(.horizontal, 16)
+                .frame(height: 50)
+                .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.dividerLine, lineWidth: 0.8)
+                }
+            }
+            .buttonStyle(SoftPressStyle())
+            .disabled(photosUploading || isSubmitting)
+
             PrimaryButton(title: "保存记录", isLoading: isSubmitting) {
-                Task { await submit() }
+                Task { await submit(openShareAfterSave: false) }
             }
             .disabled(photosUploading)
-
         }
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, AppSpacing.sm)
         .background(Color.appBackground)
+        .overlay(alignment: .top) {
+            Divider().overlay(Color.dividerLine.opacity(0.6))
+        }
     }
 
     private func loadMeal() async {
         do {
             let detail = try await MealService.shared.detail(id: mealId)
             meal = detail
+            if !didPrefill {
+                if let currentUserId,
+                   let existing = detail.reviews?.first(where: { $0.userId == currentUserId }) {
+                    rating = existing.rating
+                    comment = existing.comment ?? ""
+                    photoLinks = existing.photos ?? []
+                    for item in existing.dishReviews ?? [] {
+                        dishRatings[item.mealDishId] = item.rating
+                        if let text = item.comment, !text.isEmpty {
+                            dishComments[item.mealDishId] = text
+                        }
+                    }
+                }
+                didPrefill = true
+            }
             for dish in detail.dishes ?? [] where dishRatings[dish.id] == nil {
                 dishRatings[dish.id] = rating
             }
@@ -206,7 +254,7 @@ struct MealReviewView: View {
         }
     }
 
-    private func submit() async {
+    private func submit(openShareAfterSave: Bool) async {
         isSubmitting = true
         defer { isSubmitting = false }
         let dishReviews = buildDishReviews()
@@ -220,7 +268,21 @@ struct MealReviewView: View {
                     dishReviews: dishReviews.isEmpty ? nil : dishReviews
                 )
             )
+            if PendingReviewStore.load()?.mealId == mealId {
+                PendingReviewStore.clear()
+            }
+            AppNotifications.mealChanged()
             onSaved()
+            if openShareAfterSave {
+                if let latest = try? await MealService.shared.detail(id: mealId) {
+                    sharePosterMeal = latest
+                    return
+                }
+                if let meal {
+                    sharePosterMeal = meal
+                    return
+                }
+            }
             dismiss()
         } catch {
             errorMessage = error.localizedDescription

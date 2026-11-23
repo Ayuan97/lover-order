@@ -16,6 +16,111 @@ final class AppState: ObservableObject {
     // 建家后弹出餐券；挂在 Root 避免 Setup 被卸掉后 sheet 一起没了
     @Published var pendingInviteTicket: Household?
     @Published var loginError: String?
+    // 跟随当前画布底面明暗，让底部悬浮主导航与顶部状态栏在实景照/暗台上自动切换高对比样式。
+    @Published var canvasIsLightSurface: Bool = false
+    @Published var isMealTabActive: Bool = true
+    @Published var activeTab: Int = 0
+    @Published var isProfileHeroVisible: Bool = true
+    @Published private var hiddenTabBarTokens: Set<UUID> = []
+
+    // MARK: - 程序外深链与未读消息状态
+    struct DeepLinkedHistoryMeal: Identifiable {
+        let id = UUID()
+        let mealId: UInt
+    }
+
+    struct DeepLinkedDiningRoom: Identifiable {
+        let id = UUID()
+        let code: String
+    }
+
+    @Published var pendingDeepLink: AppDeepLink?
+    @Published var deepLinkedHistoryMeal: DeepLinkedHistoryMeal?
+    @Published var deepLinkedDiningRoom: DeepLinkedDiningRoom?
+    @Published var pendingJoinHomeCode: String?
+    @Published var deepLinkToast: String?
+    @Published var unreadNotificationCount: Int = 0
+
+    var prefersDarkStatusBar: Bool {
+        (isMealTabActive && !canvasIsLightSurface) || (activeTab == 3 && isProfileHeroVisible && !hidesFloatingTabBar)
+    }
+
+    var hidesFloatingTabBar: Bool {
+        !hiddenTabBarTokens.isEmpty
+    }
+
+    func setTabBarHidden(_ hidden: Bool, token: UUID) {
+        if hidden {
+            hiddenTabBarTokens.insert(token)
+        } else {
+            hiddenTabBarTokens.remove(token)
+        }
+    }
+
+    func switchToMealTab() {
+        hiddenTabBarTokens.removeAll()
+        activeTab = 0
+        isMealTabActive = true
+    }
+
+    func switchToProfileTab() {
+        hiddenTabBarTokens.removeAll()
+        activeTab = 3
+        isMealTabActive = false
+    }
+
+    func handleOpenURL(_ url: URL) {
+        guard let link = AppDeepLink.parse(url: url) else { return }
+        handleDeepLink(link)
+    }
+
+    func handleDeepLink(_ link: AppDeepLink) {
+        guard isLoggedIn, !isBootstrapping else {
+            pendingDeepLink = link
+            return
+        }
+        routeDeepLink(link)
+    }
+
+    func consumePendingDeepLinkIfReady() {
+        guard isLoggedIn, !isBootstrapping, let link = pendingDeepLink else { return }
+        pendingDeepLink = nil
+        routeDeepLink(link)
+    }
+
+    private func routeDeepLink(_ link: AppDeepLink) {
+        switch link {
+        case .meal:
+            deepLinkedHistoryMeal = nil
+            deepLinkedDiningRoom = nil
+            switchToMealTab()
+            AppNotifications.mealChanged()
+        case .history(let mealId):
+            guard currentUser?.hasHousehold == true || household != nil else {
+                deepLinkToast = "先创建或加入一个家，就能看这顿饭记录了"
+                return
+            }
+            deepLinkedDiningRoom = nil
+            deepLinkedHistoryMeal = DeepLinkedHistoryMeal(mealId: mealId)
+        case .room(let code):
+            deepLinkedHistoryMeal = nil
+            deepLinkedDiningRoom = DeepLinkedDiningRoom(code: code)
+        case .home(let code):
+            if currentUser?.hasHousehold == true || household != nil {
+                let name = household?.name ?? "我们家"
+                deepLinkToast = "你已经在「\(name)」里啦"
+            } else {
+                pendingJoinHomeCode = code
+            }
+        case .household:
+            deepLinkedHistoryMeal = nil
+            deepLinkedDiningRoom = nil
+            if currentUser?.hasHousehold == true || household != nil {
+                switchToProfileTab()
+                Task { await refreshHousehold() }
+            }
+        }
+    }
 
     var isLoggedIn: Bool {
         currentUser != nil
@@ -88,6 +193,7 @@ final class AppState: ObservableObject {
     }
 
     func didLogout() async {
+        await NotificationManager.shared.handleLogout()
         try? await AuthService.shared.logout()
         TokenStorage.shared.clear()
         currentUser = nil
@@ -95,6 +201,11 @@ final class AppState: ObservableObject {
         householdLoadFailed = false
         bootstrapFailed = false
         pendingInviteTicket = nil
+        pendingDeepLink = nil
+        deepLinkedHistoryMeal = nil
+        deepLinkedDiningRoom = nil
+        pendingJoinHomeCode = nil
+        unreadNotificationCount = 0
     }
 
     func refreshHousehold() async {

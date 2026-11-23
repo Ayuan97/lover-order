@@ -85,6 +85,8 @@ func AutoMigrate() error {
 		&MealReview{},
 		&MealDishReview{},
 		&MealParticipant{},
+		&DeviceToken{},
+		&NotificationEvent{},
 	}
 
 	for _, t := range tables {

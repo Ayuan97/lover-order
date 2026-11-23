@@ -11,63 +11,99 @@ struct LoginView: View {
     @AppStorage("dev.server.code") private var devCode: String = ""
 
     var body: some View {
-        VStack(spacing: AppSpacing.xxl) {
-            Spacer()
-
-            VStack(spacing: AppSpacing.md) {
-                ProductIcon(kind: .meal)
-                    .scaleEffect(2.5)
-                    .frame(width: 72, height: 72)
-                    .foregroundStyle(Color.brandGreen)
-                Text("我们这顿")
-                    .font(AppFont.title(36))
-                    .foregroundStyle(Color.inkPrimary)
-                Text("一起决定今天吃什么")
-                    .font(AppFont.body())
-                    .foregroundStyle(Color.inkMuted)
+        ZStack {
+            GeometryReader { proxy in
+                Image("ProfileHeroCover")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
             }
+            .ignoresSafeArea()
 
-            Spacer()
+            LinearGradient(
+                colors: [
+                    Color.black.opacity(0.30),
+                    Color.black.opacity(0.38),
+                    Color.black.opacity(0.78)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
 
-            VStack(spacing: AppSpacing.md) {
-                SignInWithAppleButton(.signIn, onRequest: { request in
-                    request.requestedScopes = [.fullName, .email]
-                }, onCompletion: handleApple)
-                    .signInWithAppleButtonStyle(.black)
-                    .frame(height: 52)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            VStack(spacing: 0) {
+                Spacer()
 
-                #if DEBUG
-                Button {
-                    showDevLogin = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "hammer")
-                        Text("开发模式登录")
+                VStack(spacing: AppSpacing.md) {
+                    Image("StickerEmoji_food_cheers")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 88, height: 88)
+                        .shadow(color: Color.black.opacity(0.28), radius: 14, y: 6)
+
+                    Text("我们这顿")
+                        .font(.system(size: 36, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .shadow(color: Color.black.opacity(0.26), radius: 8, y: 2)
+
+                    Text("把今天这一顿，摆成一张会动的画")
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.88))
+                }
+
+                Spacer()
+
+                VStack(spacing: AppSpacing.md) {
+                    SignInWithAppleButton(.signIn, onRequest: { request in
+                        request.requestedScopes = [.fullName, .email]
+                    }, onCompletion: handleApple)
+                        .signInWithAppleButtonStyle(.black)
+                        .frame(height: 52)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                    #if DEBUG
+                    Button {
+                        showDevLogin = true
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "hammer")
+                            Text("开发模式登录")
+                        }
+                        .font(AppFont.caption(13))
+                        .foregroundStyle(Color.inkSecondary)
+                        .padding(.vertical, 4)
                     }
-                    .font(AppFont.caption(13))
-                    .foregroundStyle(Color.inkSecondary)
-                    .padding(.vertical, 6)
-                }
-                #endif
+                    #endif
 
-                if let errorMessage {
-                    Text(errorMessage)
-                        .font(AppFont.caption())
-                        .foregroundStyle(Color.errorInk)
-                        .multilineTextAlignment(.center)
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(AppFont.caption())
+                            .foregroundStyle(Color.errorInk)
+                            .multilineTextAlignment(.center)
+                    }
                 }
+                .padding(20)
+                .environment(\.colorScheme, .light)
+                .background(
+                    Color.white.opacity(0.96),
+                    in: RoundedRectangle(cornerRadius: 28, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 28, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.45), lineWidth: 0.8)
+                }
+                .shadow(color: Color.black.opacity(0.22), radius: 20, y: 8)
+                .padding(.horizontal, AppSpacing.lg)
+                .padding(.bottom, 16)
             }
-            .padding(.horizontal, AppSpacing.xl)
-            .padding(.bottom, AppSpacing.xxl)
         }
-        .padding(.horizontal, AppSpacing.xl)
-        .background(Color.appBackground.ignoresSafeArea())
+        .preferredColorScheme(.dark)
         .overlay(alignment: .center) {
             if isLoading {
                 ZStack {
-                    Color.black.opacity(0.15).ignoresSafeArea()
-                    ProgressView().tint(Color.brandGreen)
+                    Color.black.opacity(0.25).ignoresSafeArea()
+                    ProgressView().tint(.white)
                 }
             }
         }

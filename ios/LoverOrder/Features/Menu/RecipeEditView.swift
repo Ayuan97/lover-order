@@ -39,6 +39,10 @@ struct RecipeEditView: View {
     @State private var isSaving: Bool = false
     @State private var errorMessage: String?
 
+    private var allowedSceneTags: Set<String> {
+        Set(MealScene.productCases.map(\.rawValue))
+    }
+
     private var isEdit: Bool {
         if case .edit = mode { return true }
         return false
@@ -398,19 +402,27 @@ struct RecipeEditView: View {
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, AppSpacing.sm)
         .background(Color.appBackground)
+        .overlay(alignment: .top) {
+            Divider().overlay(Color.dividerLine.opacity(0.6))
+        }
     }
 
     private func chipButton(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        let obsidian = Color(red: 0.067, green: 0.067, blue: 0.075)
+        return Button(action: action) {
             Text(title)
-                .font(AppFont.body(13))
+                .font(.system(size: 13, weight: isSelected ? .semibold : .medium, design: .rounded))
                 .padding(.horizontal, AppSpacing.md)
                 .padding(.vertical, 8)
                 .foregroundStyle(isSelected ? .white : Color.inkPrimary)
-                .background(isSelected ? Color.brandGreen : Color.appBackground)
-                .clipShape(Capsule())
+                .background(isSelected ? obsidian : Color.appBackground, in: Capsule())
+                .overlay {
+                    if !isSelected {
+                        Capsule().strokeBorder(Color.dividerLine.opacity(0.8), lineWidth: 0.7)
+                    }
+                }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SoftPressStyle())
     }
 
     private func toggleSet<T: Hashable>(_ set: inout Set<T>, value: T) {
@@ -468,7 +480,7 @@ struct RecipeEditView: View {
         steps = r.steps ?? []
         flavorTags = Set(r.tags ?? [])
         moodTags = Set(r.moodTags ?? [])
-        sceneTags = Set(r.sceneTags ?? [])
+        sceneTags = Set((r.sceneTags ?? []).filter { allowedSceneTags.contains($0) })
         categoryId = r.categoryId
     }
 
@@ -493,7 +505,8 @@ struct RecipeEditView: View {
         input.tips = tips.isEmpty ? nil : tips
         input.tags = flavorTags.isEmpty ? [] : Array(flavorTags)
         input.moodTags = moodTags.isEmpty ? [] : Array(moodTags)
-        input.sceneTags = sceneTags.isEmpty ? [] : Array(sceneTags)
+        let validSceneTags = sceneTags.filter { allowedSceneTags.contains($0) }
+        input.sceneTags = validSceneTags.isEmpty ? [] : Array(validSceneTags)
         input.ingredients = ingredients.filter { !$0.name.isEmpty }
         input.steps = steps.filter { !$0.text.isEmpty }
 

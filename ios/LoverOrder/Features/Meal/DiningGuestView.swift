@@ -72,13 +72,21 @@ struct DiningGuestView: View {
         VStack(spacing: AppSpacing.sm) {
             HStack {
                 Button { Task { await leave() } } label: {
-                    HStack(spacing: 4) {
+                    HStack(spacing: 5) {
                         Image(systemName: "arrow.left")
+                            .font(.system(size: 13, weight: .semibold))
                         Text("离开")
+                            .font(.system(size: 13.5, weight: .semibold, design: .rounded))
                     }
-                    .font(AppFont.body(14))
-                    .foregroundStyle(Color.inkSecondary)
+                    .foregroundStyle(Color.inkPrimary)
+                    .padding(.horizontal, 12)
+                    .frame(height: 36)
+                    .background(Color.cardBackground, in: Capsule())
+                    .overlay {
+                        Capsule().strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
+                    }
                 }
+                .buttonStyle(SoftPressStyle())
                 Spacer()
             }
             Text("在点菜")
@@ -93,8 +101,14 @@ struct DiningGuestView: View {
                 }
             }
             Text("\(participants.count) 个人 · \(dishes.count) 道")
-                .font(AppFont.caption(12))
-                .foregroundStyle(Color.inkMuted)
+                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.inkSecondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(Color.cardBackground, in: Capsule())
+                .overlay {
+                    Capsule().strokeBorder(Color.dividerLine.opacity(0.65), lineWidth: 0.6)
+                }
         }
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, AppSpacing.md)
@@ -109,7 +123,7 @@ struct DiningGuestView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, AppSpacing.lg)
             } else {
-                ForEach(dishes) { dish in
+                ForEach(Array(dishes.enumerated()), id: \.element.id) { idx, dish in
                     HStack(spacing: AppSpacing.md) {
                         DishThumb(name: dish.recipeName, image: dish.recipeImage)
                         Text(dish.recipeName)
@@ -128,6 +142,9 @@ struct DiningGuestView: View {
                             }
                         }
                     }
+                    if idx < dishes.count - 1 {
+                        Divider().background(Color.dividerLine.opacity(0.5))
+                    }
                 }
             }
         }
@@ -139,7 +156,10 @@ struct DiningGuestView: View {
         }
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, AppSpacing.sm)
-        .background(.ultraThinMaterial)
+        .background(Color.appBackground)
+        .overlay(alignment: .top) {
+            Divider().overlay(Color.dividerLine.opacity(0.6))
+        }
     }
 
     private func refresh() async {

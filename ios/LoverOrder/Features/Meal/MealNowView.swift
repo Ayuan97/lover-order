@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // 首页家庭餐次
 struct MealNowView: View {
@@ -14,6 +15,7 @@ struct MealNowView: View {
     @State private var showInviteTicket: Bool = false
     @State private var ongoingDining: MealSession?
     @State private var resumeDining: MealSession?
+    @State private var sharePosterMeal: MealSession?
     // 仅当本次 sheet 内真关过房才催「可以定下来了」
     @State private var diningHostDidCloseRoom: Bool = false
     @Environment(\.scenePhase) private var scenePhase
@@ -37,7 +39,12 @@ struct MealNowView: View {
                 },
                 onShoppingList: { showShoppingList = true },
                 onDining: { showDiningHost = true },
-                onRetry: { await vm.load(scene: householdScene, mood: appState.currentMood) }
+                onRetry: { await vm.load(scene: householdScene, mood: appState.currentMood) },
+                onShareMeal: {
+                    if let meal = vm.meal {
+                        sharePosterMeal = meal
+                    }
+                }
             )
             .environmentObject(appState)
             .background(Color.appBackground.ignoresSafeArea())
@@ -84,6 +91,7 @@ struct MealNowView: View {
                         Task { await vm.load(scene: householdScene, mood: appState.currentMood) }
                     }
                     .environmentObject(appState)
+                    .preferredColorScheme(.light)
                 }
             }
             .sheet(isPresented: $showReview, onDismiss: {
@@ -96,10 +104,11 @@ struct MealNowView: View {
                 Task { await reloadCurrentMeal() }
             }) {
                 if let mid = reviewMealId {
-                    MealReviewView(mealId: mid) {
+                    MealReviewView(mealId: mid, currentUserId: appState.currentUser?.id) {
                         vm.clearPendingReview()
                         Task { await reloadCurrentMeal() }
                     }
+                    .preferredColorScheme(.light)
                 }
             }
             .sheet(isPresented: $showCreateRecipe) {
@@ -107,42 +116,47 @@ struct MealNowView: View {
                     Task { await vm.load(scene: householdScene, mood: appState.currentMood) }
                 }
                 .environmentObject(appState)
+                .preferredColorScheme(.light)
             }
             .sheet(isPresented: $showShoppingList) {
                 if let mid = vm.meal?.id {
                     ShoppingListView(mealId: mid)
+                        .preferredColorScheme(.light)
                 }
             }
             .sheet(isPresented: $showInviteTicket) {
-                if let h = appState.household {
-                    InviteTicketView(
-                        household: h,
-                        inviterName: appState.currentUser?.displayName ?? "家人"
-                    )
-                } else {
-                    // household 未就绪时别空 sheet；提示可点再试
-                    VStack(spacing: AppSpacing.lg) {
-                        Text("家信息还没拉到")
-                            .font(AppFont.headline(17))
-                            .foregroundStyle(Color.inkPrimary)
-                        Text("点一下再试")
-                            .font(AppFont.body())
-                            .foregroundStyle(Color.inkMuted)
-                        PrimaryButton(title: "再试一次") {
-                            Task {
-                                await appState.refreshHousehold()
-                                if appState.household == nil {
-                                    vm.errorMessage = "家信息还没拉到，点一下再试"
-                                    showInviteTicket = false
+                Group {
+                    if let h = appState.household {
+                        InviteTicketView(
+                            household: h,
+                            inviterName: appState.currentUser?.displayName ?? "家人"
+                        )
+                    } else {
+                        // household 未就绪时别空 sheet；提示可点再试
+                        VStack(spacing: AppSpacing.lg) {
+                            Text("家信息还没拉到")
+                                .font(AppFont.headline(17))
+                                .foregroundStyle(Color.inkPrimary)
+                            Text("点一下再试")
+                                .font(AppFont.body())
+                                .foregroundStyle(Color.inkMuted)
+                            PrimaryButton(title: "再试一次") {
+                                Task {
+                                    await appState.refreshHousehold()
+                                    if appState.household == nil {
+                                        vm.errorMessage = "家信息还没拉到，点一下再试"
+                                        showInviteTicket = false
+                                    }
                                 }
                             }
+                            .padding(.horizontal, AppSpacing.xl)
                         }
-                        .padding(.horizontal, AppSpacing.xl)
+                        .padding(AppSpacing.xxl)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.appBackground.ignoresSafeArea())
                     }
-                    .padding(AppSpacing.xxl)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.appBackground.ignoresSafeArea())
                 }
+                .preferredColorScheme(.light)
             }
             .toast($vm.errorMessage)
             .tipToast($vm.tipMessage)
@@ -164,6 +178,7 @@ struct MealNowView: View {
             }) {
                 if let mid = vm.meal?.id {
                     DiningHostView(mealId: mid, didCloseRoom: $diningHostDidCloseRoom)
+                        .preferredColorScheme(.light)
                 }
             }
             .fullScreenCover(item: $resumeDining, onDismiss: {
@@ -171,6 +186,12 @@ struct MealNowView: View {
             }) { m in
                 DiningGuestView(meal: m)
                     .environmentObject(appState)
+                    .preferredColorScheme(.light)
+            }
+            .sheet(item: $sharePosterMeal) { meal in
+                MealSharePosterSheet(meal: meal)
+                    .environmentObject(appState)
+                    .preferredColorScheme(.light)
             }
             // 仅进行中的客人点菜才露胶囊续进；无进行中不占首页 chrome
             .overlay(alignment: .topTrailing) {
@@ -202,8 +223,8 @@ struct MealNowView: View {
             .clipShape(Capsule())
             .appCardShadow()
         }
-        .padding(.trailing, AppSpacing.lg)
-        .padding(.top, AppSpacing.sm)
+        .padding(.trailing, 20)
+        .padding(.top, 98)
     }
 
     private func checkDining() async {
@@ -906,19 +927,42 @@ enum DishArtwork {
 struct RecipeCircleCard: View {
     let recipe: Recipe
     var alreadyAdded: Bool = false
+    var allowToggleRemove: Bool = false
     var isAdding: Bool = false
     let onAdd: () -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(alignment: .leading, spacing: AppSpacing.sm) {
-            ZStack(alignment: .bottomTrailing) {
-                artwork
-                    .overlay {
-                        RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous)
-                            .strokeBorder(Color.brandGreen.opacity(alreadyAdded ? 0.45 : 0), lineWidth: 1)
-                    }
-                Button(action: onAdd) {
+        let obsidian = Color(red: 0.067, green: 0.067, blue: 0.075)
+        Button(action: onAdd) {
+            VStack(alignment: .leading, spacing: 0) {
+                ZStack(alignment: .bottomTrailing) {
+                    artwork
+                        .overlay(alignment: .bottom) {
+                            LinearGradient(
+                                colors: [.clear, Color.black.opacity(0.22)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                            .frame(height: 44)
+                            .allowsHitTesting(false)
+                        }
+                        .overlay(alignment: .topTrailing) {
+                            if alreadyAdded {
+                                Text("已在桌")
+                                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3.5)
+                                    .background(Color.black.opacity(0.62), in: Capsule())
+                                    .overlay {
+                                        Capsule()
+                                            .strokeBorder(Color.white.opacity(0.30), lineWidth: 0.6)
+                                    }
+                                    .padding(8)
+                            }
+                        }
+
                     ZStack {
                         if isAdding {
                             ProgressView().tint(.white).controlSize(.mini)
@@ -930,28 +974,50 @@ struct RecipeCircleCard: View {
                         }
                     }
                     .foregroundStyle(.white)
-                    .frame(width: 28, height: 28)
-                    .background(alreadyAdded ? Color.brandGreen : Color.actionInk, in: Circle())
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+                    .frame(width: 30, height: 30)
+                    .background(alreadyAdded ? obsidian : Color.black.opacity(0.68), in: Circle())
+                    .overlay {
+                        Circle()
+                            .strokeBorder(Color.white.opacity(0.32), lineWidth: 0.7)
+                    }
+                    .padding(8)
                 }
-                .buttonStyle(SoftPressStyle())
-                .disabled(alreadyAdded || isAdding)
-                .accessibilityLabel(isAdding ? "正在加入" + recipe.name : alreadyAdded ? "已加入这一顿" : "加入" + recipe.name)
-                .padding(2)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(recipe.name)
+                        .font(AppFont.headline(14))
+                        .foregroundStyle(Color.inkPrimary)
+                        .lineLimit(1)
+                    if let desc = recipe.description, !desc.isEmpty {
+                        Text(desc)
+                            .font(AppFont.caption(11))
+                            .foregroundStyle(Color.inkMuted)
+                            .lineLimit(1)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 9)
+                .frame(maxWidth: .infinity, minHeight: 48, alignment: .topLeading)
             }
-            .frame(maxWidth: .infinity)
-            Text(recipe.name)
-                .font(AppFont.body(13))
-                .foregroundStyle(Color.inkPrimary)
-                .lineLimit(1)
-            if let desc = recipe.description, !desc.isEmpty {
-                Text(desc)
-                    .font(AppFont.caption(11))
-                    .foregroundStyle(Color.inkMuted)
-                    .lineLimit(1)
+            .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(
+                        alreadyAdded ? obsidian.opacity(0.65) : Color.dividerLine.opacity(0.65),
+                        lineWidth: alreadyAdded ? 1.2 : 0.7
+                    )
             }
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
+        .buttonStyle(SoftPressStyle())
+        .disabled((alreadyAdded && !allowToggleRemove) || isAdding)
+        .accessibilityLabel(
+            isAdding
+                ? "正在更新" + recipe.name
+                : alreadyAdded
+                    ? (allowToggleRemove ? "移出这一顿：" + recipe.name : recipe.name + " 已加入这一顿")
+                    : "加入" + recipe.name
+        )
         .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.82), value: alreadyAdded)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: isAdding)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -969,8 +1035,9 @@ struct RecipeCircleCard: View {
                 AsyncImageView(url: nil, name: recipe.name)
             }
         }
-        .frame(height: 124)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous))
+        .frame(height: 118)
+        .frame(maxWidth: .infinity)
+        .clipped()
     }
 }
 
@@ -1040,6 +1107,54 @@ private struct CookingProgressView: View {
     }
 }
 
+// 共享内存图片缓存：避免 LazyVGrid / 画布切换重复下载并解决原生 AsyncImage 在按钮网格里偶发空白的问题
+@MainActor
+final class RemoteImageCache {
+    static let shared = RemoteImageCache()
+
+    private let cache = NSCache<NSURL, UIImage>()
+    private var inFlight: [URL: Task<UIImage?, Never>] = [:]
+
+    private init() {
+        cache.countLimit = 120
+    }
+
+    func cachedImage(for url: URL) -> UIImage? {
+        cache.object(forKey: url as NSURL)
+    }
+
+    func store(_ image: UIImage, for url: URL) {
+        cache.setObject(image, forKey: url as NSURL)
+    }
+
+    func load(url: URL) async -> UIImage? {
+        if let hit = cachedImage(for: url) { return hit }
+        if let existing = inFlight[url] {
+            return await existing.value
+        }
+        let task = Task<UIImage?, Never> { [weak self] in
+            defer {
+                self?.inFlight[url] = nil
+            }
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                guard !Task.isCancelled,
+                      let http = response as? HTTPURLResponse,
+                      (200..<300).contains(http.statusCode),
+                      let image = UIImage(data: data) else {
+                    return nil
+                }
+                self?.cache.setObject(image, forKey: url as NSURL)
+                return image
+            } catch {
+                return nil
+            }
+        }
+        inFlight[url] = task
+        return await task.value
+    }
+}
+
 // 小缩略图 没有图时显示菜名首字
 struct DishThumb: View {
     let name: String
@@ -1047,15 +1162,21 @@ struct DishThumb: View {
     var size: CGFloat = 48
     var radius: CGFloat = AppRadius.sm
 
+    @State private var loadedImage: UIImage?
+
+    private var resolvedURL: URL? { APIConfig.imageURL(image) }
+
     var body: some View {
+        let displayImage = loadedImage ?? resolvedURL.flatMap { RemoteImageCache.shared.cachedImage(for: $0) }
         Group {
-            if let url = APIConfig.imageURL(image) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .success(let img): img.resizable().scaledToFill()
-                    default: placeholder
+            if let displayImage {
+                Color.cardBackground
+                    .overlay {
+                        Image(uiImage: displayImage)
+                            .resizable()
+                            .scaledToFill()
                     }
-                }
+                    .clipped()
             } else if let assetName = DishArtwork.assetName(for: name) {
                 ZStack {
                     Color.appBackground
@@ -1067,6 +1188,17 @@ struct DishThumb: View {
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .task(id: resolvedURL) {
+            guard let url = resolvedURL else {
+                loadedImage = nil
+                return
+            }
+            if let cached = RemoteImageCache.shared.cachedImage(for: url) {
+                loadedImage = cached
+                return
+            }
+            loadedImage = await RemoteImageCache.shared.load(url: url)
+        }
     }
 
     private var placeholder: some View {
@@ -1083,33 +1215,67 @@ struct DishThumb: View {
 struct AsyncImageView: View {
     let url: String?
     let name: String
+    var fitContent: Bool = false
+
+    @State private var loadedImage: UIImage?
+    @State private var didFail = false
+
+    private var resolvedURL: URL? { APIConfig.imageURL(url) }
 
     var body: some View {
+        let displayImage = loadedImage ?? resolvedURL.flatMap { RemoteImageCache.shared.cachedImage(for: $0) }
         Group {
-            if let u = APIConfig.imageURL(url) {
-                AsyncImage(url: u) { phase in
-                    switch phase {
-                    case .success(let img):
-                        img.resizable().scaledToFill()
-                    case .empty:
-                        Color.appBackground
-                    case .failure:
-                        placeholder
-                    @unknown default:
-                        placeholder
-                    }
+            if let displayImage {
+                if fitContent {
+                    Image(uiImage: displayImage)
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    Color.cardBackground
+                        .overlay {
+                            Image(uiImage: displayImage)
+                                .resizable()
+                                .scaledToFill()
+                        }
+                        .clipped()
                 }
-            } else {
+            } else if resolvedURL == nil || didFail {
                 placeholder
+            } else {
+                loadingPlaceholder
             }
         }
-        .background(Color.appBackground)
         .clipped()
+        .task(id: resolvedURL) {
+            didFail = false
+            guard let u = resolvedURL else {
+                loadedImage = nil
+                return
+            }
+            if let cached = RemoteImageCache.shared.cachedImage(for: u) {
+                loadedImage = cached
+                return
+            }
+            if let fetched = await RemoteImageCache.shared.load(url: u) {
+                loadedImage = fetched
+            } else if !Task.isCancelled {
+                didFail = true
+            }
+        }
+    }
+
+    private var loadingPlaceholder: some View {
+        ZStack {
+            Color.cardBackground
+            Image(systemName: "fork.knife")
+                .font(.system(size: 18, weight: .light))
+                .foregroundStyle(Color.brandGreen.opacity(0.28))
+        }
     }
 
     private var placeholder: some View {
         ZStack {
-            Color.appBackground
+            Color.cardBackground
             VStack(spacing: 4) {
                 Image(systemName: "leaf")
                     .foregroundStyle(Color.brandGreen.opacity(0.5))

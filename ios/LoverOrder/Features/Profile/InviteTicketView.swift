@@ -9,6 +9,7 @@ struct InviteTicketView: View {
     var displayCode: String? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var shareItem: ShareItem?
+    @State private var tipMessage: String?
 
     private var code: String {
         let raw = displayCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -27,7 +28,7 @@ struct InviteTicketView: View {
             Color.appBackground.ignoresSafeArea()
             VStack(spacing: AppSpacing.xxl) {
                 ticket
-                shareButton
+                actionButtons
             }
             .padding(.horizontal, AppSpacing.xl)
         }
@@ -42,49 +43,65 @@ struct InviteTicketView: View {
             }
             .padding(AppSpacing.lg)
         }
+        .tipToast($tipMessage)
         .sheet(item: $shareItem) { item in
             ShareSheet(items: [item.text])
         }
     }
 
     private var ticket: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: AppSpacing.md) {
+        let obsidian = Color(red: 0.067, green: 0.067, blue: 0.075)
+        return VStack(spacing: 0) {
+            VStack(spacing: 8) {
                 HStack(spacing: 6) {
                     Image(systemName: "fork.knife")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.brandGreen)
-                    Text(household.name)
-                        .font(AppFont.title(22))
-                        .foregroundStyle(Color.inkPrimary)
+                        .font(.system(size: 11, weight: .semibold))
+                    Text(isTemporaryCode ? "临时餐券 · NO.\(ticketNo)" : "入伙餐券 · NO.\(ticketNo)")
+                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
                 }
-                Text(isTemporaryCode ? "临时餐券 · No.\(ticketNo)" : "入伙餐券 · No.\(ticketNo)")
-                    .font(AppFont.mono(12))
-                    .foregroundStyle(Color.inkMuted)
+                .foregroundStyle(.white.opacity(0.86))
+                .padding(.horizontal, 11)
+                .padding(.vertical, 4)
+                .background(Color.white.opacity(0.14), in: Capsule())
 
+                Text(household.name)
+                    .font(.system(size: 23, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, AppSpacing.xl)
+            .padding(.vertical, 20)
+            .background(obsidian)
+
+            VStack(spacing: AppSpacing.md) {
                 // QR 带 lo://home/ 前缀，避免被扫进蹭饭房间流
-                BrandQRCode(content: LoverScanLink.homePayload(code), size: 188)
-                    .padding(.vertical, AppSpacing.sm)
+                BrandQRCode(content: LoverScanLink.homePayload(code), size: 184)
+                    .padding(14)
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
+                    }
 
-                Text(isTemporaryCode ? "扫一下 限时进我们家" : "扫一下 进我们家")
+                Text(isTemporaryCode ? "扫一下，限时进我们家" : "扫一下，进我们家")
                     .font(AppFont.body(13))
                     .foregroundStyle(Color.inkSecondary)
             }
             .padding(.horizontal, AppSpacing.xl)
-            .padding(.top, AppSpacing.xxl)
-            .padding(.bottom, AppSpacing.lg)
+            .padding(.vertical, AppSpacing.xl)
 
             perforation
 
-            VStack(spacing: AppSpacing.xs) {
+            VStack(spacing: 4) {
                 Text("\(inviterName) 叫你进来")
                     .font(AppFont.headline(16))
                     .foregroundStyle(Color.inkPrimary)
                 Text("扫不了就手输  \(code)")
-                    .font(AppFont.caption(12))
-                    .foregroundStyle(Color.inkMuted)
+                    .font(AppFont.mono(13))
+                    .foregroundStyle(Color.inkSecondary)
                 if isTemporaryCode {
-                    Text("这个码有期限 跟家里固定的不一样")
+                    Text("这个码有期限，跟家里固定的不一样")
                         .font(AppFont.caption(11))
                         .foregroundStyle(Color.inkMuted)
                 }
@@ -92,15 +109,13 @@ struct InviteTicketView: View {
             .padding(.horizontal, AppSpacing.xl)
             .padding(.vertical, AppSpacing.lg)
         }
-        .background(
-            RoundedRectangle(cornerRadius: AppRadius.xl, style: .continuous)
-                .fill(Color.cardBackground)
-        )
+        .background(Color.cardBackground)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: AppRadius.xl, style: .continuous)
-                .stroke(Color.dividerLine.opacity(0.6), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.dividerLine.opacity(0.7), lineWidth: 0.8)
         )
-        .appCardShadow()
+        .shadow(color: Color.black.opacity(0.08), radius: 18, y: 8)
     }
 
     // 撕口 中间虚线 + 两侧半圆缺口
@@ -126,9 +141,17 @@ struct InviteTicketView: View {
             .frame(width: 22, height: 22)
     }
 
-    private var shareButton: some View {
-        PrimaryButton(title: "发给 Ta", icon: "square.and.arrow.up") {
-            shareItem = ShareItem(text: "来「\(household.name)」吧 邀请码 \(code)")
+    private var actionButtons: some View {
+        HStack(spacing: AppSpacing.md) {
+            SecondaryButton(title: "复制邀请码", icon: "doc.on.doc") {
+                UIPasteboard.general.string = code
+                Haptics.light()
+                tipMessage = "邀请码已复制"
+            }
+            PrimaryButton(title: "发给 Ta", icon: "square.and.arrow.up") {
+                let deepLink = LoverScanLink.homePayload(code)
+                shareItem = ShareItem(text: "来「\(household.name)」一起决定今天吃什么吧\n邀请码：\(code)\n直达链接：\(deepLink)")
+            }
         }
     }
 }

@@ -2,6 +2,8 @@ import SwiftUI
 
 // 访客加入聚餐:输房间号或扫码 进去临时点菜 不改自己的家
 struct DiningJoinView: View {
+    var initialRoomCode: String? = nil
+
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var roomCode = ""
@@ -9,6 +11,7 @@ struct DiningJoinView: View {
     @State private var showScanner = false
     @State private var joining = false
     @State private var errorMessage: String?
+    @State private var didConsumeInitialCode = false
 
     var body: some View {
         ZStack {
@@ -19,23 +22,46 @@ struct DiningJoinView: View {
                     Text("房间号")
                         .font(AppFont.headline(15))
                         .foregroundStyle(Color.inkPrimary)
-                    TextField("对方报的 6 位房间号", text: $roomCode)
+                    TextField("6 位房间号", text: $roomCode)
                         .keyboardType(.numberPad)
-                        .padding(AppSpacing.md)
+                        .multilineTextAlignment(.center)
+                        .font(.system(size: 24, weight: .bold, design: .monospaced))
+                        .padding(.vertical, 14)
+                        .padding(.horizontal, AppSpacing.md)
                         .background(Color.appBackground)
                         .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous)
+                                .strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
+                        }
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: AppRadius.lg, style: .continuous)
+                        .strokeBorder(Color.dividerLine.opacity(0.6), lineWidth: 0.7)
                 }
                 Button { showScanner = true } label: {
                     HStack(spacing: AppSpacing.sm) {
                         Image(systemName: "qrcode.viewfinder")
                         Text("扫一扫房间码")
                     }
-                    .font(AppFont.body(14))
-                    .foregroundStyle(Color.brandGreen)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.inkPrimary)
+                    .padding(.horizontal, 18)
+                    .frame(height: 42)
+                    .background(Color.cardBackground, in: Capsule())
+                    .overlay {
+                        Capsule()
+                            .strokeBorder(Color.inkPrimary.opacity(0.20), lineWidth: 0.9)
+                    }
                 }
+                .buttonStyle(SoftPressStyle())
                 Spacer()
-                PrimaryButton(title: "进去", isLoading: joining) {
-                    Task { await joinTyped(roomCode) }
+                VStack(spacing: 0) {
+                    Divider().overlay(Color.dividerLine.opacity(0.6))
+                        .padding(.bottom, 12)
+                    PrimaryButton(title: "进去", isLoading: joining) {
+                        Task { await joinTyped(roomCode) }
+                    }
                 }
             }
             .padding(AppSpacing.xl)
@@ -65,6 +91,16 @@ struct DiningJoinView: View {
         }) { m in
             DiningGuestView(meal: m)
                 .environmentObject(appState)
+        }
+        .onAppear {
+            guard !didConsumeInitialCode,
+                  let initial = initialRoomCode?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !initial.isEmpty else { return }
+            didConsumeInitialCode = true
+            roomCode = initial
+            if initial.count == 6 {
+                Task { await joinRoom(initial) }
+            }
         }
     }
 

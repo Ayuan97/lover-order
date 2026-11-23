@@ -103,6 +103,7 @@ final class MealNowViewModel: ObservableObject {
     // 别的页面改了这一顿后轻量同步 只刷 meal 不动推荐位
     // 也做完成检测 + 对方加菜/定下的轻感知
     func refreshMeal(scene: MealScene, mood: Mood, selfUserId: UInt? = nil) async {
+        syncPendingReview()
         if let m = try? await mealService.current(scene: scene, mood: mood) {
             await applyRemoteMeal(old: meal, new: m, selfUserId: selfUserId, broadcast: false)
         }
@@ -199,10 +200,18 @@ final class MealNowViewModel: ObservableObject {
         }
     }
 
+    func syncPendingReview() {
+        if let saved = PendingReviewStore.load() {
+            pendingReviewMealId = saved.mealId
+            reviewBannerCollapsed = saved.collapsed
+        } else {
+            pendingReviewMealId = nil
+            reviewBannerCollapsed = false
+        }
+    }
+
     private func restorePendingReview() {
-        guard let saved = PendingReviewStore.load() else { return }
-        pendingReviewMealId = saved.mealId
-        reviewBannerCollapsed = saved.collapsed
+        syncPendingReview()
     }
 
     // 改心情时 bump loadSeq 让在途 load 结果作废 再写 meal + 刷推荐

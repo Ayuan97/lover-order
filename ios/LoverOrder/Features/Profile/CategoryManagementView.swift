@@ -39,7 +39,7 @@ struct CategoryManagementView: View {
                     Button {
                         dismiss()
                     } label: {
-                        Text("完成").foregroundStyle(Color.brandGreen)
+                        Text("完成").foregroundStyle(Color.inkPrimary)
                     }
                 }
             }
@@ -133,10 +133,12 @@ struct CategoryManagementView: View {
                 }
             } else {
                 Text(c.icon?.isEmpty == false ? c.icon! : "🍽")
-                    .font(.system(size: 22))
-                    .frame(width: 36, height: 36)
-                    .background(Color.brandGreen.opacity(0.1))
-                    .clipShape(Circle())
+                    .font(.system(size: 20))
+                    .frame(width: 38, height: 38)
+                    .background(Color.appBackground, in: Circle())
+                    .overlay {
+                        Circle().strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
+                    }
                 Text(c.name)
                     .font(AppFont.body(15))
                     .foregroundStyle(Color.inkPrimary)
@@ -159,7 +161,11 @@ struct CategoryManagementView: View {
         }
         .padding(AppSpacing.md)
         .background(Color.cardBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.dividerLine.opacity(0.6), lineWidth: 0.7)
+        }
     }
 
     private func load() async {

@@ -145,12 +145,13 @@ func (h *MealHandler) RemoveDish(c *gin.Context) {
 // Confirm 定下这一顿
 func (h *MealHandler) Confirm(c *gin.Context) {
 	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		Fail(c, CodeBadRequest, "id 不合法")
 		return
 	}
-	item, err := h.svc.Confirm(hid, uint(id))
+	item, err := h.svc.Confirm(hid, uid, uint(id))
 	if err != nil {
 		Fail(c, CodeBadRequest, err.Error())
 		return
@@ -161,12 +162,13 @@ func (h *MealHandler) Confirm(c *gin.Context) {
 // Complete 标记吃完
 func (h *MealHandler) Complete(c *gin.Context) {
 	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		Fail(c, CodeBadRequest, "id 不合法")
 		return
 	}
-	item, err := h.svc.Complete(hid, uint(id))
+	item, err := h.svc.Complete(hid, uid, uint(id))
 	if err != nil {
 		Fail(c, CodeBadRequest, err.Error())
 		return

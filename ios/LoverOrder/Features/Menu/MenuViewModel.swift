@@ -154,6 +154,7 @@ final class MenuViewModel: ObservableObject {
             self.meal = updated
             self.pinnedDishes = updated.dishes ?? []
             Haptics.light()
+            AppNotifications.mealChanged()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -166,6 +167,7 @@ final class MenuViewModel: ObservableObject {
             let updated = try await mealService.detail(id: meal.id)
             self.meal = updated
             self.pinnedDishes = updated.dishes ?? []
+            AppNotifications.mealChanged()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -182,6 +184,7 @@ final class MenuViewModel: ObservableObject {
             case .planning:
                 self.meal = try await mealService.confirm(id: meal.id)
                 Haptics.success()
+                AppNotifications.mealChanged()
             case .confirmed:
                 errorMessage = "这一顿已经定下了"
             case .completed, .cancelled:
