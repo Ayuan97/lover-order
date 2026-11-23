@@ -14,6 +14,7 @@ struct ProfileView: View {
     @State private var showEditProfile: Bool = false
     @State private var stats: HouseholdStats?
     @State private var errorMessage: String?
+    @State private var tipMessage: String?
     @State private var showInvite: Bool = false
     // 客人扫/输房间号 放在「我的」次要区 不抢首页主路径
     @State private var showJoinDining: Bool = false
@@ -22,6 +23,7 @@ struct ProfileView: View {
     @State private var showCoverPhotosPicker: Bool = false
     @State private var showLaunchIntroSettings: Bool = false
     @State private var showNotificationCenter: Bool = false
+    @State private var showPasswordSheet: Bool = false
     @StateObject private var notificationManager = NotificationManager.shared
 
     var body: some View {
@@ -118,8 +120,16 @@ struct ProfileView: View {
                     .environmentObject(appState)
                     .preferredColorScheme(.light)
             }
+            .sheet(isPresented: $showPasswordSheet) {
+                AccountPasswordSheet { message in
+                    tipMessage = message
+                }
+                    .environmentObject(appState)
+                    .preferredColorScheme(.light)
+            }
             .photosPicker(isPresented: $showCoverPhotosPicker, selection: $profileBackgroundItem, matching: .images)
             .toast($errorMessage)
+            .tipToast($tipMessage)
         }
     }
 
@@ -198,7 +208,22 @@ struct ProfileView: View {
                 navRow(title: "去朋友那儿点菜", subtitle: "扫码或输入房间号，临时一起吃饭", icon: "qrcode.viewfinder")
             }
             .buttonStyle(.plain)
+            Divider()
+                .padding(.leading, 48)
+            Button {
+                showPasswordSheet = true
+            } label: {
+                navRow(title: "账号与密码", subtitle: passwordToolSubtitle, icon: "key.fill")
+            }
+            .buttonStyle(.plain)
         }
+    }
+
+    private var passwordToolSubtitle: String {
+        if appState.currentUser?.hasPassword == true {
+            return "已设密码 · 可凭「\(appState.currentUser?.displayName ?? "")」跨设备登录"
+        }
+        return "设置登录密码，换手机时用昵称和密码找回"
     }
 
     private func navRow(title: String, subtitle: String, icon: String) -> some View {
@@ -1245,6 +1270,184 @@ private struct NotificationCenterSheet: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
                 appState.handleDeepLink(link)
             }
+        }
+    }
+}
+
+private struct AccountPasswordSheet: View {
+    let onSaved: (String) -> Void
+
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    private enum PasswordFocus: Hashable {
+        case current, new, confirm
+    }
+
+    @State private var oldPassword: String = ""
+    @State private var newPassword: String = ""
+    @State private var confirmPassword: String = ""
+    @State private var showPasswords: Bool = false
+    @State private var isSaving: Bool = false
+    @State private var errorMessage: String?
+    @FocusState private var focusedField: PasswordFocus?
+
+    private var hasPassword: Bool {
+        appState.currentUser?.hasPassword == true
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: AppSpacing.lg) {
+                    SectionCard {
+                        HStack(spacing: AppSpacing.sm) {
+                            Image(systemName: "person.badge.key.fill")
+                                .foregroundStyle(Color.brandGreen)
+                            Text("当前登录昵称：\(appState.currentUser?.displayName ?? "我")")
+                                .font(AppFont.headline(15))
+                                .foregroundStyle(Color.inkPrimary)
+                            Spacer()
+                        }
+                        Text(hasPassword ? "修改密码后，仍可用这个昵称搭配新密码在其他手机登录。" : "设置至少 6 位密码后，换手机或重装时可通过「昵称 + 密码」找回这一个家。")
+                            .font(AppFont.caption(12.5))
+                            .foregroundStyle(Color.inkMuted)
+                    }
+
+                    SectionCard {
+                        HStack {
+                            Spacer()
+                            Button {
+                                showPasswords.toggle()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: showPasswords ? "eye.slash" : "eye")
+                                    Text(showPasswords ? "隐藏密码" : "显示密码")
+                                }
+                                .font(AppFont.caption(12))
+                                .foregroundStyle(Color.inkSecondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        if hasPassword {
+                            FieldLabel("当前密码", required: true)
+                            passwordField("输入正在使用的密码", text: $oldPassword, field: .current, submitLabel: .next) {
+                                focusedField = .new
+                            }
+                        }
+
+                        FieldLabel(hasPassword ? "新密码" : "登录密码", required: true)
+                        passwordField("至少 6 位字母、数字或符号", text: $newPassword, field: .new, submitLabel: .next) {
+                            focusedField = .confirm
+                        }
+
+                        FieldLabel("确认密码", required: true)
+                        passwordField("再输一遍确认", text: $confirmPassword, field: .confirm, submitLabel: .done) {
+                            Task { await save() }
+                        }
+                    }
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(AppFont.caption())
+                            .foregroundStyle(Color.errorInk)
+                    }
+
+                    Color.clear.frame(height: 40)
+                }
+                .padding(.horizontal, AppSpacing.lg)
+                .padding(.top, AppSpacing.md)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .background(Color.appBackground.ignoresSafeArea())
+            .safeAreaInset(edge: .bottom) {
+                PrimaryButton(title: isSaving ? "保存中" : (hasPassword ? "更新密码" : "保存密码"), isLoading: isSaving) {
+                    Task { await save() }
+                }
+                .padding(.horizontal, AppSpacing.lg)
+                .padding(.vertical, AppSpacing.sm)
+                .background(Color.appBackground)
+                .overlay(alignment: .top) {
+                    Divider().overlay(Color.dividerLine.opacity(0.6))
+                }
+            }
+            .navigationTitle(hasPassword ? "修改密码" : "设置登录密码")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text("取消").foregroundStyle(Color.inkSecondary)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func passwordField(
+        _ placeholder: String,
+        text: Binding<String>,
+        field: PasswordFocus,
+        submitLabel: SubmitLabel,
+        onSubmit: @escaping () -> Void
+    ) -> some View {
+        Group {
+            if showPasswords {
+                TextField(placeholder, text: text)
+            } else {
+                SecureField(placeholder, text: text)
+            }
+        }
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .focused($focusedField, equals: field)
+        .submitLabel(submitLabel)
+        .onSubmit(onSubmit)
+        .padding(AppSpacing.md)
+        .background(Color.appBackground)
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous)
+                .strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
+        }
+    }
+
+    private func save() async {
+        errorMessage = nil
+        focusedField = nil
+        if hasPassword && oldPassword.isEmpty {
+            errorMessage = "请先填写当前密码"
+            return
+        }
+        if newPassword.count < 6 {
+            errorMessage = "密码至少需要 6 位"
+            return
+        }
+        if newPassword.utf8.count > 72 {
+            errorMessage = "密码太长了，请控制在 72 字节以内"
+            return
+        }
+        if newPassword != confirmPassword {
+            errorMessage = "两次输入的新密码不一致"
+            return
+        }
+        let wasUpdating = hasPassword
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            let updated = try await AuthService.shared.setPassword(
+                oldPassword: wasUpdating ? oldPassword : nil,
+                newPassword: newPassword
+            )
+            appState.currentUser = updated
+            Haptics.success()
+            onSaved(wasUpdating ? "登录密码已更新" : "登录密码已保存")
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }

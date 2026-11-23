@@ -10,6 +10,9 @@ import (
 type User struct {
 	ID           uint           `json:"id" gorm:"primaryKey"`
 	AppleUserID  string         `json:"apple_user_id" gorm:"uniqueIndex;size:128;not null;comment:Apple 用户唯一标识"`
+	DeviceID     *string        `json:"device_id,omitempty" gorm:"uniqueIndex;size:128;comment:设备唯一标识"`
+	PasswordHash string         `json:"-" gorm:"size:255;not null;default:'';comment:bcrypt 密码哈希"`
+	HasPassword  bool           `json:"has_password" gorm:"-"`
 	Email        string         `json:"email" gorm:"size:128;comment:邮箱（Apple 首次登录返回）"`
 	Nickname     string         `json:"nickname" gorm:"size:64;not null;default:'';comment:昵称"`
 	Avatar       string         `json:"avatar" gorm:"size:512;comment:头像 URL"`
@@ -25,6 +28,12 @@ type User struct {
 	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index"`
 
 	Household *Household `json:"household,omitempty" gorm:"foreignKey:HouseholdID"`
+}
+
+// AfterFind 查询用户后填充计算字段
+func (u *User) AfterFind(tx *gorm.DB) error {
+	u.HasPassword = u.PasswordHash != ""
+	return nil
 }
 
 // TableName 用户表名

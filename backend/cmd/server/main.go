@@ -78,13 +78,11 @@ func registerRoutes(r *gin.Engine) {
 	{
 		auth := v1.Group("/auth")
 		{
+			auth.POST("/device", authH.DeviceLogin)
+			auth.POST("/login", authH.PasswordLogin)
 			auth.POST("/apple", authH.AppleLogin)
 			auth.POST("/refresh", authH.Refresh)
 			auth.POST("/logout", authH.Logout)
-			// 非 release 模式启用开发登录 真机/模拟器没配 Apple 时用
-			if gin.Mode() != gin.ReleaseMode {
-				auth.POST("/dev", authH.DevLogin)
-			}
 		}
 
 		// WebSocket 握手在处理器内兼容 Header Bearer 与 ?token= 鉴权
@@ -97,6 +95,7 @@ func registerRoutes(r *gin.Engine) {
 			{
 				user.GET("/profile", authH.Profile)
 				user.POST("/profile", authH.UpdateProfile)
+				user.POST("/password", authH.SetPassword)
 			}
 
 			household := secured.Group("/household")

@@ -13,10 +13,32 @@ struct AppleLoginRequest: Encodable {
     }
 }
 
-// 开发登录入参 code 为线上部署的暗号 本地后端未配置时可不传
-struct DevLoginRequest: Encodable {
+// 设备绑定入参（只需填昵称即可进入，按设备维护唯一身份）
+struct DeviceLoginRequest: Encodable {
+    let deviceId: String
     let nickname: String
-    let code: String?
+
+    enum CodingKeys: String, CodingKey {
+        case deviceId = "device_id"
+        case nickname
+    }
+}
+
+// 昵称 + 密码登录入参
+struct PasswordLoginRequest: Encodable {
+    let nickname: String
+    let password: String
+}
+
+// 设置或修改密码入参
+struct SetPasswordRequest: Encodable {
+    let oldPassword: String?
+    let newPassword: String
+
+    enum CodingKeys: String, CodingKey {
+        case oldPassword = "old_password"
+        case newPassword = "new_password"
+    }
 }
 
 // 登录返回
@@ -69,8 +91,19 @@ final class AuthService {
         return try await api.post("auth/apple", body: body)
     }
 
-    func loginDev(nickname: String, code: String? = nil) async throws -> LoginResult {
-        try await api.post("auth/dev", body: DevLoginRequest(nickname: nickname, code: code))
+    func loginWithDevice(deviceId: String, nickname: String) async throws -> LoginResult {
+        try await api.post("auth/device", body: DeviceLoginRequest(deviceId: deviceId, nickname: nickname))
+    }
+
+    func loginWithPassword(nickname: String, password: String) async throws -> LoginResult {
+        try await api.post(
+            "auth/login",
+            body: PasswordLoginRequest(nickname: nickname, password: password)
+        )
+    }
+
+    func setPassword(oldPassword: String?, newPassword: String) async throws -> AppUser {
+        try await api.post("user/password", body: SetPasswordRequest(oldPassword: oldPassword, newPassword: newPassword))
     }
 
     func refresh(refreshToken: String) async throws -> String {

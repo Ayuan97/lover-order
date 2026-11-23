@@ -1,8 +1,9 @@
 package api
 
 import (
+	"errors"
+
 	"github.com/gin-gonic/gin"
-	"lover-order-backend/internal/config"
 	"lover-order-backend/internal/middleware"
 	"lover-order-backend/internal/service"
 )
@@ -17,23 +18,54 @@ func NewAuthHandler() *AuthHandler {
 	return &AuthHandler{svc: service.NewUserService()}
 }
 
-// DevLogin 开发模式登录 通过昵称生成令牌
-func (h *AuthHandler) DevLogin(c *gin.Context) {
-	var in service.DevLoginInput
+// DeviceLogin 基于设备唯一 ID 直接用昵称进入
+func (h *AuthHandler) DeviceLogin(c *gin.Context) {
+	var in service.DeviceLoginInput
 	if err := c.ShouldBindJSON(&in); err != nil {
-		Fail(c, CodeBadRequest, "参数有误")
+		Fail(c, CodeBadRequest, "请填写昵称")
 		return
 	}
-	if want := config.AppConfig.Server.DevCode; want != "" && in.Code != want {
-		Fail(c, CodeBadRequest, "暗号不对")
+	result, err := h.svc.LoginWithDevice(in)
+	if err != nil {
+		if errors.Is(err, service.ErrDevicePasswordRequired) {
+			Fail(c, CodeConflict, err.Error())
+			return
+		}
+		Fail(c, CodeBadRequest, err.Error())
 		return
 	}
-	result, err := h.svc.LoginDev(in)
+	OK(c, result)
+}
+
+// PasswordLogin 昵称与密码登录
+func (h *AuthHandler) PasswordLogin(c *gin.Context) {
+	var in service.PasswordLoginInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		Fail(c, CodeBadRequest, "请填写昵称和密码")
+		return
+	}
+	result, err := h.svc.LoginWithPassword(in)
 	if err != nil {
 		Fail(c, CodeBadRequest, err.Error())
 		return
 	}
 	OK(c, result)
+}
+
+// SetPassword 设置或修改当前账号密码
+func (h *AuthHandler) SetPassword(c *gin.Context) {
+	uid, _ := middleware.CurrentUserID(c)
+	var in service.SetPasswordInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		Fail(c, CodeBadRequest, "请填写新密码")
+		return
+	}
+	user, err := h.svc.SetPassword(uid, in)
+	if err != nil {
+		Fail(c, CodeBadRequest, err.Error())
+		return
+	}
+	OK(c, user)
 }
 
 // AppleLogin Apple Sign In 登录

@@ -202,5 +202,5 @@ open LoverOrder.xcodeproj
 
 - **接口地址**：iOS 模拟器默认请求 `http://localhost:8081/api/v1`；真机调试地址读取自 `ios/project.yml` 生成至 `Info.plist` 的 `API_BASE_URL`（不含 `/api/v1`，客户端自动拼接）。
 - **认证与数据契约**：
-  - 正式登录使用 Sign in with Apple（真机需在 Xcode 中绑定 `LoverOrder.entitlements` 并在后端填好 `apple.*`）；Debug 构建额外提供开发快速登录，后端仅在非 release 模式开放开发登录接口。
-  - 后端使用 MySQL + GORM + 自签 JWT 持久化菜谱、分类、收藏、餐次、评价、房间参与关系与通知流；接口与持久化场景值内部固定为 `household` 与 `dining`。
+  - 首次进入按设备唯一标识（iOS Keychain 持久化）只需填昵称即可自动建号进入（`POST /api/v1/auth/device`）；可在「我的 → 常用工具 → 账号与密码」设置 bcrypt 登录密码（`POST /api/v1/user/password`），换手机或重新找回时走「昵称 + 密码」登录（`POST /api/v1/auth/login`）；后端同时保留 `apple.*` Sign in with Apple 验证能力。
+  - 后端使用 MySQL + GORM + 自签 JWT 与 WebSocket 房间服务持久化菜谱、分类、收藏、餐次、实时自由画布（`meal_canvases`）、评价、房间参与关系与通知流；接口与持久化场景值内部固定为 `household` 与 `dining`。

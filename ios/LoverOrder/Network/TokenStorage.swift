@@ -93,3 +93,64 @@ final class TokenStorage {
         return String(data: data, encoding: .utf8)
     }
 }
+
+// 设备级唯一身份标识：保存在本机 Keychain（不随退出清除，也不跨设备迁移）
+final class DeviceIdentity {
+    static let shared = DeviceIdentity()
+
+    private let keychainKey = "com.loverorder.device.unique_id"
+    private let defaultsKey = "com.loverorder.device.unique_id.fallback"
+    private let lock = NSLock()
+    private var cachedID: String?
+
+    var deviceID: String {
+        lock.lock()
+        defer { lock.unlock() }
+        if let cachedID, !cachedID.isEmpty {
+            return cachedID
+        }
+        if let fromKeychain = readKeychain(), !fromKeychain.isEmpty {
+            cachedID = fromKeychain
+            UserDefaults.standard.set(fromKeychain, forKey: defaultsKey)
+            return fromKeychain
+        }
+        if let fromDefaults = UserDefaults.standard.string(forKey: defaultsKey), !fromDefaults.isEmpty {
+            cachedID = fromDefaults
+            writeKeychain(fromDefaults)
+            return fromDefaults
+        }
+        let generated = UUID().uuidString.lowercased()
+        cachedID = generated
+        writeKeychain(generated)
+        UserDefaults.standard.set(generated, forKey: defaultsKey)
+        return generated
+    }
+
+    private func readKeychain() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: keychainKey,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func writeKeychain(_ value: String) {
+        guard let data = value.data(using: .utf8) else { return }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: keychainKey,
+        ]
+        SecItemDelete(query as CFDictionary)
+        var add = query
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(add as CFDictionary, nil)
+    }
+}

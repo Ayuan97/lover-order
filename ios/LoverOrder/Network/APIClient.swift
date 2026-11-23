@@ -118,7 +118,9 @@ final class APIClient {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if let token = TokenStorage.shared.access {
+        let token = TokenStorage.shared.access
+        let hadAuthToken = token != nil
+        if let token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         if let body {
@@ -136,7 +138,7 @@ final class APIClient {
             throw APIError.noData
         }
 
-        if http.statusCode == 401 {
+        if http.statusCode == 401 && hadAuthToken {
             TokenStorage.shared.clear()
             AppNotifications.sessionExpired()
             throw APIError.unauthorized

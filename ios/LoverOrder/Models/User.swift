@@ -11,6 +11,8 @@ struct AppUser: Codable, Identifiable, Hashable {
     var defaultScene: MealScene?
     var defaultMood: Mood?
     var tastePrefs: [String]?
+    var deviceId: String?
+    var hasPassword: Bool?
     var isActive: Bool?
     var lastLoginAt: Date?
     var createdAt: Date?
@@ -25,6 +27,8 @@ struct AppUser: Codable, Identifiable, Hashable {
         case defaultScene = "default_scene"
         case defaultMood = "default_mood"
         case tastePrefs = "taste_prefs"
+        case deviceId = "device_id"
+        case hasPassword = "has_password"
         case isActive = "is_active"
         case lastLoginAt = "last_login_at"
         case createdAt = "created_at"
@@ -50,6 +54,8 @@ struct AppUser: Codable, Identifiable, Hashable {
             defaultMood = nil
         }
         tastePrefs = try c.decodeIfPresent([String].self, forKey: .tastePrefs)
+        deviceId = try c.decodeIfPresent(String.self, forKey: .deviceId)
+        hasPassword = try c.decodeIfPresent(Bool.self, forKey: .hasPassword)
         isActive = try c.decodeIfPresent(Bool.self, forKey: .isActive)
         lastLoginAt = try c.decodeIfPresent(Date.self, forKey: .lastLoginAt)
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
@@ -61,7 +67,9 @@ struct AppUser: Codable, Identifiable, Hashable {
         avatar: String? = nil,
         email: String? = nil,
         gender: Int8? = nil,
-        householdId: UInt? = nil
+        householdId: UInt? = nil,
+        deviceId: String? = nil,
+        hasPassword: Bool? = nil
     ) {
         self.id = id
         self.nickname = nickname
@@ -72,6 +80,8 @@ struct AppUser: Codable, Identifiable, Hashable {
         self.defaultScene = nil
         self.defaultMood = nil
         self.tastePrefs = nil
+        self.deviceId = deviceId
+        self.hasPassword = hasPassword
         self.isActive = true
         self.lastLoginAt = nil
         self.createdAt = nil

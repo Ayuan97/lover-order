@@ -90,6 +90,9 @@ struct EditProfileSheet: View {
                 UpdateProfileRequest(nickname: trimmed, avatar: avatar)
             )
             appState.currentUser = user
+            if user.deviceId == DeviceIdentity.shared.deviceID {
+                UserDefaults.standard.set(user.nickname, forKey: "auth.last.nickname")
+            }
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
