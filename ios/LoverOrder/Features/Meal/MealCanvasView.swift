@@ -5948,12 +5948,21 @@ struct MealCanvasView: View {
     private func openNudgeSheet(targetUserID: UInt?) {
         guard !isGuestMode, !isLaunchStudio else { return }
         Haptics.light()
+        let hadOpenSheet = isEditing || photoPickerDish != nil
+        photoPickerDish = nil
         finishEditing()
         selectedStickerID = nil
         selectedNoteID = nil
         toolsExpanded = false
         nudgeInitialTargetID = targetUserID
-        showNudgeSheet = true
+        if hadOpenSheet {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(320))
+                showNudgeSheet = true
+            }
+        } else {
+            showNudgeSheet = true
+        }
     }
 
     private var isCanvasUnobstructedAndVisible: Bool {

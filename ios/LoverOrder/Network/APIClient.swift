@@ -275,6 +275,12 @@ final class APIClient {
         } catch let error as APIError {
             throw error
         } catch {
+            if http.statusCode == 404 {
+                throw APIError.server(code: 404, message: "服务端尚未更新此功能，请拉取最新代码并重启后端")
+            }
+            if http.statusCode >= 500 {
+                throw APIError.server(code: http.statusCode, message: "服务器开小差了（\(http.statusCode)），请稍后再试")
+            }
             throw APIError.decodingFailed(underlying: error)
         }
     }

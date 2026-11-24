@@ -235,7 +235,21 @@ struct MealNudgeSheet: View {
                 }
             }
             .task {
-                guard meal == nil, appState.currentUser?.hasHousehold == true || appState.household != nil else { return }
+                guard appState.currentUser?.hasHousehold == true || appState.household != nil else { return }
+                if otherMembers.isEmpty {
+                    await appState.refreshHousehold()
+                    if selectedTargetUserID == nil, otherMembers.count == 1 {
+                        selectedTargetUserID = otherMembers[0].id
+                    }
+                } else {
+                    Task {
+                        await appState.refreshHousehold()
+                        if selectedTargetUserID == nil, otherMembers.count == 1 {
+                            selectedTargetUserID = otherMembers[0].id
+                        }
+                    }
+                }
+                guard meal == nil else { return }
                 if let fetched = try? await MealService.shared.current(scene: .household, mood: appState.currentMood) {
                     fallbackLoadedMeal = fetched
                     if !userChangedPreset, let first = orderedPresets.first {

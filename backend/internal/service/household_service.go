@@ -66,6 +66,7 @@ func (s *HouseholdService) Create(userID uint, in CreateInput) (*model.Household
 	if err != nil {
 		return nil, err
 	}
+	_ = model.DB.Preload("Members").First(household, household.ID).Error
 	return household, nil
 }
 
@@ -100,6 +101,7 @@ func (s *HouseholdService) Join(userID uint, in JoinInput) (*model.Household, er
 		}
 		NewNotificationService().NotifyHouseholdJoined(household.ID, userID, household.Name)
 		GlobalCanvasHub().BroadcastHouseholdSync(household.ID, "household_changed", userID)
+		_ = model.DB.Preload("Members").First(&household, household.ID).Error
 		return &household, nil
 	}
 
@@ -137,6 +139,7 @@ func (s *HouseholdService) Join(userID uint, in JoinInput) (*model.Household, er
 	}
 	NewNotificationService().NotifyHouseholdJoined(household.ID, userID, household.Name)
 	GlobalCanvasHub().BroadcastHouseholdSync(household.ID, "household_changed", userID)
+	_ = model.DB.Preload("Members").First(&household, household.ID).Error
 	return &household, nil
 }
 

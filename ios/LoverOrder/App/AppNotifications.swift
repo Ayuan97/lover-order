@@ -414,18 +414,41 @@ final class NotificationService {
         mutedKinds: [String],
         useCustomSound: Bool
     ) async throws {
-        let _: NotificationAck = try await api.post(
-            "devices/register",
-            body: RegisterBody(
-                token: token,
-                deviceId: DeviceIdentity.shared.deviceID,
-                platform: "ios",
-                environment: environment,
-                appVersion: appVersion,
-                mutedKinds: mutedKinds,
-                useCustomSound: useCustomSound
+        do {
+            let _: NotificationAck = try await api.post(
+                "devices/register",
+                body: RegisterBody(
+                    token: token,
+                    deviceId: DeviceIdentity.shared.deviceID,
+                    platform: "ios",
+                    environment: environment,
+                    appVersion: appVersion,
+                    mutedKinds: mutedKinds,
+                    useCustomSound: useCustomSound
+                )
             )
-        )
+        } catch let APIError.server(code, _) where code == 400 {
+            let legacyAllowed: Set<String> = [
+                "meal_dish_added", "meal_confirmed", "meal_completed", "meal_reviewed",
+                "dining_joined", "dining_dish_added", "household_joined"
+            ]
+            let filtered = mutedKinds.filter { legacyAllowed.contains($0) }
+            guard filtered.count != mutedKinds.count else {
+                throw APIError.server(code: code, message: "参数有误")
+            }
+            let _: NotificationAck = try await api.post(
+                "devices/register",
+                body: RegisterBody(
+                    token: token,
+                    deviceId: DeviceIdentity.shared.deviceID,
+                    platform: "ios",
+                    environment: environment,
+                    appVersion: appVersion,
+                    mutedKinds: filtered,
+                    useCustomSound: useCustomSound
+                )
+            )
+        }
     }
 
     func unregisterDevice(token: String) async throws {
