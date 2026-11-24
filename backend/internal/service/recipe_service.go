@@ -206,10 +206,18 @@ func (s *RecipeService) Update(householdID, id uint, in RecipeUpdateInput) (*mod
 		if !r.UpdatedAt.Equal(*in.ExpectedUpdatedAt) {
 			return ErrRecipeEditConflict
 		}
+		if err := applyRecipeJSON(&r, in.RecipeInput); err != nil {
+			return err
+		}
 
 		r.Name = in.Name
 		r.Description = in.Description
 		if r.CoverImage != in.CoverImage {
+			if r.CoverImage != "" && in.CoverImage != "" {
+				if err := r.UpsertGalleryPhoto(r.CoverImage, r.CutoutImage, r.CreatedAt.Format("2006-01-02")); err != nil {
+					return err
+				}
+			}
 			r.CutoutImage = ""
 		}
 		r.CoverImage = in.CoverImage
@@ -225,9 +233,6 @@ func (s *RecipeService) Update(householdID, id uint, in RecipeUpdateInput) (*mod
 			r.Servings = in.Servings
 		}
 		r.Tips = in.Tips
-		if err := applyRecipeJSON(&r, in.RecipeInput); err != nil {
-			return err
-		}
 
 		// 两次保存落在同一毫秒时也要推进更新时间，避免旧表单通过版本检查。
 		nextTime := time.Now().Truncate(time.Millisecond)

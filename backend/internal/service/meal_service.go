@@ -585,15 +585,8 @@ func (s *MealService) UpdateDishImage(householdID, actorUserID, mealID, dishID u
 		return nil, err
 	}
 
+	GlobalCanvasHub().UpdateDishStickerImage(mealID, dishID, actorUserID)
 	_ = model.DB.Preload("Adder").First(&dish, dish.ID).Error
-
-	displayImg := image
-	isCutout := false
-	if cutout != "" {
-		displayImg = cutout
-		isCutout = true
-	}
-	GlobalCanvasHub().UpdateDishStickerImage(mealID, dishID, displayImg, isCutout, actorUserID)
 	GlobalCanvasHub().BroadcastMealSync(mealID, "dish_updated", actorUserID)
 	if recipeUpdated {
 		GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", actorUserID)

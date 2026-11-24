@@ -373,9 +373,16 @@ final class HistoryViewModel: ObservableObject {
     @Published var loadFailed = false
     @Published var errorMessage: String?
     @Published var canvasSyncVersion: Int = 0
+    private var listLoadID = 0
 
     func load(filter: HistoryView.Filter) async {
-        isLoading = true; loadFailed = false; defer { isLoading = false }
+        listLoadID += 1
+        let loadID = listLoadID
+        isLoading = true
+        loadFailed = false
+        defer {
+            if loadID == listLoadID { isLoading = false }
+        }
         do {
             var q = MealListQuery(); q.pageSize = 50
             q.status = .completed
@@ -385,6 +392,7 @@ final class HistoryViewModel: ObservableObject {
             case .friends: q.scene = .dining
             }
             let result = try await MealService.shared.list(q)
+            guard loadID == listLoadID else { return }
             meals = result.items
             let syncTargets = Array(result.items.prefix(12))
             if !syncTargets.isEmpty {
@@ -392,16 +400,18 @@ final class HistoryViewModel: ObservableObject {
                     guard let self else { return }
                     var updated = false
                     for item in syncTargets {
+                        guard loadID == self.listLoadID else { return }
                         if await syncRemoteMealCanvasIfNeeded(mealID: item.id, forceRefresh: true) {
                             updated = true
                         }
                     }
-                    if updated {
+                    if updated, loadID == self.listLoadID {
                         self.canvasSyncVersion += 1
                     }
                 }
             }
         } catch {
+            guard loadID == listLoadID else { return }
             loadFailed = true; errorMessage = error.localizedDescription
         }
     }

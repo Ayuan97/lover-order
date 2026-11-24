@@ -115,8 +115,8 @@ struct RecipeDetailView: View {
         }
         .fullScreenCover(item: $previewGallery) { presentation in
             PhotoGalleryViewer(slides: presentation.slides, initialIndex: presentation.initialIndex) { newIndex in
-                if newIndex >= 0 && newIndex < galleryImages.count {
-                    currentPhotoIndex = newIndex
+                if let index = galleryImages.firstIndex(of: presentation.slides[newIndex].url) {
+                    currentPhotoIndex = index
                 }
             }
         }
@@ -134,14 +134,14 @@ struct RecipeDetailView: View {
     private var heroGallery: some View {
         let images = galleryImages
         return TabView(selection: $currentPhotoIndex) {
-            ForEach(Array(images.enumerated()), id: \.offset) { idx, image in
+            ForEach(Array(images.enumerated()), id: \.element) { idx, image in
                 AsyncImageView(url: image, name: recipe?.name ?? "菜品")
                     .frame(maxWidth: .infinity)
                     .frame(height: 340)
                     .clipped()
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        openHeroPhoto(at: idx)
+                        if let image { openHeroPhoto(image) }
                     }
                     .accessibilityAddTraits(image != nil ? .isButton : [])
                     .accessibilityLabel(image != nil ? "查看大图" : (recipe?.name ?? "菜品"))
@@ -192,12 +192,12 @@ struct RecipeDetailView: View {
         return choices.map(\.image)
     }
 
-    private func openHeroPhoto(at index: Int) {
+    private func openHeroPhoto(_ image: String) {
         let choices = recipe?.photoChoices ?? []
-        guard !choices.isEmpty else { return }
-        let slides = choices.enumerated().map { offset, choice in
+        guard let index = choices.firstIndex(where: { $0.image == image }) else { return }
+        let slides = choices.map { choice in
             PhotoGallerySlide(
-                id: "\(offset)-\(choice.image)",
+                id: choice.id,
                 url: choice.image,
                 caption: formattedHeroCaption(for: choice, total: choices.count)
             )

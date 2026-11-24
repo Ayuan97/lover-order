@@ -54,6 +54,7 @@ struct MealNowView: View {
                     case "canvas_connected":
                         AppNotifications.recipesChanged()
                         AppNotifications.categoriesChanged()
+                        AppNotifications.historyChanged()
                         Task {
                             await vm.syncMeal(
                                 scene: householdScene,

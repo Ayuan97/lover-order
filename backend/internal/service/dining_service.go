@@ -319,7 +319,7 @@ func (s *DiningService) Recipes(userID, mealID uint, keyword string) ([]model.Re
 		q = q.Where("name LIKE ?", "%"+keyword+"%")
 	}
 	recipes := []model.Recipe{}
-	if err := q.Order("id DESC").Find(&recipes).Error; err != nil {
+	if err := q.Omit("images", "photo_gallery").Order("id DESC").Find(&recipes).Error; err != nil {
 		return nil, err
 	}
 	return recipes, nil

@@ -361,13 +361,7 @@ struct DishPhotoPickerSheet: View {
         isProcessing = true
         processingText = "正在保存今天这盘"
         defer { isProcessing = false }
-        let cutoutPNG: Data?
-        if let existing = photo.cutoutData {
-            cutoutPNG = existing
-        } else {
-            cutoutPNG = try? await ImageCutoutService.shared.makePNG(from: photo.image)
-        }
-        try await uploadAndApply(originalJPEG: jpeg, cutoutPNG: cutoutPNG, dismissImmediately: false)
+        try await uploadAndApply(originalJPEG: jpeg, cutoutPNG: photo.cutoutData, dismissImmediately: false)
         shouldDismissAfterCamera = true
     }
 

@@ -167,6 +167,19 @@ func (h *CanvasHub) evictIfEmpty(r *canvasRoom) {
 
 // GetSnapshot 获取餐次画布当前版本与文档
 func (h *CanvasHub) GetSnapshot(mealID uint) (*CanvasSnapshotResponse, error) {
+	snapshot, err := h.loadSnapshot(mealID)
+	if err != nil {
+		return nil, err
+	}
+	if snapshot.Document != nil {
+		if err := syncCanvasDishPhotos(mealID, snapshot.Document.Stickers); err != nil {
+			return nil, err
+		}
+	}
+	return snapshot, nil
+}
+
+func (h *CanvasHub) loadSnapshot(mealID uint) (*CanvasSnapshotResponse, error) {
 	if r := h.getActiveRoom(mealID); r != nil {
 		r.mu.Lock()
 		if !r.evicted {
@@ -219,6 +232,10 @@ func (h *CanvasHub) SaveDocument(mealID uint, doc *CanvasDocPayload, actor Canva
 
 	normalized := normalizeCanvasDoc(doc)
 	if err := r.ensureLoadedLocked(); err != nil {
+		r.mu.Unlock()
+		return nil, err
+	}
+	if err := syncCanvasDishPhotos(mealID, normalized.Stickers); err != nil {
 		r.mu.Unlock()
 		return nil, err
 	}
@@ -334,7 +351,7 @@ func (h *CanvasHub) DeleteDishSticker(mealID, dishID, actorID uint) {
 	}
 	dishIDCopy := dishID
 	payload := CanvasOpPayload{MealDishID: &dishIDCopy}
-	nextDoc, changed, _, err := applyCanvasOp(r.doc, r.revision, mealID, "delete_sticker", payload)
+	nextDoc, changed, _, err := applyCanvasOp(r.doc, r.revision, mealID, "delete_sticker", &payload)
 	if err != nil || !changed {
 		r.mu.Unlock()
 		return
@@ -367,15 +384,20 @@ func (h *CanvasHub) DeleteDishSticker(mealID, dishID, actorID uint) {
 }
 
 // UpdateDishStickerImage 当一顿里的某道菜换了本顿实拍/往期图时，原位同步画布文档中对应贴图的图片并广播。
-func (h *CanvasHub) UpdateDishStickerImage(mealID, dishID uint, image string, isCutout bool, actorID uint) {
+func (h *CanvasHub) UpdateDishStickerImage(mealID, dishID, actorID uint) {
 	if mealID == 0 || dishID == 0 {
 		return
 	}
 	r := h.acquireLiveRoomLocked(mealID)
 	defer h.evictIfEmpty(r)
+	defer r.mu.Unlock()
 
 	if err := r.ensureLoadedLocked(); err != nil || r.doc == nil {
-		r.mu.Unlock()
+		return
+	}
+	// 换图事务可能先于其他请求提交，持有房间锁后读取当前菜图以免晚到的同步写回旧图。
+	dish, err := loadCanvasDish(mealID, dishID)
+	if err != nil {
 		return
 	}
 
@@ -386,32 +408,24 @@ func (h *CanvasHub) UpdateDishStickerImage(mealID, dishID uint, image string, is
 		if json.Unmarshal(raw, &meta) != nil || meta.MealDishID == nil || *meta.MealDishID != dishID {
 			continue
 		}
-		var stickerMap map[string]any
-		if json.Unmarshal(raw, &stickerMap) != nil {
-			continue
-		}
-		stickerMap["image"] = image
-		stickerMap["isCutout"] = isCutout
-		encoded, err := json.Marshal(stickerMap)
+		changed, err := patchCanvasDishPhoto(nextDoc.Stickers, i, dish)
 		if err != nil {
-			continue
+			return
 		}
-		nextDoc.Stickers[i] = encoded
-		updatedStickers = append(updatedStickers, encoded)
+		if changed {
+			updatedStickers = append(updatedStickers, nextDoc.Stickers[i])
+		}
 	}
 
 	if len(updatedStickers) == 0 {
-		r.mu.Unlock()
 		return
 	}
 
 	rev, _, err := r.persistLocked(nextDoc, actorID)
 	if err != nil {
-		r.mu.Unlock()
 		return
 	}
 	targets := r.snapshotClientsLocked(nil)
-	r.mu.Unlock()
 
 	if len(targets) > 0 {
 		actor := CanvasActor{ID: actorID, Nickname: "系统", Role: "system"}
@@ -773,7 +787,7 @@ func (r *canvasRoom) handleOp(c *canvasClient, msg inboundWSMessage) {
 		c.enqueue(r.operationSnapshotLocked(actor, clientID, msg.OpID, nil))
 		return
 	}
-	nextDoc, changed, replacedByRemote, err := applyCanvasOp(r.doc, r.revision, r.mealID, msg.Kind, msg.Payload)
+	nextDoc, changed, replacedByRemote, err := applyCanvasOp(r.doc, r.revision, r.mealID, msg.Kind, &msg.Payload)
 	if err != nil {
 		c.sendError(err.Error())
 		return

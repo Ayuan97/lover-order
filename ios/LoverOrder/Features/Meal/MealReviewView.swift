@@ -438,7 +438,7 @@ struct MealReviewView: View {
         Task {
             _ = await syncRemoteMealCanvasIfNeeded(mealID: mealId, forceRefresh: true)
         }
-        onSaved()
+        AppNotifications.historyChanged()
 
         if let rid = updatedDish.recipeId,
            let img = updatedDish.recipeImage, !img.isEmpty,

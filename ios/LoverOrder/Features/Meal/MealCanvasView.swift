@@ -7526,6 +7526,8 @@ struct CanvasDocument: Codable {
 
 private enum CanvasDocumentStore {
     private static let prefix = "meal.canvas.document.v5."
+    @MainActor private static var snapshotLoadID = 0
+    @MainActor private static var appliedSnapshots: [UInt: (revision: Int64, loadID: Int)] = [:]
 
     static func load(mealID: UInt) -> CanvasDocument? {
         guard let data = UserDefaults.standard.data(forKey: prefix + String(mealID)) else { return nil }
@@ -7535,6 +7537,32 @@ private enum CanvasDocumentStore {
     static func save(_ document: CanvasDocument, mealID: UInt) {
         guard let data = try? JSONEncoder().encode(document) else { return }
         UserDefaults.standard.set(data, forKey: prefix + String(mealID))
+    }
+
+    @MainActor
+    static func syncRemote(mealID: UInt, forceRefresh: Bool) async -> Bool {
+        if !forceRefresh && load(mealID: mealID) != nil { return true }
+        snapshotLoadID += 1
+        let loadID = snapshotLoadID
+        let snapshot = try? await MealService.shared.fetchCanvas(mealId: mealID)
+        let existing = load(mealID: mealID)
+        guard let snapshot, snapshot.revision > 0,
+              var document = snapshot.document else {
+            return existing != nil
+        }
+        // 菜图可能在同一画布版本更新。同版本只用更新发起的请求覆盖缓存。
+        if let applied = appliedSnapshots[mealID],
+           (snapshot.revision, loadID) < (applied.revision, applied.loadID) {
+            return existing != nil
+        }
+        if document.customBackgroundData == nil,
+           let existing,
+           existing.customBackgroundURL == document.customBackgroundURL {
+            document.customBackgroundData = existing.customBackgroundData
+        }
+        save(document, mealID: mealID)
+        appliedSnapshots[mealID] = (snapshot.revision, loadID)
+        return true
     }
 }
 
@@ -7547,22 +7575,7 @@ func mealCanvasDocumentExists(mealID: UInt) -> Bool {
 @MainActor
 @discardableResult
 func syncRemoteMealCanvasIfNeeded(mealID: UInt, forceRefresh: Bool = false) async -> Bool {
-    let existing = CanvasDocumentStore.load(mealID: mealID)
-    if !forceRefresh && existing != nil {
-        return true
-    }
-    guard let resp = try? await MealService.shared.fetchCanvas(mealId: mealID),
-          resp.revision > 0,
-          var doc = resp.document else {
-        return existing != nil
-    }
-    if doc.customBackgroundData == nil,
-       let existing,
-       existing.customBackgroundURL == doc.customBackgroundURL {
-        doc.customBackgroundData = existing.customBackgroundData
-    }
-    CanvasDocumentStore.save(doc, mealID: mealID)
-    return true
+    await CanvasDocumentStore.syncRemote(mealID: mealID, forceRefresh: forceRefresh)
 }
 
 /// 异步把指定餐次已保存的画布合成为高清静态图，供「分享这顿饭」海报工坊同步渲染。

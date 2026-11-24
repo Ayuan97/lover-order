@@ -20,6 +20,7 @@ struct HistoryDetailView: View {
     @State private var tabBarToken = UUID()
     @State private var viewingGallery: HistoryPhotoGalleryItem?
     @State private var canvasSyncTick: Int = 0
+    @State private var detailLoadID = 0
 
     var body: some View {
         ScrollView {
@@ -457,16 +458,23 @@ struct HistoryDetailView: View {
     }
 
     private func load() async {
+        detailLoadID += 1
+        let loadID = detailLoadID
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            if loadID == detailLoadID { isLoading = false }
+        }
         async let detailTask = MealService.shared.detail(id: mealId)
         async let canvasTask = syncRemoteMealCanvasIfNeeded(mealID: mealId, forceRefresh: true)
         do {
-            meal = try await detailTask
+            let detail = try await detailTask
+            guard loadID == detailLoadID else { return }
+            meal = detail
         } catch {
+            guard loadID == detailLoadID else { return }
             errorMessage = error.localizedDescription
         }
-        if await canvasTask {
+        if await canvasTask, loadID == detailLoadID {
             canvasSyncTick += 1
         }
     }

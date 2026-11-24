@@ -223,8 +223,8 @@ func cloneCanvasDoc(doc *CanvasDocPayload) *CanvasDocPayload {
 	return normalizeCanvasDoc(doc)
 }
 
-// applyCanvasOp 将单次操作合并到画布副本上；onlyIfEmpty 被跳过时返回 replacedByRemote=true, changed=false
-func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, mealID uint, kind string, payload CanvasOpPayload) (next *CanvasDocPayload, changed bool, replacedByRemote bool, err error) {
+// applyCanvasOp 合并单次操作，并将菜图校正写回用于广播的载荷。
+func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, mealID uint, kind string, payload *CanvasOpPayload) (next *CanvasDocPayload, changed bool, replacedByRemote bool, err error) {
 	if doc == nil {
 		next = defaultCanvasDoc()
 	} else {
@@ -245,14 +245,20 @@ func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, mealID uint, kind st
 			if idx >= 0 {
 				return next, false, false, nil
 			}
-			var count int64
-			if err := model.DB.Model(&model.MealDish{}).
-				Where("id = ? AND meal_session_id = ?", *meta.MealDishID, mealID).Count(&count).Error; err != nil {
-				return nil, false, false, err
-			}
-			if count == 0 {
+			dish, err := loadCanvasDish(mealID, *meta.MealDishID)
+			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return next, false, false, nil
 			}
+			if err != nil {
+				return nil, false, false, err
+			}
+			next.Stickers = append(next.Stickers, payload.Sticker)
+			index := len(next.Stickers) - 1
+			if _, err := patchCanvasDishPhoto(next.Stickers, index, dish); err != nil {
+				return nil, false, false, err
+			}
+			payload.Sticker = next.Stickers[index]
+			return next, true, false, nil
 		}
 		if idx >= 0 {
 			next.Stickers[idx] = payload.Sticker
@@ -368,6 +374,9 @@ func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, mealID uint, kind st
 
 	case "batch_stickers_notes":
 		if payload.Stickers != nil {
+			if err := syncCanvasDishPhotos(mealID, payload.Stickers); err != nil {
+				return nil, false, false, err
+			}
 			next.Stickers = cloneRawSlice(payload.Stickers)
 		}
 		if payload.Notes != nil {
@@ -376,6 +385,9 @@ func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, mealID uint, kind st
 		return next, true, false, nil
 
 	case "batch_upsert":
+		if err := syncCanvasDishPhotos(mealID, payload.Stickers); err != nil {
+			return nil, false, false, err
+		}
 		didChange := false
 		for _, raw := range payload.Stickers {
 			var meta canvasStickerMeta
@@ -466,11 +478,67 @@ func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, mealID uint, kind st
 		if payload.OnlyIfEmpty && currentRev > 0 {
 			return next, false, true, nil
 		}
-		return normalizeCanvasDoc(payload.Document), true, false, nil
+		next = normalizeCanvasDoc(payload.Document)
+		if err := syncCanvasDishPhotos(mealID, next.Stickers); err != nil {
+			return nil, false, false, err
+		}
+		return next, true, false, nil
 
 	default:
 		return nil, false, false, errors.New("不支持的画布操作类型")
 	}
+}
+
+func loadCanvasDish(mealID, dishID uint) (model.MealDish, error) {
+	var dish model.MealDish
+	err := model.DB.Select("recipe_image", "recipe_cutout_image").
+		Where("id = ? AND meal_session_id = ?", dishID, mealID).Take(&dish).Error
+	return dish, err
+}
+
+// syncCanvasDishPhotos 用餐次菜品照片校准画布快照及批量操作携带的旧图。
+func syncCanvasDishPhotos(mealID uint, stickers []json.RawMessage) error {
+	var dishIDs []uint
+	stickerDishes := make(map[int]uint)
+	for index, raw := range stickers {
+		var meta canvasStickerMeta
+		if json.Unmarshal(raw, &meta) == nil && meta.MealDishID != nil {
+			dishIDs = append(dishIDs, *meta.MealDishID)
+			stickerDishes[index] = *meta.MealDishID
+		}
+	}
+	if len(dishIDs) == 0 {
+		return nil
+	}
+	var dishes []model.MealDish
+	if err := model.DB.Select("id", "recipe_image", "recipe_cutout_image").
+		Where("meal_session_id = ? AND id IN ?", mealID, dishIDs).Find(&dishes).Error; err != nil {
+		return err
+	}
+	byID := make(map[uint]model.MealDish, len(dishes))
+	for _, dish := range dishes {
+		byID[dish.ID] = dish
+	}
+	for index, dishID := range stickerDishes {
+		if dish, ok := byID[dishID]; ok {
+			if _, err := patchCanvasDishPhoto(stickers, index, dish); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func patchCanvasDishPhoto(stickers []json.RawMessage, index int, dish model.MealDish) (bool, error) {
+	image := dish.RecipeImage
+	isCutout := dish.RecipeCutoutImage != ""
+	if isCutout {
+		image = dish.RecipeCutoutImage
+	}
+	return patchCanvasElement(stickers, index, struct {
+		Image    string `json:"image"`
+		IsCutout bool   `json:"isCutout"`
+	}{Image: image, IsCutout: isCutout})
 }
 
 func patchCanvasElement(items []json.RawMessage, index int, patch any) (bool, error) {
