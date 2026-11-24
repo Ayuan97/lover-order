@@ -3,6 +3,9 @@ import SwiftUI
 // 菜品详情：图片画廊 + 简介 + 食材 + 做法 + 评价记录
 struct RecipeDetailView: View {
     let recipeId: UInt
+    var initialRecipe: Recipe? = nil
+    var initialMeal: MealSession? = nil
+    var initialCategories: [RecipeCategory] = []
 
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -10,6 +13,7 @@ struct RecipeDetailView: View {
     @State private var recipe: Recipe?
     @State private var categories: [RecipeCategory] = []
     @State private var meal: MealSession?
+    @State private var optimisticAdded: Bool = false
     @State private var isFavored: Bool = false
     @State private var reviewMeals: [MealSession] = []
     @State private var isLoading = false
@@ -86,7 +90,7 @@ struct RecipeDetailView: View {
             InteractivePopGestureEnabler()
         }
         .safeAreaInset(edge: .bottom) {
-            if recipe != nil, meal != nil {
+            if recipe != nil, (meal == nil || meal?.status == .planning || meal?.status == .confirmed) {
                 bottomBar
             }
         }
@@ -95,6 +99,16 @@ struct RecipeDetailView: View {
             detailMoreMenuOverlay
         }
         .onAppear {
+            if recipe == nil, let initialRecipe {
+                recipe = initialRecipe
+                isFavored = initialRecipe.isFavored ?? false
+            }
+            if meal == nil, let initialMeal {
+                meal = initialMeal
+            }
+            if categories.isEmpty, !initialCategories.isEmpty {
+                categories = initialCategories
+            }
             appState.setTabBarHidden(true, token: tabBarToken)
         }
         .onDisappear {
@@ -117,12 +131,14 @@ struct RecipeDetailView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
+            guard !isLoading else { return }
             Task { await loadMeal() }
         }
         .toolbar(.hidden, for: .navigationBar)
         .sheet(item: $editingRecipe) { openedRecipe in
             RecipeEditView(
                 mode: .edit(openedRecipe),
+                initialCategories: categories,
                 onSaved: { updated in
                     self.recipe = updated
                 },
@@ -581,6 +597,7 @@ struct RecipeDetailView: View {
     }
 
     private var alreadyAdded: Bool {
+        if optimisticAdded { return true }
         guard let meal, let recipe else { return false }
         return (meal.dishes ?? []).contains { $0.recipeId == recipe.id }
     }
@@ -609,8 +626,11 @@ struct RecipeDetailView: View {
         let loadID = mealLoadID
         do {
             let current = try await MealService.shared.current(scene: .household, mood: appState.currentMood)
-            guard loadID == mealLoadID else { return }
+            guard loadID == mealLoadID, !isLoading else { return }
             meal = current
+            if let recipe, (current.dishes ?? []).contains(where: { $0.recipeId == recipe.id }) {
+                optimisticAdded = false
+            }
         } catch {
             guard loadID == mealLoadID else { return }
             errorMessage = error.localizedDescription
@@ -634,19 +654,36 @@ struct RecipeDetailView: View {
     }
 
     private func addToMeal() async {
-        guard let recipe, let meal else { return }
+        guard let recipe, !isLoading else { return }
         if alreadyAdded { return }
         isLoading = true
+        optimisticAdded = true
+        Haptics.light()
+        CanvasSoundEngine.shared.playDishPick()
         defer { isLoading = false }
         do {
-            let dish = try await MealService.shared.addDish(mealId: meal.id, dish: DishInput(recipeId: recipe.id))
-            if var current = self.meal, current.id == meal.id,
-               !(current.dishes ?? []).contains(where: { $0.id == dish.id }) {
-                current.dishes = (current.dishes ?? []) + [dish]
-                self.meal = current
+            let targetMeal: MealSession
+            if let existing = self.meal {
+                targetMeal = existing
+            } else {
+                let fetched = try await MealService.shared.current(scene: .household, mood: appState.currentMood)
+                self.meal = fetched
+                targetMeal = fetched
             }
-            Haptics.light()
+            let dish = try await MealService.shared.addDish(mealId: targetMeal.id, dish: DishInput(recipeId: recipe.id))
+            mealLoadID += 1
+            var updatedMeal = self.meal ?? targetMeal
+            var list = updatedMeal.dishes ?? []
+            if let idx = list.firstIndex(where: { $0.id == dish.id || $0.recipeId == recipe.id }) {
+                list[idx] = dish
+            } else {
+                list.append(dish)
+            }
+            updatedMeal.dishes = list
+            self.meal = updatedMeal
+            optimisticAdded = false
         } catch {
+            optimisticAdded = false
             errorMessage = error.localizedDescription
         }
     }

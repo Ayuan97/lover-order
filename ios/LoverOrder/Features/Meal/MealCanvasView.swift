@@ -1493,7 +1493,10 @@ struct MealCanvasView: View {
 
     private var canvas: some View {
         GeometryReader { proxy in
-            let orderedLayers = layerEntries.sorted { $0.layer > $1.layer }
+            let orderedLayers = layerEntries.sorted {
+                $0.layer != $1.layer ? $0.layer > $1.layer : $0.renderOrder > $1.renderOrder
+            }
+            let topLayer = orderedLayers.first?.layer ?? 0
             ZStack {
                 Color.clear
                     .contentShape(Rectangle())
@@ -1628,7 +1631,7 @@ struct MealCanvasView: View {
                         }
                     )
                     .transition(.opacity)
-                    .zIndex(Double(sticker.layer))
+                    .zIndex(Double(preview?.position != nil ? max(sticker.layer, topLayer + 1) : sticker.layer))
                     .accessibilityHidden(isSelecting)
                     .allowsHitTesting(!isReadOnlyCreatorPreview && !drawingEnabled && !isSelecting && (!isCanvasInteracting || selectedStickerID == stickerID))
                 }
@@ -1699,7 +1702,7 @@ struct MealCanvasView: View {
                         }
                     )
                     .transition(.opacity)
-                    .zIndex(Double(note.layer))
+                    .zIndex(Double(preview?.position != nil ? max(note.layer, topLayer + 1) : note.layer))
                     .accessibilityHidden(isSelecting)
                     .allowsHitTesting(!isReadOnlyCreatorPreview && !drawingEnabled && !isSelecting && (!isCanvasInteracting || selectedNoteID == noteID))
                 }
@@ -1755,7 +1758,7 @@ struct MealCanvasView: View {
                 if !isExporting && !reduceMotion {
                     CanvasBurstFXOverlay(controller: fx, isLightSurface: background.isLightSurface)
                         .frame(width: proxy.size.width, height: proxy.size.height)
-                        .zIndex(998)
+                        .zIndex(999_998)
                 }
 
                 if !isExporting {
@@ -1773,7 +1776,7 @@ struct MealCanvasView: View {
                     .shadow(color: background.isLightSurface ? Color.clear : Color.black.opacity(0.25), radius: 1)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
-                    .zIndex(999)
+                    .zIndex(999_999)
                 }
 
             }
@@ -3426,11 +3429,27 @@ struct MealCanvasView: View {
     private func currentTransform(for selection: CanvasSelection) -> CanvasTransformUndo? {
         switch selection {
         case .sticker(let id):
-            guard let item = stickers.first(where: { $0.id == id }) else { return nil }
-            return CanvasTransformUndo(selection: selection, position: item.position, scale: item.scale, rotationDegrees: item.rotationDegrees)
+            guard let index = stickers.firstIndex(where: { $0.id == id }) else { return nil }
+            let item = stickers[index]
+            return CanvasTransformUndo(
+                selection: selection,
+                position: item.position,
+                scale: item.scale,
+                rotationDegrees: item.rotationDegrees,
+                layer: item.layer,
+                renderOrder: index
+            )
         case .note(let id):
-            guard let item = notes.first(where: { $0.id == id }) else { return nil }
-            return CanvasTransformUndo(selection: selection, position: item.position, scale: item.scale, rotationDegrees: item.rotationDegrees)
+            guard let index = notes.firstIndex(where: { $0.id == id }) else { return nil }
+            let item = notes[index]
+            return CanvasTransformUndo(
+                selection: selection,
+                position: item.position,
+                scale: item.scale,
+                rotationDegrees: item.rotationDegrees,
+                layer: item.layer,
+                renderOrder: stickers.count + index
+            )
         }
     }
 
@@ -3480,12 +3499,25 @@ struct MealCanvasView: View {
         let needsPosition = fields.contains(.position) && start.position == nil
         let needsScale = fields.contains(.scale) && start.scale == nil
         let needsRotation = fields.contains(.rotation) && start.rotation == nil
-        guard needsPosition || needsScale || needsRotation,
-              let current = currentTransform(for: selection) else { return }
-        if needsPosition { start.position = current.position }
-        if needsScale { start.scale = current.scale }
-        if needsRotation { start.rotation = current.rotationDegrees }
-        transformUndoStart = start
+        if (needsPosition || needsScale || needsRotation),
+           let current = currentTransform(for: selection) {
+            if needsPosition {
+                start.position = current.position
+                if start.layer == nil {
+                    start.layer = current.layer
+                }
+            }
+            if needsScale { start.scale = current.scale }
+            if needsRotation { start.rotation = current.rotationDegrees }
+            transformUndoStart = start
+        }
+        if fields.contains(.position) {
+            if transformUndoStart?.selection == selection, transformUndoStart?.layer == nil,
+               let current = currentTransform(for: selection) {
+                transformUndoStart?.layer = current.layer
+            }
+            promoteElementToTopIfNeeded(selection)
+        }
     }
 
     private func recordTransformUndo(for selection: CanvasSelection) {
@@ -3498,11 +3530,13 @@ struct MealCanvasView: View {
             if let position = start.position { before.stickers[index].position = position }
             if let scale = start.scale { before.stickers[index].scale = scale }
             if let rotation = start.rotation { before.stickers[index].rotationDegrees = rotation }
+            if let layer = start.layer { before.stickers[index].layer = layer }
         case .note(let id):
             guard let index = before.notes.firstIndex(where: { $0.id == id }) else { return }
             if let position = start.position { before.notes[index].position = position }
             if let scale = start.scale { before.notes[index].scale = scale }
             if let rotation = start.rotation { before.notes[index].rotationDegrees = rotation }
+            if let layer = start.layer { before.notes[index].layer = layer }
         }
         recordElementEdit(from: before)
     }
@@ -3514,10 +3548,12 @@ struct MealCanvasView: View {
             case .sticker(let id):
                 if let index = before.stickers.firstIndex(where: { $0.id == id }) {
                     before.stickers[index].position = transform.position
+                    before.stickers[index].layer = transform.layer
                 }
             case .note(let id):
                 if let index = before.notes.firstIndex(where: { $0.id == id }) {
                     before.notes[index].position = transform.position
+                    before.notes[index].layer = transform.layer
                 }
             }
         }
@@ -3695,6 +3731,7 @@ struct MealCanvasView: View {
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) {
+            promoteGroupToTopIfNeeded(transforms)
             for item in transforms {
                 let position = CanvasPoint(x: item.position.x + offset.width, y: item.position.y + offset.height)
                 switch item.selection {
@@ -3713,12 +3750,58 @@ struct MealCanvasView: View {
     }
 
     private var layerEntries: [CanvasLayerEntry] {
-        stickers.map { CanvasLayerEntry(selection: .sticker($0.id), layer: $0.layer, title: $0.name, icon: $0.mealDishID == nil ? "photo" : "fork.knife") }
-            + notes.map {
-                CanvasLayerEntry(selection: .note($0.id), layer: $0.layer,
-                    title: $0.doodle?.title ?? ($0.isEmoji ? "\($0.text) 贴纸" : String($0.text.replacingOccurrences(of: "\n", with: " ").prefix(16))),
-                    icon: $0.doodle != nil ? "seal" : ($0.isEmoji ? "face.smiling" : "pencil"))
-            }
+        stickers.enumerated().map { index, item in
+            CanvasLayerEntry(
+                selection: .sticker(item.id),
+                layer: item.layer,
+                renderOrder: index,
+                title: item.name,
+                icon: item.mealDishID == nil ? "photo" : "fork.knife"
+            )
+        } + notes.enumerated().map { index, item in
+            CanvasLayerEntry(
+                selection: .note(item.id),
+                layer: item.layer,
+                renderOrder: stickers.count + index,
+                title: item.doodle?.title ?? (item.isEmoji ? "\(item.text) 贴纸" : String(item.text.replacingOccurrences(of: "\n", with: " ").prefix(16))),
+                icon: item.doodle != nil ? "seal" : (item.isEmoji ? "face.smiling" : "pencil")
+            )
+        }
+    }
+
+    private func promoteElementToTopIfNeeded(_ selection: CanvasSelection) {
+        guard let current = currentTransform(for: selection) else { return }
+        let otherMax = layerEntries
+            .filter { $0.selection != selection }
+            .map(\.layer)
+            .max()
+        guard let otherMax, current.layer <= otherMax else { return }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            setLayer(otherMax + 1, for: selection)
+        }
+    }
+
+    private func promoteGroupToTopIfNeeded(_ transforms: [CanvasTransformUndo]) {
+        guard !transforms.isEmpty else { return }
+        let selectedSet = Set(transforms.map(\.selection))
+        let unselectedMax = layerEntries
+            .filter { !selectedSet.contains($0.selection) }
+            .map(\.layer)
+            .max()
+        guard let unselectedMax else { return }
+
+        let currentSelected = layerEntries
+            .filter { selectedSet.contains($0.selection) }
+            .sorted { $0.layer != $1.layer ? $0.layer < $1.layer : $0.renderOrder < $1.renderOrder }
+        guard let lowestSelected = currentSelected.first?.layer else { return }
+        let hasUniqueAscendingLayers = Set(currentSelected.map(\.layer)).count == currentSelected.count
+        guard lowestSelected <= unselectedMax || !hasUniqueAscendingLayers else { return }
+
+        for (offset, entry) in currentSelected.enumerated() {
+            setLayer(unselectedMax + 1 + offset, for: entry.selection)
+        }
     }
 
     private func selectElement(_ selection: CanvasSelection) {
@@ -3733,20 +3816,45 @@ struct MealCanvasView: View {
     }
 
     private func moveLayer(_ move: CanvasLayerMove, for selected: CanvasSelection) {
-        let ordered = layerEntries.sorted { $0.layer < $1.layer }
+        var ordered = layerEntries.sorted {
+            $0.layer != $1.layer ? $0.layer < $1.layer : $0.renderOrder < $1.renderOrder
+        }
         guard let currentIndex = ordered.firstIndex(where: { $0.selection == selected }) else { return }
-
-        let undoBefore = currentCanvasSnapshot()
         switch move {
         case .front:
             guard currentIndex < ordered.count - 1 else { return }
-            setLayer((ordered.last?.layer ?? 0) + 1, for: selected)
         case .back:
             guard currentIndex > 0 else { return }
+        case .forward:
+            guard ordered.indices.contains(currentIndex + 1) else { return }
+        case .backward:
+            guard ordered.indices.contains(currentIndex - 1) else { return }
+        }
+
+        let undoBefore = currentCanvasSnapshot()
+        // 存在相同 layer 数值时先按当前真实视觉顺序重排为唯一递增层号，确保“上移/下移一层”每次必然生效
+        if Set(ordered.map(\.layer)).count != ordered.count {
+            let base = max(0, ordered.first?.layer ?? 0)
+            for idx in ordered.indices {
+                let normalizedLayer = base + idx
+                setLayer(normalizedLayer, for: ordered[idx].selection)
+                ordered[idx] = CanvasLayerEntry(
+                    selection: ordered[idx].selection,
+                    layer: normalizedLayer,
+                    renderOrder: ordered[idx].renderOrder,
+                    title: ordered[idx].title,
+                    icon: ordered[idx].icon
+                )
+            }
+        }
+
+        switch move {
+        case .front:
+            setLayer((ordered.last?.layer ?? 0) + 1, for: selected)
+        case .back:
             setLayer((ordered.first?.layer ?? 0) - 1, for: selected)
         case .forward, .backward:
             let targetIndex = move == .forward ? currentIndex + 1 : currentIndex - 1
-            guard ordered.indices.contains(targetIndex) else { return }
             let other = ordered[targetIndex]
             setLayer(other.layer, for: selected)
             setLayer(ordered[currentIndex].layer, for: other.selection)
@@ -7444,6 +7552,8 @@ private struct CanvasTransformUndo: Equatable {
     let position: CanvasPoint
     let scale: CGFloat
     let rotationDegrees: Double
+    let layer: Int
+    let renderOrder: Int
 }
 
 private enum CanvasTransformField: Hashable {
@@ -7455,6 +7565,7 @@ private struct CanvasTransformHistory {
     var position: CanvasPoint?
     var scale: CGFloat?
     var rotation: Double?
+    var layer: Int?
 }
 
 private struct CanvasHistoryAction {
@@ -7962,6 +8073,7 @@ private enum CanvasLayerMove: Equatable {
 private struct CanvasLayerEntry {
     let selection: CanvasSelection
     let layer: Int
+    let renderOrder: Int
     let title: String
     let icon: String
 }

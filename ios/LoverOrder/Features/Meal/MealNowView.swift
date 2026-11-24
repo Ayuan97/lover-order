@@ -1504,6 +1504,7 @@ struct AsyncImageView: View {
             }
         }
         .clipped()
+        .contentShape(Rectangle())
         .task(id: resolvedURL) {
             didFail = false
             guard let u = resolvedURL else {

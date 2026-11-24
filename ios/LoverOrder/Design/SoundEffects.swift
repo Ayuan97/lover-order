@@ -438,6 +438,9 @@ final class CanvasSoundEngine: ObservableObject {
     @discardableResult
     private func ensureEngineReady() -> Bool {
         guard isEnabled else { return false }
+        if isEngineConfigured && engine.isRunning {
+            return true
+        }
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.ambient, mode: .default, options: [])
         try? session.setActive(true)

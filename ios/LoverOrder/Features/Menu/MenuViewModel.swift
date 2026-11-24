@@ -150,12 +150,22 @@ final class MenuViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var tipMessage: String?
 
+    private static let optimisticDishIDThreshold: UInt = UInt.max / 2
     private var page = 1
     private var total = 0
     private var recipesLoadID = 0
     private var categoriesLoadID = 0
     private var activeHouseholdId: UInt?
     private var hasBootstrapped = false
+    private var nextOptimisticDishID: UInt = UInt.max - 1
+    private var pendingAddRecipeIDs: Set<UInt> = []
+    private var cancelledOptimisticRecipeIDs: Set<UInt> = []
+    private var pendingRemoveDishIDs: Set<UInt> = []
+    private var inFlightDishMutations = 0
+    private var dishMutationGeneration = 0
+    private var isConfirmingMeal = false
+
+    var isMutatingMealLocally: Bool { inFlightDishMutations > 0 || isConfirmingMeal }
     var hasMore: Bool { recipes.count < total }
     var totalCount: Int { max(total, recipes.count) }
 
@@ -242,8 +252,10 @@ final class MenuViewModel: ObservableObject {
     }
 
     func loadCurrentMeal(scene: MealScene, mood: Mood, silent: Bool = false) async {
+        let mutationGen = dishMutationGeneration
         do {
             let m = try await mealService.current(scene: scene, mood: mood)
+            guard mutationGen == dishMutationGeneration, !isMutatingMealLocally else { return }
             meal = m
             pinnedDishes = m.dishes ?? []
         } catch {
@@ -256,7 +268,10 @@ final class MenuViewModel: ObservableObject {
 
     // 轮询静默同步这一顿 内容没变不动 UI
     func syncMeal(scene: MealScene, mood: Mood) async {
+        guard !isMutatingMealLocally else { return }
+        let mutationGen = dishMutationGeneration
         guard let m = try? await mealService.current(scene: scene, mood: mood) else { return }
+        guard mutationGen == dishMutationGeneration, !isMutatingMealLocally else { return }
         if m.syncSignature != meal?.syncSignature {
             meal = m
             pinnedDishes = m.dishes ?? []
@@ -427,49 +442,257 @@ final class MenuViewModel: ObservableObject {
         }
     }
 
-    func addDish(_ recipe: Recipe) async {
-        guard let meal else { return }
-        if pinnedDishes.contains(where: { $0.recipeId == recipe.id }) {
-            errorMessage = "这道已经在这一顿里啦"
+    func applySavedRecipe(_ saved: Recipe) {
+        let matchesCategory: Bool = {
+            if isUncategorizedSelected {
+                return saved.categoryId == nil
+            }
+            if let selectedCategoryId {
+                return saved.categoryId == selectedCategoryId
+            }
+            return true
+        }()
+        let trimmedKeyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let matchesKeyword: Bool = {
+            guard !trimmedKeyword.isEmpty else { return true }
+            return saved.name.lowercased().contains(trimmedKeyword)
+                || (saved.description?.lowercased().contains(trimmedKeyword) ?? false)
+                || (saved.tags?.contains(where: { $0.lowercased().contains(trimmedKeyword) }) ?? false)
+        }()
+        let matchesFilter = matchesCategory && matchesKeyword
+
+        if let idx = recipes.firstIndex(where: { $0.id == saved.id }) {
+            if matchesFilter {
+                recipes[idx] = saved
+                recipes = sortByFilter(recipes)
+            } else {
+                recipes.remove(at: idx)
+                total = max(recipes.count, total - 1)
+            }
+        } else if matchesFilter {
+            recipes.insert(saved, at: 0)
+            total += 1
+            recipes = sortByFilter(recipes)
+        }
+        persistDefaultCacheIfApplicable()
+        prefetchRecipeAssets([saved])
+    }
+
+    private func allocOptimisticDishID() -> UInt {
+        let id = nextOptimisticDishID
+        if nextOptimisticDishID > Self.optimisticDishIDThreshold + 1 {
+            nextOptimisticDishID &-= 1
+        } else {
+            nextOptimisticDishID = UInt.max - 1
+        }
+        return id
+    }
+
+    private func makeOptimisticDish(for recipe: Recipe, currentUser: AppUser?) -> MealDish {
+        MealDish(
+            id: allocOptimisticDishID(),
+            mealSessionId: meal?.id ?? 0,
+            recipeId: recipe.id,
+            recipeName: recipe.name,
+            recipeImage: recipe.coverImage,
+            recipeCutoutImage: recipe.cutoutImage,
+            note: nil,
+            sortOrder: pinnedDishes.count,
+            addedBy: currentUser?.id,
+            adder: currentUser
+        )
+    }
+
+    private func syncMealDishesFromPinned() {
+        guard var current = meal else { return }
+        current.dishes = pinnedDishes
+        meal = current
+    }
+
+    func addDish(
+        _ recipe: Recipe,
+        scene: MealScene = .household,
+        mood: Mood? = nil,
+        currentUser: AppUser? = nil
+    ) async {
+        if let meal, meal.status != .planning && meal.status != .confirmed {
+            errorMessage = "这一顿已经结束了"
             return
         }
+        if pinnedDishes.contains(where: { $0.recipeId == recipe.id }) {
+            return
+        }
+        // 在途添加刚被乐观取消又重新点加时，直接恢复乐观项并复用同一个请求
+        if pendingAddRecipeIDs.contains(recipe.id) {
+            if cancelledOptimisticRecipeIDs.remove(recipe.id) != nil {
+                let restored = makeOptimisticDish(for: recipe, currentUser: currentUser)
+                dishMutationGeneration &+= 1
+                pinnedDishes.append(restored)
+                syncMealDishesFromPinned()
+                Haptics.light()
+                CanvasSoundEngine.shared.playDishPick()
+            }
+            return
+        }
+
+        let optimisticDish = makeOptimisticDish(for: recipe, currentUser: currentUser)
+        pendingAddRecipeIDs.insert(recipe.id)
+        cancelledOptimisticRecipeIDs.remove(recipe.id)
+        dishMutationGeneration &+= 1
+        inFlightDishMutations += 1
+        pinnedDishes.append(optimisticDish)
+        syncMealDishesFromPinned()
+        Haptics.light()
+        CanvasSoundEngine.shared.playDishPick()
+
+        defer {
+            pendingAddRecipeIDs.remove(recipe.id)
+            inFlightDishMutations = max(0, inFlightDishMutations - 1)
+        }
+
         do {
-            _ = try await mealService.addDish(mealId: meal.id, dish: DishInput(recipeId: recipe.id))
-            let updated = try await mealService.detail(id: meal.id)
-            self.meal = updated
-            self.pinnedDishes = updated.dishes ?? []
-            Haptics.light()
-            AppNotifications.mealChanged()
+            let targetMeal: MealSession
+            if let existingMeal = self.meal {
+                targetMeal = existingMeal
+            } else {
+                let fetched = try await mealService.current(scene: scene, mood: mood)
+                var merged = fetched
+                var mergedDishes = fetched.dishes ?? []
+                for item in pinnedDishes where !mergedDishes.contains(where: {
+                    $0.id == item.id || ($0.recipeId != nil && $0.recipeId == item.recipeId)
+                }) {
+                    mergedDishes.append(item)
+                }
+                merged.dishes = mergedDishes
+                self.meal = merged
+                self.pinnedDishes = mergedDishes
+                targetMeal = merged
+            }
+
+            let created = try await mealService.addDish(
+                mealId: targetMeal.id,
+                dish: DishInput(recipeId: recipe.id)
+            )
+            dishMutationGeneration &+= 1
+
+            if cancelledOptimisticRecipeIDs.remove(recipe.id) != nil {
+                pinnedDishes.removeAll { $0.recipeId == recipe.id }
+                syncMealDishesFromPinned()
+                inFlightDishMutations += 1
+                defer { inFlightDishMutations = max(0, inFlightDishMutations - 1) }
+                try? await mealService.removeDish(mealId: targetMeal.id, dishId: created.id)
+                dishMutationGeneration &+= 1
+                return
+            }
+
+            if let idx = pinnedDishes.firstIndex(where: { $0.recipeId == recipe.id }) {
+                pinnedDishes[idx] = created
+                for offset in pinnedDishes.indices.reversed() where offset != idx {
+                    let item = pinnedDishes[offset]
+                    if item.id == created.id || item.recipeId == recipe.id {
+                        pinnedDishes.remove(at: offset)
+                    }
+                }
+            } else {
+                pinnedDishes.append(created)
+            }
+            syncMealDishesFromPinned()
+
+            if targetMeal.status == .confirmed,
+               let rIdx = recipes.firstIndex(where: { $0.id == recipe.id }) {
+                recipes[rIdx].useCount = (recipes[rIdx].useCount ?? 0) + 1
+            }
         } catch {
+            dishMutationGeneration &+= 1
+            cancelledOptimisticRecipeIDs.remove(recipe.id)
+            pinnedDishes.removeAll {
+                $0.id == optimisticDish.id || ($0.id >= Self.optimisticDishIDThreshold && $0.recipeId == recipe.id)
+            }
+            syncMealDishesFromPinned()
             errorMessage = error.localizedDescription
         }
     }
 
     func removeDish(_ dish: MealDish) async {
-        guard let meal else { return }
+        if dish.id >= Self.optimisticDishIDThreshold {
+            if let rid = dish.recipeId {
+                cancelledOptimisticRecipeIDs.insert(rid)
+            }
+            dishMutationGeneration &+= 1
+            pinnedDishes.removeAll { $0.id == dish.id || (dish.recipeId != nil && $0.recipeId == dish.recipeId) }
+            syncMealDishesFromPinned()
+            Haptics.soft()
+            CanvasSoundEngine.shared.playDeletePoof()
+            return
+        }
+
+        guard let meal, !pendingRemoveDishIDs.contains(dish.id) else { return }
+        let previousMealStatus = meal.status
+        let removedIndex = pinnedDishes.firstIndex(where: { $0.id == dish.id })
+        pendingRemoveDishIDs.insert(dish.id)
+        dishMutationGeneration &+= 1
+        inFlightDishMutations += 1
+
+        pinnedDishes.removeAll { $0.id == dish.id }
+        if var current = self.meal {
+            current.dishes = pinnedDishes
+            if current.status == .confirmed && pinnedDishes.isEmpty {
+                current.status = .planning
+            }
+            self.meal = current
+        }
+        Haptics.soft()
+        CanvasSoundEngine.shared.playDeletePoof()
+
+        defer {
+            pendingRemoveDishIDs.remove(dish.id)
+            inFlightDishMutations = max(0, inFlightDishMutations - 1)
+        }
+
         do {
             try await mealService.removeDish(mealId: meal.id, dishId: dish.id)
-            let updated = try await mealService.detail(id: meal.id)
-            self.meal = updated
-            self.pinnedDishes = updated.dishes ?? []
-            AppNotifications.mealChanged()
+            dishMutationGeneration &+= 1
+            if previousMealStatus == .confirmed,
+               let rid = dish.recipeId,
+               let rIdx = recipes.firstIndex(where: { $0.id == rid }),
+               let count = recipes[rIdx].useCount, count > 0 {
+                recipes[rIdx].useCount = count - 1
+            }
         } catch {
+            dishMutationGeneration &+= 1
+            if !pinnedDishes.contains(where: { $0.id == dish.id }) {
+                let targetIdx = min(removedIndex ?? pinnedDishes.count, pinnedDishes.count)
+                pinnedDishes.insert(dish, at: targetIdx)
+            }
+            if var current = self.meal {
+                current.dishes = pinnedDishes
+                current.status = previousMealStatus
+                self.meal = current
+            }
             errorMessage = error.localizedDescription
         }
     }
 
     func confirmMeal() async {
-        guard let meal else { return }
+        guard meal != nil, !isConfirmingMeal else { return }
         if pinnedDishes.isEmpty {
             errorMessage = "先选一道菜再定下"
             return
         }
+        while inFlightDishMutations > 0 {
+            try? await Task.sleep(for: .milliseconds(40))
+        }
+        guard let latestMeal = self.meal, !pinnedDishes.isEmpty else { return }
+        isConfirmingMeal = true
+        defer { isConfirmingMeal = false }
         do {
-            switch meal.status {
+            switch latestMeal.status {
             case .planning:
-                self.meal = try await mealService.confirm(id: meal.id)
+                let confirmed = try await mealService.confirm(id: latestMeal.id)
+                dishMutationGeneration &+= 1
+                self.meal = confirmed
+                self.pinnedDishes = confirmed.dishes ?? self.pinnedDishes
                 Haptics.success()
-                AppNotifications.mealChanged()
             case .confirmed:
                 errorMessage = "这一顿已经定下了"
             case .completed, .cancelled:

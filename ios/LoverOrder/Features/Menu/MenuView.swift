@@ -40,10 +40,15 @@ struct MenuView: View {
         NavigationStack {
             menuScrollStage
                 .sheet(isPresented: $showCreateRecipe) {
-                RecipeEditView(mode: .create) { _ in
+                RecipeEditView(
+                    mode: .create,
+                    initialCategories: vm.categories
+                ) { saved in
+                    vm.applySavedRecipe(saved)
                     Task {
-                        await vm.loadCategories()
-                        await vm.loadRecipes()
+                        async let categoriesTask: Void = vm.loadCategories(silent: true)
+                        async let recipesTask: Void = vm.loadRecipes(silent: true)
+                        _ = await (categoriesTask, recipesTask)
                     }
                 }
                 .environmentObject(appState)
@@ -51,16 +56,20 @@ struct MenuView: View {
             .sheet(item: $editingRecipe) { target in
                 RecipeEditView(
                     mode: .edit(target),
-                    onSaved: { _ in
+                    initialCategories: vm.categories,
+                    onSaved: { saved in
+                        vm.applySavedRecipe(saved)
                         Task {
-                            await vm.loadCategories()
-                            await vm.loadRecipes()
+                            async let categoriesTask: Void = vm.loadCategories(silent: true)
+                            async let recipesTask: Void = vm.loadRecipes(silent: true)
+                            _ = await (categoriesTask, recipesTask)
                         }
                     },
                     onDeleted: {
                         Task {
-                            await vm.loadCategories()
-                            await vm.loadRecipes()
+                            async let categoriesTask: Void = vm.loadCategories(silent: true)
+                            async let recipesTask: Void = vm.loadRecipes(silent: true)
+                            _ = await (categoriesTask, recipesTask)
                         }
                     }
                 )
@@ -242,13 +251,14 @@ struct MenuView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
-            Task { await vm.loadRecipes() }
+            Task { await vm.loadRecipes(silent: !vm.recipes.isEmpty) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .categoriesChanged)) { _ in
-            Task { await vm.loadCategories() }
+            Task { await vm.loadCategories(silent: true) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
-            Task { await vm.loadCurrentMeal(scene: .household, mood: appState.currentMood) }
+            guard !vm.isMutatingMealLocally else { return }
+            Task { await vm.loadCurrentMeal(scene: .household, mood: appState.currentMood, silent: true) }
         }
         .toolbar(.hidden, for: .navigationBar)
     }
@@ -319,6 +329,7 @@ struct MenuView: View {
                             .foregroundStyle(Color.inkPrimary)
                             .frame(width: 44, height: 44)
                             .background(Color.cardBackground, in: Circle())
+                            .contentShape(Circle())
                     }
                     .buttonStyle(SoftPressStyle())
                     .accessibilityLabel("批量管理菜品")
@@ -333,17 +344,20 @@ struct MenuView: View {
                         .foregroundStyle(Color.inkPrimary)
                         .frame(width: 44, height: 44)
                         .background(Color.cardBackground, in: Circle())
+                        .contentShape(Circle())
                 }
                 .buttonStyle(SoftPressStyle())
                 .accessibilityLabel("管理菜谱分类")
 
                 Button {
+                    Haptics.light()
                     showCreateRecipe = true
                 } label: {
                     ProductIcon(kind: .add)
                         .foregroundStyle(Color.inkPrimary)
                         .frame(width: 44, height: 44)
                         .background(Color.cardBackground, in: Circle())
+                        .contentShape(Circle())
                 }
                 .buttonStyle(SoftPressStyle())
                 .accessibilityLabel("添加菜谱")
@@ -425,12 +439,16 @@ struct MenuView: View {
                 }
             if !vm.keyword.isEmpty {
                 Button {
+                    Haptics.light()
                     vm.keyword = ""
                     Task { await vm.searchChanged() }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(Color.inkMuted)
+                        .frame(width: 32, height: 22)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, AppSpacing.md)
@@ -459,6 +477,7 @@ struct MenuView: View {
                         MenuRecipeCard(
                             recipe: recipe,
                             categories: vm.categories,
+                            currentMeal: vm.meal,
                             alreadyAdded: pinned != nil,
                             canToggle: pinned == nil || canRemovePinnedDish,
                             isManaging: isManaging,
@@ -474,7 +493,14 @@ struct MenuView: View {
                                 if let pinned {
                                     Task { await vm.removeDish(pinned) }
                                 } else {
-                                    Task { await vm.addDish(recipe) }
+                                    Task {
+                                        await vm.addDish(
+                                            recipe,
+                                            scene: .household,
+                                            mood: appState.currentMood,
+                                            currentUser: appState.currentUser
+                                        )
+                                    }
                                 }
                             },
                             onEdit: {
@@ -571,7 +597,10 @@ struct MenuView: View {
                                     } label: {
                                         Image(systemName: "minus.circle")
                                             .foregroundStyle(Color.inkMuted)
+                                            .frame(width: 40, height: 36)
+                                            .contentShape(Rectangle())
                                     }
+                                    .buttonStyle(SoftPressStyle())
                                 }
                             }
                             if idx < vm.pinnedDishes.count - 1 {
@@ -1038,6 +1067,7 @@ private struct CategoryChip: View {
 private struct MenuRecipeCard: View {
     let recipe: Recipe
     let categories: [RecipeCategory]
+    var currentMeal: MealSession? = nil
     let alreadyAdded: Bool
     var canToggle: Bool = true
     var isManaging: Bool = false
@@ -1051,6 +1081,7 @@ private struct MenuRecipeCard: View {
     let onMoveCategory: (UInt?, String) -> Void
     let onStartBatch: () -> Void
     let onDelete: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -1075,7 +1106,12 @@ private struct MenuRecipeCard: View {
                     .allowsHitTesting(false)
             } else {
                 NavigationLink {
-                    RecipeDetailView(recipeId: recipe.id)
+                    RecipeDetailView(
+                        recipeId: recipe.id,
+                        initialRecipe: recipe,
+                        initialMeal: currentMeal,
+                        initialCategories: categories
+                    )
                 } label: {
                     VStack(alignment: .leading, spacing: 0) {
                         cover
@@ -1096,27 +1132,34 @@ private struct MenuRecipeCard: View {
                 ) { rect in
                     onToggleMoreMenu(rect)
                 }
-                .padding(.top, 2)
-                .padding(.trailing, 2)
+                .zIndex(2)
 
                 Button(action: onAdd) {
-                    Image(systemName: alreadyAdded ? "checkmark" : "plus")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 32, height: 32)
-                        .background(
-                            alreadyAdded ? Color(red: 0.067, green: 0.067, blue: 0.075) : Color.black.opacity(0.68),
-                            in: Circle()
-                        )
-                        .overlay {
-                            Circle().strokeBorder(Color.white.opacity(0.32), lineWidth: 0.7)
-                        }
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
+                    ZStack(alignment: .topTrailing) {
+                        Color.white.opacity(0.001)
+                        Image(systemName: alreadyAdded ? "checkmark" : "plus")
+                            .font(.system(size: 13.5, weight: .bold))
+                            .foregroundStyle(.white)
+                            .id(alreadyAdded)
+                            .transition(reduceMotion ? .opacity : .scale(scale: 0.65).combined(with: .opacity))
+                            .frame(width: 34, height: 34)
+                            .background(
+                                alreadyAdded ? Color(red: 0.067, green: 0.067, blue: 0.075) : Color.black.opacity(0.68),
+                                in: Circle()
+                            )
+                            .overlay {
+                                Circle().strokeBorder(Color.white.opacity(0.34), lineWidth: 0.75)
+                            }
+                            .padding(.top, 8)
+                            .padding(.trailing, 8)
+                    }
+                    .frame(width: 54, height: 56)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(SoftPressStyle())
-                .padding(.top, 95)
-                .padding(.trailing, 3)
+                .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.80), value: alreadyAdded)
+                .padding(.top, 92)
+                .zIndex(2)
                 .disabled(!canToggle)
                 .accessibilityLabel(alreadyAdded ? "移出这一顿：" + recipe.name : "加入" + recipe.name)
             }

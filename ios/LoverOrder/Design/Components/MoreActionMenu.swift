@@ -42,7 +42,7 @@ struct AppMoreButton: View {
     private var hitSize: CGSize {
         switch style {
         case .canvasGlass(_, _, let w, let h): return CGSize(width: w, height: h)
-        case .photoBadge: return CGSize(width: 40, height: 40)
+        case .photoBadge: return CGSize(width: 44, height: 44)
         case .paperGlass: return CGSize(width: 44, height: 44)
         }
     }

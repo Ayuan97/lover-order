@@ -8,6 +8,7 @@ struct RecipeEditView: View {
     }
 
     let mode: Mode
+    var initialCategories: [RecipeCategory] = []
     var onSaved: (Recipe) -> Void = { _ in }
     var onDeleted: (() -> Void)? = nil
 
@@ -102,13 +103,19 @@ struct RecipeEditView: View {
             .safeAreaInset(edge: .bottom) {
                 bottomBar
             }
-            .task {
+            .onAppear {
+                if categories.isEmpty && !initialCategories.isEmpty {
+                    categories = initialCategories
+                }
                 if !hasPrimed {
                     primeFromMode()
                     hasPrimed = true
-                    await refreshEditableRecipeIfNeeded()
                 }
-                await loadCategories()
+            }
+            .task {
+                async let refreshTask: Void = refreshEditableRecipeIfNeeded()
+                async let categoriesTask: Void = loadCategories()
+                _ = await (refreshTask, categoriesTask)
             }
             .onReceive(NotificationCenter.default.publisher(for: .categoriesChanged)) { _ in
                 Task { await loadCategories() }
@@ -233,6 +240,9 @@ struct RecipeEditView: View {
                     Label("管理", systemImage: "slider.horizontal.3")
                         .font(AppFont.caption(13))
                         .foregroundStyle(Color.inkSecondary)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 4)
+                        .contentShape(Rectangle())
                 }
                 Button {
                     showNewCategory = true
@@ -240,6 +250,9 @@ struct RecipeEditView: View {
                     Label("新建", systemImage: "plus.circle")
                         .font(AppFont.caption(13))
                         .foregroundStyle(Color.brandGreen)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 4)
+                        .contentShape(Rectangle())
                 }
             }
             FlowLayout(spacing: AppSpacing.sm) {
@@ -347,11 +360,15 @@ struct RecipeEditView: View {
                 FieldLabel("准备食材", required: false)
                 Spacer()
                 Button {
+                    Haptics.light()
                     ingredients.append(Ingredient(name: "", amount: ""))
                 } label: {
                     Label("加一条", systemImage: "plus.circle")
                         .font(AppFont.caption(13))
                         .foregroundStyle(Color.brandGreen)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 4)
+                        .contentShape(Rectangle())
                 }
             }
             if ingredients.isEmpty {
@@ -375,6 +392,8 @@ struct RecipeEditView: View {
                         } label: {
                             Image(systemName: "minus.circle")
                                 .foregroundStyle(Color.inkMuted)
+                                .frame(width: 36, height: 36)
+                                .contentShape(Rectangle())
                         }
                     }
                 }
@@ -388,11 +407,15 @@ struct RecipeEditView: View {
                 FieldLabel("做法步骤", required: false)
                 Spacer()
                 Button {
+                    Haptics.light()
                     steps.append(CookingStep(index: steps.count + 1, text: ""))
                 } label: {
                     Label("加一步", systemImage: "plus.circle")
                         .font(AppFont.caption(13))
                         .foregroundStyle(Color.brandGreen)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 4)
+                        .contentShape(Rectangle())
                 }
             }
             if steps.isEmpty {
@@ -419,6 +442,8 @@ struct RecipeEditView: View {
                             } label: {
                                 Image(systemName: "minus.circle")
                                     .foregroundStyle(Color.inkMuted)
+                                    .frame(width: 36, height: 36)
+                                    .contentShape(Rectangle())
                             }
                         }
                         Text("步骤 \(step.index) 的照片")
@@ -656,7 +681,10 @@ struct RecipeEditView: View {
             }
             AppNotifications.recipesChanged()
             AppNotifications.categoriesChanged()
-            AppNotifications.mealChanged()
+            if isEdit {
+                AppNotifications.mealChanged()
+            }
+            Haptics.success()
             onSaved(saved)
             dismiss()
         } catch {

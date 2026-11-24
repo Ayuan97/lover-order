@@ -10,6 +10,8 @@ struct AddDishView: View {
     let mealId: UInt
     var onChanged: () -> Void = {}
 
+    private static let optimisticDishIDThreshold: UInt = UInt.max / 2
+    @State private var nextOptimisticDishID: UInt = UInt.max - 1
     @State private var customName: String = ""
     @State private var quickSource: QuickSource = .all
     @State private var recipes: [Recipe] = []
@@ -17,6 +19,7 @@ struct AddDishView: View {
     @State private var isLoading: Bool = false
     @State private var isSubmittingCustom: Bool = false
     @State private var addingRecipeIDs: Set<UInt> = []
+    @State private var cancelledOptimisticRecipeIDs: Set<UInt> = []
     @State private var removingDishIDs: Set<UInt> = []
     @State private var errorMessage: String?
     @State private var tipMessage: String?
@@ -97,12 +100,18 @@ struct AddDishView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $showCreateRecipe) {
-                RecipeEditView(mode: .create) { _ in
+                RecipeEditView(mode: .create) { saved in
+                    if quickSource != .favorite {
+                        recipes.removeAll { $0.id == saved.id }
+                        recipes.insert(saved, at: 0)
+                        recipes = sort(recipes)
+                    }
                     Task { await loadRecipes() }
                 }
                 .environmentObject(appState)
             }
             .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
+                guard !hasPendingChanges else { return }
                 Task { await loadPinned() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
@@ -167,15 +176,15 @@ struct AddDishView: View {
                                             .foregroundStyle(Color.inkMuted)
                                     }
                                 }
-                                .frame(width: 22, height: 22)
-                                .contentShape(Circle())
+                                .frame(width: 30, height: 32)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .disabled(removingDishIDs.contains(dish.id))
                             .accessibilityLabel("移除" + dish.recipeName)
                         }
                         .padding(.leading, 6)
-                        .padding(.trailing, 8)
+                        .padding(.trailing, 4)
                         .frame(height: 34)
                         .background(Color.cardBackground, in: Capsule())
                         .overlay {
@@ -317,12 +326,11 @@ struct AddDishView: View {
                 LazyVGrid(columns: columns, spacing: AppSpacing.md) {
                     ForEach(filteredRecipes) { recipe in
                         let pinned = pinnedDishes.first(where: { $0.recipeId == recipe.id })
-                        let updating = addingRecipeIDs.contains(recipe.id) || (pinned.map { removingDishIDs.contains($0.id) } ?? false)
                         RecipeCircleCard(
                             recipe: recipe,
                             alreadyAdded: pinned != nil,
                             allowToggleRemove: true,
-                            isAdding: updating
+                            isAdding: false
                         ) {
                             if let pinned {
                                 Task { await remove(pinned) }
@@ -397,9 +405,10 @@ struct AddDishView: View {
     }
 
     private func loadPinned() async {
+        guard !hasPendingChanges else { return }
         do {
             let m = try await MealService.shared.detail(id: mealId)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, !hasPendingChanges else { return }
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
                 pinnedDishes = m.dishes ?? []
             }
@@ -449,22 +458,80 @@ struct AddDishView: View {
         }
     }
 
+    private func allocOptimisticDishID() -> UInt {
+        let id = nextOptimisticDishID
+        if nextOptimisticDishID > Self.optimisticDishIDThreshold + 1 {
+            nextOptimisticDishID &-= 1
+        } else {
+            nextOptimisticDishID = UInt.max - 1
+        }
+        return id
+    }
+
+    private func makeOptimisticDish(for recipe: Recipe) -> MealDish {
+        MealDish(
+            id: allocOptimisticDishID(),
+            mealSessionId: mealId,
+            recipeId: recipe.id,
+            recipeName: recipe.name,
+            recipeImage: recipe.coverImage,
+            recipeCutoutImage: recipe.cutoutImage,
+            note: nil,
+            sortOrder: pinnedDishes.count,
+            addedBy: appState.currentUser?.id,
+            adder: appState.currentUser
+        )
+    }
+
     private func addRecipe(_ recipe: Recipe) async {
-        guard !addingRecipeIDs.contains(recipe.id) else { return }
         if alreadyOnTable(recipe) {
             tipMessage = "这道已经在桌上了"
             Haptics.light()
             return
         }
+        if addingRecipeIDs.contains(recipe.id) {
+            if cancelledOptimisticRecipeIDs.remove(recipe.id) != nil {
+                let restored = makeOptimisticDish(for: recipe)
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                    pinnedDishes.append(restored)
+                }
+                CanvasSoundEngine.shared.playDishPick()
+                Haptics.medium()
+            }
+            return
+        }
+
+        let optimisticDish = makeOptimisticDish(for: recipe)
         addingRecipeIDs.insert(recipe.id)
+        cancelledOptimisticRecipeIDs.remove(recipe.id)
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+            pinnedDishes.append(optimisticDish)
+        }
+        CanvasSoundEngine.shared.playDishPick()
+        Haptics.medium()
+
         defer { addingRecipeIDs.remove(recipe.id) }
         do {
-            _ = try await MealService.shared.addDish(mealId: mealId, dish: DishInput(recipeId: recipe.id))
-            await loadPinned()
+            let created = try await MealService.shared.addDish(mealId: mealId, dish: DishInput(recipeId: recipe.id))
+            if cancelledOptimisticRecipeIDs.remove(recipe.id) != nil {
+                pinnedDishes.removeAll { $0.recipeId == recipe.id }
+                removingDishIDs.insert(created.id)
+                defer { removingDishIDs.remove(created.id) }
+                try? await MealService.shared.removeDish(mealId: mealId, dishId: created.id)
+                onChanged()
+                return
+            }
+            if let idx = pinnedDishes.firstIndex(where: { $0.recipeId == recipe.id }) {
+                pinnedDishes[idx] = created
+            } else {
+                pinnedDishes.append(created)
+            }
             onChanged()
-            CanvasSoundEngine.shared.playDishPick()
-            Haptics.medium()
         } catch {
+            cancelledOptimisticRecipeIDs.remove(recipe.id)
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                pinnedDishes.removeAll { $0.id == optimisticDish.id }
+            }
             errorMessage = error.localizedDescription
         }
     }
@@ -473,33 +540,60 @@ struct AddDishView: View {
         let name = customName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, !isSubmittingCustom else { return }
         isSubmittingCustom = true
+        customName = ""
+        CanvasSoundEngine.shared.playDishPick()
+        Haptics.medium()
         defer { isSubmittingCustom = false }
         do {
-            _ = try await MealService.shared.addDish(
+            let created = try await MealService.shared.addDish(
                 mealId: mealId,
                 dish: DishInput(name: name)
             )
-            customName = ""
-            await loadPinned()
+            if !pinnedDishes.contains(where: { $0.id == created.id }) {
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                    pinnedDishes.append(created)
+                }
+            }
             onChanged()
-            CanvasSoundEngine.shared.playDishPick()
-            Haptics.medium()
         } catch {
+            customName = name
             errorMessage = error.localizedDescription
         }
     }
 
     private func remove(_ dish: MealDish) async {
+        if dish.id >= Self.optimisticDishIDThreshold {
+            if let rid = dish.recipeId {
+                cancelledOptimisticRecipeIDs.insert(rid)
+            }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                pinnedDishes.removeAll { $0.id == dish.id || (dish.recipeId != nil && $0.recipeId == dish.recipeId) }
+            }
+            CanvasSoundEngine.shared.playDeletePoof()
+            Haptics.soft()
+            return
+        }
+
         guard !removingDishIDs.contains(dish.id) else { return }
+        let removedIndex = pinnedDishes.firstIndex(where: { $0.id == dish.id })
         removingDishIDs.insert(dish.id)
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+            pinnedDishes.removeAll { $0.id == dish.id }
+        }
+        CanvasSoundEngine.shared.playDeletePoof()
+        Haptics.soft()
+
         defer { removingDishIDs.remove(dish.id) }
         do {
             try await MealService.shared.removeDish(mealId: mealId, dishId: dish.id)
-            await loadPinned()
             onChanged()
-            CanvasSoundEngine.shared.playDeletePoof()
-            Haptics.soft()
         } catch {
+            if !pinnedDishes.contains(where: { $0.id == dish.id }) {
+                let targetIdx = min(removedIndex ?? pinnedDishes.count, pinnedDishes.count)
+                withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                    pinnedDishes.insert(dish, at: targetIdx)
+                }
+            }
             errorMessage = error.localizedDescription
         }
     }

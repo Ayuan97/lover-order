@@ -103,18 +103,27 @@ struct PhotoPickerField: View {
                 if !imageURL.isEmpty {
                     PhotosPicker(selection: $pickerItem, matching: .images) {
                         Label("换照片", systemImage: "photo.on.rectangle")
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 4)
+                            .contentShape(Rectangle())
                     }
                 }
                 Button {
                     activeCover = .camera
                 } label: {
                     Label("拍照", systemImage: "camera")
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 4)
+                        .contentShape(Rectangle())
                 }
                 if !imageURL.isEmpty {
                     Button {
                         Task { await openMainCropper() }
                     } label: {
                         Label("裁剪", systemImage: "crop.rotate")
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 4)
+                            .contentShape(Rectangle())
                     }
                 }
                 Spacer()
@@ -125,6 +134,9 @@ struct PhotoPickerField: View {
                     } label: {
                         Label("清除", systemImage: "trash")
                             .foregroundStyle(Color.errorInk)
+                            .padding(.vertical, 8)
+                            .padding(.horizontal, 4)
+                            .contentShape(Rectangle())
                     }
                 }
             }
@@ -371,8 +383,26 @@ struct PhotoPickerField: View {
                 errorMessage = "图片为空或无法读取，请换一张重试"
                 return
             }
-            try await savePhoto(data: data)
-            if cutoutImageURL != nil { await generateCutout(from: image) }
+            if cutoutImageURL != nil {
+                processingMessage = "正在保存照片与生成贴图"
+                async let mainUpload: Void = savePhoto(data: data)
+                async let cutoutTask: Result<Data, Error> = {
+                    do {
+                        return .success(try await ImageCutoutService.shared.makePNG(from: image))
+                    } catch {
+                        return .failure(error)
+                    }
+                }()
+                try await mainUpload
+                switch await cutoutTask {
+                case .success(let png):
+                    await uploadCutout(png)
+                case .failure:
+                    errorMessage = "照片已保留，自动抠图未识别主体，可点「手动抠图」涂抹提取"
+                }
+            } else {
+                try await savePhoto(data: data)
+            }
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -483,7 +513,8 @@ struct PhotoPickerField: View {
 
     @MainActor
     private func savePhoto(data: Data) async throws {
-        let uploaded = try await UploadService.shared.uploadImage(compress(data: data))
+        let compressed = await Self.compressOffMain(data: data)
+        let uploaded = try await UploadService.shared.uploadImage(compressed)
         imageURL = uploaded.path
         cutoutImageURL?.wrappedValue = ""
     }
@@ -528,20 +559,22 @@ struct PhotoPickerField: View {
         processingMessage = "正在保存照片"
     }
 
-    private func compress(data: Data) -> Data {
-        guard let img = UIImage(data: data) else { return data }
-        let maxSide: CGFloat = 1600
-        let size = img.size
-        guard size.width > 0, size.height > 0 else { return data }
-        let scale = min(1.0, maxSide / max(size.width, size.height))
-        let target = CGSize(width: max(1, size.width * scale), height: max(1, size.height * scale))
+    private static func compressOffMain(data: Data) async -> Data {
+        await Task.detached(priority: .userInitiated) {
+            guard let img = UIImage(data: data) else { return data }
+            let maxSide: CGFloat = 1600
+            let size = img.size
+            guard size.width > 0, size.height > 0 else { return data }
+            let scale = min(1.0, maxSide / max(size.width, size.height))
+            let target = CGSize(width: max(1, size.width * scale), height: max(1, size.height * scale))
 
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        let renderer = UIGraphicsImageRenderer(size: target, format: format)
-        let resized = renderer.image { _ in
-            img.draw(in: CGRect(origin: .zero, size: target))
-        }
-        return resized.jpegData(compressionQuality: 0.82) ?? data
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            let renderer = UIGraphicsImageRenderer(size: target, format: format)
+            let resized = renderer.image { _ in
+                img.draw(in: CGRect(origin: .zero, size: target))
+            }
+            return resized.jpegData(compressionQuality: 0.82) ?? data
+        }.value
     }
 }
