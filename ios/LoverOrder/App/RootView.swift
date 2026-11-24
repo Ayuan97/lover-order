@@ -79,6 +79,10 @@ struct RootView: View {
                 .environmentObject(appState)
                 .preferredColorScheme(.light)
         }
+        .sheet(item: $appState.deepLinkedShoppingMeal) { item in
+            ShoppingListView(mealId: item.mealId)
+                .preferredColorScheme(.light)
+        }
         .fullScreenCover(item: $appState.deepLinkedGuestMeal) { meal in
             DiningGuestView(meal: meal)
                 .environmentObject(appState)

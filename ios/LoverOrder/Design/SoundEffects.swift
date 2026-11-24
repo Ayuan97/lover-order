@@ -361,6 +361,39 @@ final class CanvasSoundEngine: ObservableObject {
         }
     }
 
+    /// 在线收到或发出「开饭啦」摇铃传呼：清脆三叠餐桌铜铃 E5 -> B5 -> E6
+    func playDinnerBell() {
+        playCached(key: "nudge_dinner_bell", volume: 0.74) {
+            Self.makeArpeggioBuffer(
+                frequencies: [659.25, 987.77, 1318.51],
+                stepSeconds: 0.115,
+                noteDuration: 0.42,
+                shimmerHarmonic: true,
+                format: self.audioFormat
+            )
+        }
+    }
+
+    /// 在线收到或发出餐桌轻传呼（饿啦 / 快看画布）：俏皮双音木琴上扬 A5 -> C6 -> E6
+    func playNudgePing() {
+        playCached(key: "nudge_ping", volume: 0.68) {
+            Self.makeArpeggioBuffer(
+                frequencies: [783.99, 987.77, 1318.51],
+                stepSeconds: 0.072,
+                noteDuration: 0.24,
+                shimmerHarmonic: false,
+                format: self.audioFormat
+            )
+        }
+    }
+
+    /// 收到或点按回戳 / 赞成：温柔心形气泡双跳音
+    func playNudgeHeartReply() {
+        playCached(key: "nudge_heart_reply", volume: 0.64) {
+            Self.makeTwoToneMarimba(f1: 880.00, f2: 1174.66, duration: 0.20, format: self.audioFormat)
+        }
+    }
+
     // MARK: - 音频会话与复音引擎管理
 
     private func registerLifecycleObservers() {

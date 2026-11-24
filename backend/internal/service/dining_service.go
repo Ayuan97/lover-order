@@ -147,6 +147,7 @@ func (s *DiningService) Current(userID, mealID uint) (*model.MealSession, error)
 func (s *DiningService) AddDish(userID, mealID uint, in DishInput) (*model.MealSession, error) {
 	var householdID uint
 	var dishName string
+	var dishImage string
 	added := false
 	countedNow := false
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
@@ -215,6 +216,10 @@ func (s *DiningService) AddDish(userID, mealID uint, in DishInput) (*model.MealS
 			return err
 		}
 		dishName = dish.RecipeName
+		dishImage = dish.RecipeCutoutImage
+		if dishImage == "" {
+			dishImage = dish.RecipeImage
+		}
 		added = true
 		return nil
 	})
@@ -224,7 +229,7 @@ func (s *DiningService) AddDish(userID, mealID uint, in DishInput) (*model.MealS
 	if !added {
 		return s.detail(mealID)
 	}
-	NewNotificationService().NotifyDiningDishAdded(householdID, userID, mealID, dishName)
+	NewNotificationService().NotifyDiningDishAdded(householdID, userID, mealID, dishName, dishImage)
 	GlobalCanvasHub().BroadcastMealSync(mealID, "dish_added", userID)
 	if countedNow {
 		GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", userID)

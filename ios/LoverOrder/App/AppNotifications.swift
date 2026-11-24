@@ -49,13 +49,14 @@ enum AppNotifications {
     }
 }
 
-// MARK: - 外链路由与深链解析 (lo://home/..., lo://room/..., lo://meal/..., lo://history/..., lo://household)
+// MARK: - 外链路由与深链解析 (lo://home/..., lo://room/..., lo://meal/..., lo://history/..., lo://shopping/..., lo://household)
 
 enum AppDeepLink: Equatable {
     case home(code: String)
     case room(code: String)
     case meal(mealId: UInt?)
     case history(mealId: UInt)
+    case shopping(mealId: UInt)
     case household
 
     static func parse(url: URL) -> AppDeepLink? {
@@ -89,6 +90,9 @@ enum AppDeepLink: Equatable {
         case "history":
             guard let first = pathParts.first, let id = UInt(first), id > 0 else { return nil }
             return .history(mealId: id)
+        case "shopping":
+            guard let first = pathParts.first, let id = UInt(first), id > 0 else { return nil }
+            return .shopping(mealId: id)
         case "household":
             return .household
         default:
@@ -99,14 +103,28 @@ enum AppDeepLink: Equatable {
 
 // MARK: - 通知事件模型与偏好
 
+enum NotificationCategoryID {
+    static let dishOrNudge = "MEAL_DISH_OR_NUDGE"
+    static let dinner = "MEAL_NUDGE_DINNER"
+
+    static let actionReplyThumbs = "ACTION_REPLY_THUMBS"
+    static let actionReplyComing = "ACTION_REPLY_COMING"
+    static let actionReplyWashing = "ACTION_REPLY_WASHING"
+    static let actionOpenCanvas = "ACTION_OPEN_CANVAS"
+}
+
 struct AppNotificationEvent: Codable, Identifiable, Equatable {
     let id: UInt
     let userId: UInt
     let actorId: UInt?
     let householdId: UInt?
     let kind: String
+    let presetKey: String?
     let title: String
     let body: String
+    let stickerCode: String?
+    let imageURL: String?
+    let soundName: String?
     let mealId: UInt?
     let roomCode: String?
     let deepLink: String?
@@ -120,7 +138,12 @@ struct AppNotificationEvent: Codable, Identifiable, Equatable {
         case userId = "user_id"
         case actorId = "actor_id"
         case householdId = "household_id"
-        case kind, title, body
+        case kind
+        case presetKey = "preset_key"
+        case title, body
+        case stickerCode = "sticker_code"
+        case imageURL = "image_url"
+        case soundName = "sound_name"
         case mealId = "meal_id"
         case roomCode = "room_code"
         case deepLink = "deep_link"
@@ -128,6 +151,29 @@ struct AppNotificationEvent: Codable, Identifiable, Equatable {
         case readAt = "read_at"
         case createdAt = "created_at"
         case actor
+    }
+
+    func markingRead(at date: Date = Date()) -> AppNotificationEvent {
+        AppNotificationEvent(
+            id: id,
+            userId: userId,
+            actorId: actorId,
+            householdId: householdId,
+            kind: kind,
+            presetKey: presetKey,
+            title: title,
+            body: body,
+            stickerCode: stickerCode,
+            imageURL: imageURL,
+            soundName: soundName,
+            mealId: mealId,
+            roomCode: roomCode,
+            deepLink: deepLink,
+            isRead: true,
+            readAt: readAt ?? date,
+            createdAt: createdAt,
+            actor: actor
+        )
     }
 
     var resolvedDeepLink: AppDeepLink? {
@@ -140,11 +186,56 @@ struct AppNotificationEvent: Codable, Identifiable, Equatable {
             return .meal(mealId: nil)
         case "household_joined":
             return .household
-        case "meal_dish_added", "meal_confirmed", "dining_joined", "dining_dish_added":
+        case "meal_dish_added", "meal_confirmed", "dining_joined", "dining_dish_added", "meal_nudge", "meal_nudge_reply":
             return .meal(mealId: mealId)
         default:
             if let mealId, mealId > 0 { return .meal(mealId: mealId) }
             return .meal(mealId: nil)
+        }
+    }
+
+    var stickerAssetName: String? {
+        guard let raw = stickerCode?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        let candidate = raw.hasPrefix("StickerEmoji_") ? raw : "StickerEmoji_\(raw)"
+        return UIImage(named: candidate) != nil ? candidate : nil
+    }
+
+    var canQuickReply: Bool {
+        kind == "meal_nudge" || kind == "meal_dish_added" || kind == "meal_confirmed"
+    }
+
+    var quickReplyDefaultCode: String {
+        if presetKey == "dinner_ready" || kind == "meal_confirmed" {
+            return "washing_hands"
+        }
+        if kind == "meal_dish_added" {
+            return "thumbs_up"
+        }
+        return "wave_back"
+    }
+
+    var quickReplyButtonTitle: String {
+        if presetKey == "dinner_ready" || kind == "meal_confirmed" {
+            return "马上上桌"
+        }
+        if kind == "meal_dish_added" {
+            return "赞成这道"
+        }
+        return "回戳 Ta"
+    }
+
+    var categoryIdentifier: String? {
+        switch kind {
+        case "meal_confirmed":
+            return NotificationCategoryID.dinner
+        case "meal_dish_added", "test":
+            return NotificationCategoryID.dishOrNudge
+        case "meal_nudge":
+            return presetKey == "dinner_ready" ? NotificationCategoryID.dinner : NotificationCategoryID.dishOrNudge
+        default:
+            return nil
         }
     }
 
@@ -156,6 +247,11 @@ struct AppNotificationEvent: Codable, Identifiable, Equatable {
         case "meal_reviewed": return "bubble.left.and.text.bubble.right.fill"
         case "dining_joined", "dining_dish_added": return "person.2.wave.2.fill"
         case "household_joined": return "house.fill"
+        case "meal_nudge":
+            if presetKey == "dinner_ready" { return "bell.and.waves.left.and.right.fill" }
+            if presetKey == "shopping_list" { return "cart.fill" }
+            return "hand.wave.fill"
+        case "meal_nudge_reply": return "heart.fill"
         default: return "bell.badge.fill"
         }
     }
@@ -179,10 +275,31 @@ struct NotificationListResult: Decodable {
     }
 }
 
+struct NudgeSendResult: Decodable {
+    let presetKey: String
+    let title: String?
+    let body: String?
+    let stickerCode: String?
+    let soundName: String?
+    let deepLink: String?
+    let recipientCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case presetKey = "preset_key"
+        case title, body
+        case stickerCode = "sticker_code"
+        case soundName = "sound_name"
+        case deepLink = "deep_link"
+        case recipientCount = "recipient_count"
+    }
+}
+
 struct NotificationPreferences: Codable, Equatable {
     var notifyPartnerMealEvents: Bool = true
+    var notifyNudges: Bool = true
     var notifyReviews: Bool = true
     var notifyDining: Bool = true
+    var useCustomSounds: Bool = true
     var lunchReminderEnabled: Bool = false
     var lunchHour: Int = 11
     var lunchMinute: Int = 30
@@ -192,15 +309,37 @@ struct NotificationPreferences: Codable, Equatable {
 
     static let `default` = NotificationPreferences()
 
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        notifyPartnerMealEvents = try c.decodeIfPresent(Bool.self, forKey: .notifyPartnerMealEvents) ?? true
+        notifyNudges = try c.decodeIfPresent(Bool.self, forKey: .notifyNudges) ?? true
+        notifyReviews = try c.decodeIfPresent(Bool.self, forKey: .notifyReviews) ?? true
+        notifyDining = try c.decodeIfPresent(Bool.self, forKey: .notifyDining) ?? true
+        useCustomSounds = try c.decodeIfPresent(Bool.self, forKey: .useCustomSounds) ?? true
+        lunchReminderEnabled = try c.decodeIfPresent(Bool.self, forKey: .lunchReminderEnabled) ?? false
+        lunchHour = try c.decodeIfPresent(Int.self, forKey: .lunchHour) ?? 11
+        lunchMinute = try c.decodeIfPresent(Int.self, forKey: .lunchMinute) ?? 30
+        dinnerReminderEnabled = try c.decodeIfPresent(Bool.self, forKey: .dinnerReminderEnabled) ?? false
+        dinnerHour = try c.decodeIfPresent(Int.self, forKey: .dinnerHour) ?? 17
+        dinnerMinute = try c.decodeIfPresent(Int.self, forKey: .dinnerMinute) ?? 30
+    }
+
     var mutedKinds: [String] {
-        ["meal_dish_added", "meal_confirmed", "meal_completed", "meal_reviewed",
-         "dining_joined", "dining_dish_added", "household_joined"].filter { !shouldNotify(kind: $0) }
+        [
+            "meal_dish_added", "meal_confirmed", "meal_completed", "meal_reviewed",
+            "dining_joined", "dining_dish_added", "household_joined",
+            "meal_nudge", "meal_nudge_reply"
+        ].filter { !shouldNotify(kind: $0) }
     }
 
     func shouldNotify(kind: String) -> Bool {
         switch kind {
         case "meal_dish_added", "meal_confirmed", "meal_completed":
             return notifyPartnerMealEvents
+        case "meal_nudge", "meal_nudge_reply":
+            return notifyNudges
         case "meal_reviewed":
             return notifyReviews
         case "dining_joined", "dining_dish_added", "household_joined":
@@ -230,16 +369,51 @@ final class NotificationService {
         let environment: String
         let appVersion: String
         let mutedKinds: [String]
+        let useCustomSound: Bool
 
         enum CodingKeys: String, CodingKey {
             case token, platform, environment
             case deviceId = "device_id"
             case appVersion = "app_version"
             case mutedKinds = "muted_kinds"
+            case useCustomSound = "use_custom_sound"
         }
     }
 
-    func registerDevice(token: String, environment: String, appVersion: String, mutedKinds: [String]) async throws {
+    private struct NudgeBody: Encodable {
+        let preset: String
+        let message: String?
+        let stickerCode: String?
+        let mealId: UInt?
+        let targetUserId: UInt?
+
+        enum CodingKeys: String, CodingKey {
+            case preset, message
+            case stickerCode = "sticker_code"
+            case mealId = "meal_id"
+            case targetUserId = "target_user_id"
+        }
+    }
+
+    private struct ReplyBody: Encodable {
+        let eventId: UInt
+        let replyCode: String
+        let mealId: UInt?
+
+        enum CodingKeys: String, CodingKey {
+            case eventId = "event_id"
+            case replyCode = "reply_code"
+            case mealId = "meal_id"
+        }
+    }
+
+    func registerDevice(
+        token: String,
+        environment: String,
+        appVersion: String,
+        mutedKinds: [String],
+        useCustomSound: Bool
+    ) async throws {
         let _: NotificationAck = try await api.post(
             "devices/register",
             body: RegisterBody(
@@ -248,7 +422,8 @@ final class NotificationService {
                 platform: "ios",
                 environment: environment,
                 appVersion: appVersion,
-                mutedKinds: mutedKinds
+                mutedKinds: mutedKinds,
+                useCustomSound: useCustomSound
             )
         )
     }
@@ -276,15 +451,50 @@ final class NotificationService {
     func sendTest() async throws -> AppNotificationEvent {
         try await api.post("notifications/test")
     }
+
+    func sendNudge(
+        preset: String,
+        message: String? = nil,
+        stickerCode: String? = nil,
+        mealId: UInt? = nil,
+        targetUserId: UInt? = nil
+    ) async throws -> NudgeSendResult {
+        try await api.post(
+            "notifications/nudge",
+            body: NudgeBody(
+                preset: preset,
+                message: message,
+                stickerCode: stickerCode,
+                mealId: mealId,
+                targetUserId: targetUserId
+            )
+        )
+    }
+
+    func sendReply(
+        eventId: UInt = 0,
+        replyCode: String,
+        mealId: UInt? = nil
+    ) async throws -> NudgeSendResult {
+        try await api.post(
+            "notifications/reply",
+            body: ReplyBody(
+                eventId: eventId,
+                replyCode: replyCode,
+                mealId: mealId
+            )
+        )
+    }
 }
 
-// MARK: - AppDelegate 与通知管理器（APNs 远端令牌 + 服务端通知流本地兜底 + 每日饭点提醒）
+// MARK: - AppDelegate 与通知管理器（APNs 远端令牌 + 服务端通知流本地兜底 + 富媒体缩略图/快捷回应 + 智能饭点提醒）
 
 final class LoverAppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
+        NotificationManager.registerNotificationCategories()
         UNUserNotificationCenter.current().delegate = NotificationManager.shared
         return true
     }
@@ -331,6 +541,14 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     private static let prefsStorageKey = "loverorder.notification.prefs.v1"
     private static let promptedStorageKey = "loverorder.notification.prompted.v1"
     private static let lastDeliveredPrefix = "loverorder.notification.lastDelivered."
+    private static let mealContextStorageKey = "loverorder.notification.mealContext.v1"
+
+    private struct MealReminderContext: Codable, Equatable {
+        var mealId: UInt?
+        var statusRaw: String?
+        var dishNames: [String] = []
+        var lastCompletedAt: Date?
+    }
 
     private var activeUserId: UInt?
     private var activeViewedMealId: UInt?
@@ -340,15 +558,55 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     private var apnsToken: String?
     private var registrationTask: Task<Void, Never>?
     private var registeredDevice: DeviceRegistration?
+    private var pendingResyncAllowBanner: Bool?
+    private var mealContext: MealReminderContext
 
     private struct DeviceRegistration: Equatable {
         let userId: UInt
         let token: String
         let mutedKinds: [String]
+        let useCustomSound: Bool
     }
 
     private var canPresentNotifications: Bool {
         authorizationStatus == .authorized || authorizationStatus == .provisional
+    }
+
+    nonisolated static func registerNotificationCategories() {
+        let thumbsAction = UNNotificationAction(
+            identifier: NotificationCategoryID.actionReplyThumbs,
+            title: "赞成这道菜 👍",
+            options: []
+        )
+        let comingAction = UNNotificationAction(
+            identifier: NotificationCategoryID.actionReplyComing,
+            title: "收到，马上来 👋",
+            options: []
+        )
+        let washingAction = UNNotificationAction(
+            identifier: NotificationCategoryID.actionReplyWashing,
+            title: "洗手马上到 🍚",
+            options: []
+        )
+        let openAction = UNNotificationAction(
+            identifier: NotificationCategoryID.actionOpenCanvas,
+            title: "打开画布看看",
+            options: [.foreground]
+        )
+
+        let dishOrNudgeCategory = UNNotificationCategory(
+            identifier: NotificationCategoryID.dishOrNudge,
+            actions: [thumbsAction, comingAction, openAction],
+            intentIdentifiers: [],
+            options: []
+        )
+        let dinnerCategory = UNNotificationCategory(
+            identifier: NotificationCategoryID.dinner,
+            actions: [washingAction, openAction],
+            intentIdentifiers: [],
+            options: []
+        )
+        UNUserNotificationCenter.current().setNotificationCategories([dishOrNudgeCategory, dinnerCategory])
     }
 
     private override init() {
@@ -358,7 +616,14 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         } else {
             self.prefs = .default
         }
+        if let ctxData = UserDefaults.standard.data(forKey: Self.mealContextStorageKey),
+           let decodedCtx = try? JSONDecoder().decode(MealReminderContext.self, from: ctxData) {
+            self.mealContext = decodedCtx
+        } else {
+            self.mealContext = MealReminderContext()
+        }
         super.init()
+        Self.registerNotificationCategories()
         UNUserNotificationCenter.current().delegate = self
     }
 
@@ -399,13 +664,48 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
     func updatePreferences(_ mutate: (inout NotificationPreferences) -> Void) {
         let previousMutedKinds = prefs.mutedKinds
+        let previousCustomSounds = prefs.useCustomSounds
         mutate(&prefs)
         if let data = try? JSONEncoder().encode(prefs) {
             UserDefaults.standard.set(data, forKey: Self.prefsStorageKey)
         }
         syncMealtimeReminders()
-        if prefs.mutedKinds != previousMutedKinds {
+        if prefs.mutedKinds != previousMutedKinds || prefs.useCustomSounds != previousCustomSounds {
             queueDeviceRegistration()
+        }
+    }
+
+    /// 同步当前餐次上下文供「每日饭点提醒」感知菜单状态（已定下报菜名、刚吃完自动免打扰）
+    func updateMealContext(meal: MealSession?, markCompletedNow: Bool = false) {
+        var next = mealContext
+        if markCompletedNow {
+            next.lastCompletedAt = Date()
+        }
+        if let meal {
+            next.mealId = meal.id
+            next.statusRaw = meal.status.rawValue
+            next.dishNames = (meal.dishes ?? []).map(\.recipeName).filter { !$0.isEmpty }
+            if meal.status == .completed, let completedAt = meal.completedAt {
+                next.lastCompletedAt = completedAt
+            }
+        }
+        guard next != mealContext else { return }
+        mealContext = next
+        if let data = try? JSONEncoder().encode(next) {
+            UserDefaults.standard.set(data, forKey: Self.mealContextStorageKey)
+        }
+        if prefs.lunchReminderEnabled || prefs.dinnerReminderEnabled {
+            syncMealtimeReminders()
+        }
+    }
+
+    /// 画布已通过 WebSocket 实时展示了该传呼/回戳时调用，避免轮询再弹一次重复系统横幅
+    func noteReceivedCanvasNudge(eventId: UInt) {
+        guard eventId > 0 else { return }
+        presentedBannerIds.insert(eventId)
+        Task {
+            try? await NotificationService.shared.markRead(eventId: eventId)
+            await syncServerNotifications(allowLocalBanner: false)
         }
     }
 
@@ -447,9 +747,21 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
     // 同步服务端通知事件流，并为新出现的未读事件触发真实系统横幅
     func syncServerNotifications(allowLocalBanner: Bool = true) async {
-        guard let userId = activeUserId, !isSyncing else { return }
+        guard let userId = activeUserId else { return }
+        if isSyncing {
+            pendingResyncAllowBanner = (pendingResyncAllowBanner ?? false) || allowLocalBanner
+            return
+        }
         isSyncing = true
-        defer { isSyncing = false }
+        defer {
+            isSyncing = false
+            if let nextBanner = pendingResyncAllowBanner, activeUserId == userId {
+                pendingResyncAllowBanner = nil
+                Task { @MainActor [weak self] in
+                    await self?.syncServerNotifications(allowLocalBanner: nextBanner)
+                }
+            }
+        }
 
         do {
             let result = try await NotificationService.shared.list(limit: 40)
@@ -541,13 +853,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         let matchedIds = Set(matched.map(\.id))
         let now = Date()
         events = events.map { old in
-            guard matchedIds.contains(old.id) else { return old }
-            return AppNotificationEvent(
-                id: old.id, userId: old.userId, actorId: old.actorId, householdId: old.householdId,
-                kind: old.kind, title: old.title, body: old.body, mealId: old.mealId,
-                roomCode: old.roomCode, deepLink: old.deepLink, isRead: true, readAt: old.readAt ?? now,
-                createdAt: old.createdAt, actor: old.actor
-            )
+            matchedIds.contains(old.id) ? old.markingRead(at: now) : old
         }
         updateUnreadCount(max(0, unreadCount - matchedIds.count))
         UNUserNotificationCenter.current().removeDeliveredNotifications(
@@ -560,13 +866,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
     func markRead(event: AppNotificationEvent) async {
         if let idx = events.firstIndex(where: { $0.id == event.id && !$0.isRead }) {
-            let old = events[idx]
-            events[idx] = AppNotificationEvent(
-                id: old.id, userId: old.userId, actorId: old.actorId, householdId: old.householdId,
-                kind: old.kind, title: old.title, body: old.body, mealId: old.mealId,
-                roomCode: old.roomCode, deepLink: old.deepLink, isRead: true, readAt: Date(),
-                createdAt: old.createdAt, actor: old.actor
-            )
+            events[idx] = events[idx].markingRead()
             updateUnreadCount(max(0, unreadCount - 1))
         }
         UNUserNotificationCenter.current().removeDeliveredNotifications(
@@ -577,14 +877,8 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
     func markAllRead() async {
         let unreadIds = events.filter { !$0.isRead }.map { "loverorder.event.\($0.id)" }
-        events = events.map { old in
-            AppNotificationEvent(
-                id: old.id, userId: old.userId, actorId: old.actorId, householdId: old.householdId,
-                kind: old.kind, title: old.title, body: old.body, mealId: old.mealId,
-                roomCode: old.roomCode, deepLink: old.deepLink, isRead: true, readAt: old.readAt ?? Date(),
-                createdAt: old.createdAt, actor: old.actor
-            )
-        }
+        let now = Date()
+        events = events.map { $0.markingRead(at: now) }
         updateUnreadCount(0)
         if !unreadIds.isEmpty {
             UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: unreadIds)
@@ -594,7 +888,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         try? await NotificationService.shared.markRead(eventId: 0)
     }
 
-    // 体验与验收用：写入一条服务端通知，并立即弹出一条真系统本地横幅（点击可跳转）
+    // 体验与验收用：写入一条服务端通知，并立即弹出一条含缩略图、音效与下拉快捷回应的真系统横幅
     func sendTestAndDeliverBanner() async throws -> AppNotificationEvent {
         await refreshAuthorizationStatus()
         if authorizationStatus == .notDetermined {
@@ -609,30 +903,78 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         return ev
     }
 
-    // 每日午饭/晚饭前本地定时提醒
+    // 每日午饭/晚饭前智能本地定时提醒（感知当前菜单状态，刚吃完时锁屏也跳过当日提醒）
     func syncMealtimeReminders() {
         let center = UNUserNotificationCenter.current()
-        let ids = ["loverorder.mealtime.lunch", "loverorder.mealtime.dinner"]
-        center.removePendingNotificationRequests(withIdentifiers: ids)
+        let baseIDs = ["loverorder.mealtime.lunch", "loverorder.mealtime.dinner"]
+        let skipDayIDs = baseIDs.flatMap { base in (1...14).map { "\(base).day\($0)" } }
+        center.removePendingNotificationRequests(withIdentifiers: baseIDs + skipDayIDs)
+
+        let dishSummary = Self.summarizeDishNames(mealContext.dishNames)
 
         if prefs.lunchReminderEnabled {
+            let (title, body, soundFile) = mealtimeReminderCopy(isDinner: false, dishSummary: dishSummary)
             scheduleDailyReminder(
-                identifier: ids[0],
+                identifier: baseIDs[0],
                 hour: prefs.lunchHour,
                 minute: prefs.lunchMinute,
-                title: "快到午饭时间啦",
-                body: "去看看「这一顿」画布，选几道想吃的菜吧"
+                title: title,
+                body: body,
+                stickerAsset: "StickerEmoji_food_ramen",
+                soundFile: soundFile
             )
         }
         if prefs.dinnerReminderEnabled {
+            let (title, body, soundFile) = mealtimeReminderCopy(isDinner: true, dishSummary: dishSummary)
             scheduleDailyReminder(
-                identifier: ids[1],
+                identifier: baseIDs[1],
                 hour: prefs.dinnerHour,
                 minute: prefs.dinnerMinute,
-                title: "晚饭要吃点什么？",
-                body: "打开画布和 Ta 一起商量今晚吃什么"
+                title: title,
+                body: body,
+                stickerAsset: "StickerEmoji_food_cheers",
+                soundFile: soundFile
             )
         }
+    }
+
+    private func mealtimeReminderCopy(isDinner: Bool, dishSummary: String) -> (String, String, String) {
+        let mealLabel = isDinner ? "晚饭" : "午饭"
+        if mealContext.statusRaw == MealStatus.confirmed.rawValue, !dishSummary.isEmpty {
+            return (
+                "\(mealLabel)菜单早就定好啦",
+                "今天吃「\(dishSummary)」，差不多可以准备开动咯",
+                "dinner_chime.caf"
+            )
+        }
+        if mealContext.statusRaw == MealStatus.planning.rawValue, !dishSummary.isEmpty {
+            return (
+                "桌上有 \(mealContext.dishNames.count) 道候选菜啦",
+                "「\(dishSummary)」还在商量中，上画布和 Ta 拍板吧",
+                "plate_pop.caf"
+            )
+        }
+        if isDinner {
+            return (
+                "晚风吹来饭香，今晚吃点啥？",
+                "打开「这一顿」画布，抛两道想吃的菜或喊 Ta 一起挑",
+                "nudge_boing.caf"
+            )
+        }
+        return (
+            "咕咕～快到午饭时间啦",
+            "去「这一顿」画布逛逛，选几道今天想吃的菜吧",
+            "nudge_boing.caf"
+        )
+    }
+
+    private static func summarizeDishNames(_ names: [String]) -> String {
+        let cleaned = names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard !cleaned.isEmpty else { return "" }
+        if cleaned.count <= 3 {
+            return cleaned.joined(separator: "、")
+        }
+        return "\(cleaned.prefix(3).joined(separator: "、")) 等 \(cleaned.count) 道菜"
     }
 
     // MARK: - UNUserNotificationCenterDelegate
@@ -642,7 +984,21 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
+        let reqID = notification.request.identifier
         let info = notification.request.content.userInfo
+        if reqID.hasPrefix("loverorder.mealtime.") {
+            Task { @MainActor in
+                let manager = NotificationManager.shared
+                if let lastCompleted = manager.mealContext.lastCompletedAt,
+                   Date().timeIntervalSince(lastCompleted) < 2.5 * 3600 {
+                    // 刚吃饱不久自动静默跳过当次饭点闹钟，不机械打扰
+                    completionHandler([])
+                } else {
+                    completionHandler([.banner, .list, .sound])
+                }
+            }
+            return
+        }
         guard let eventId = (info["event_id"] as? NSNumber)?.uintValue else {
             completionHandler([.banner, .list, .sound, .badge])
             return
@@ -665,11 +1021,46 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        let actionID = response.actionIdentifier
         let info = response.notification.request.content.userInfo
         let deepLinkRaw = info["deep_link"] as? String
         let kindRaw = info["kind"] as? String
         let eventId = (info["event_id"] as? NSNumber)?.uintValue
         let mealId = (info["meal_id"] as? NSNumber)?.uintValue
+
+        let silentReplyCode: String? = {
+            switch actionID {
+            case NotificationCategoryID.actionReplyThumbs:
+                return "thumbs_up"
+            case NotificationCategoryID.actionReplyComing:
+                return "coming"
+            case NotificationCategoryID.actionReplyWashing:
+                return "washing_hands"
+            default:
+                return nil
+            }
+        }()
+
+        if let replyCode = silentReplyCode {
+            Task { @MainActor in
+                if let eventId, eventId > 0 {
+                    NotificationManager.shared.presentedBannerIds.insert(eventId)
+                }
+                _ = try? await NotificationService.shared.sendReply(
+                    eventId: eventId ?? 0,
+                    replyCode: replyCode,
+                    mealId: mealId
+                )
+                await NotificationManager.shared.syncServerNotifications(allowLocalBanner: false)
+                completionHandler()
+            }
+            return
+        }
+
+        if actionID == UNNotificationDismissActionIdentifier {
+            completionHandler()
+            return
+        }
 
         Task { @MainActor in
             NotificationManager.shared.handleNotificationTap(
@@ -678,8 +1069,8 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
                 eventId: eventId,
                 mealId: mealId
             )
+            completionHandler()
         }
-        completionHandler()
     }
 
     private func handleNotificationTap(
@@ -748,11 +1139,20 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         registrationTask = Task {
             defer { registrationTask = nil }
             while let userId = activeUserId, let token = apnsToken, canPresentNotifications {
-                let device = DeviceRegistration(userId: userId, token: token, mutedKinds: prefs.mutedKinds)
+                let device = DeviceRegistration(
+                    userId: userId,
+                    token: token,
+                    mutedKinds: prefs.mutedKinds,
+                    useCustomSound: prefs.useCustomSounds
+                )
                 guard device != registeredDevice else { return }
                 do {
                     try await NotificationService.shared.registerDevice(
-                        token: token, environment: env, appVersion: version, mutedKinds: device.mutedKinds
+                        token: token,
+                        environment: env,
+                        appVersion: version,
+                        mutedKinds: device.mutedKinds,
+                        useCustomSound: device.useCustomSound
                     )
                 } catch {
                     return
@@ -770,15 +1170,74 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         })
     }
 
+    private func notificationSound(named rawSound: String?, fallbackKind: String) -> UNNotificationSound {
+        guard prefs.useCustomSounds else { return .default }
+        let candidate: String = {
+            if let s = rawSound?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty {
+                return s
+            }
+            switch fallbackKind {
+            case "meal_confirmed", "meal_completed":
+                return "dinner_chime.caf"
+            case "meal_nudge", "meal_nudge_reply", "dining_joined":
+                return "nudge_boing.caf"
+            default:
+                return "plate_pop.caf"
+            }
+        }()
+        let ns = candidate as NSString
+        let ext = ns.pathExtension.isEmpty ? "caf" : ns.pathExtension
+        let base = ns.deletingPathExtension
+        if Bundle.main.url(forResource: base, withExtension: ext) != nil {
+            return UNNotificationSound(named: UNNotificationSoundName("\(base).\(ext)"))
+        }
+        return .default
+    }
+
     private func scheduleLocalBanner(for event: AppNotificationEvent) async throws {
+        // 45 秒内连加菜合并后，清理同餐次同发起人的旧单菜横幅，保持通知栏清爽
+        if event.kind == "meal_dish_added" || event.kind == "dining_dish_added",
+           let mealId = event.mealId, let actorId = event.actorId {
+            let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
+            let staleIDs = delivered.compactMap { item -> String? in
+                let u = item.request.content.userInfo
+                guard (u["kind"] as? String) == event.kind,
+                      (u["meal_id"] as? NSNumber)?.uintValue == mealId,
+                      (u["actor_id"] as? NSNumber)?.uintValue == actorId else {
+                    return nil
+                }
+                return item.request.identifier
+            }
+            if !staleIDs.isEmpty {
+                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: staleIDs)
+            }
+        }
+
         let content = UNMutableNotificationContent()
         content.title = event.title
         content.body = event.body
-        content.sound = .default
+        content.sound = notificationSound(named: event.soundName, fallbackKind: event.kind)
+        if let cat = event.categoryIdentifier {
+            content.categoryIdentifier = cat
+        }
+        if let mealId = event.mealId, mealId > 0 {
+            content.threadIdentifier = "loverorder.meal.\(mealId)"
+        }
+
+        if let attachment = await makeBannerAttachment(for: event) {
+            content.attachments = [attachment]
+        }
+
         var info: [String: Any] = [
             "event_id": Int(event.id),
             "kind": event.kind
         ]
+        if let actorId = event.actorId {
+            info["actor_id"] = Int(actorId)
+        }
+        if let presetKey = event.presetKey, !presetKey.isEmpty {
+            info["preset_key"] = presetKey
+        }
         if let deepLink = event.deepLink, !deepLink.isEmpty {
             info["deep_link"] = deepLink
         }
@@ -787,7 +1246,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         }
         content.userInfo = info
 
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.25, repeats: false)
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.22, repeats: false)
         let req = UNNotificationRequest(
             identifier: "loverorder.event.\(event.id)",
             content: content,
@@ -796,12 +1255,61 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         try await UNUserNotificationCenter.current().add(req)
     }
 
-    private func scheduleDailyReminder(identifier: String, hour: Int, minute: Int, title: String, body: String) {
+    private func scheduleDailyReminder(
+        identifier: String,
+        hour: Int,
+        minute: Int,
+        title: String,
+        body: String,
+        stickerAsset: String,
+        soundFile: String
+    ) {
+        let now = Date()
+        let cal = Calendar.current
+        var todayComps = cal.dateComponents([.year, .month, .day], from: now)
+        todayComps.hour = hour
+        todayComps.minute = minute
+        let todayFireDate = cal.date(from: todayComps)
+        let shouldSkipToday: Bool = {
+            guard let fire = todayFireDate, fire > now,
+                  let lastCompleted = mealContext.lastCompletedAt else {
+                return false
+            }
+            return fire.timeIntervalSince(lastCompleted) >= 0 && fire.timeIntervalSince(lastCompleted) < 2.5 * 3600
+        }()
+
+        if shouldSkipToday {
+            // 刚吃完不到 2.5 小时即到提醒点：跳过今天并排入未来 14 天单次提醒，锁屏后台也不打扰
+            for dayOffset in 1...14 {
+                guard let targetDay = cal.date(byAdding: .day, value: dayOffset, to: now) else { continue }
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = body
+                content.sound = notificationSound(named: soundFile, fallbackKind: "mealtime_reminder")
+                content.userInfo = ["deep_link": "lo://meal/0", "kind": "mealtime_reminder"]
+                if let stickerImage = UIImage(named: stickerAsset),
+                   let attachment = Self.writeStickerThumbnailAttachment(image: stickerImage, tag: "\(identifier)-d\(dayOffset)") {
+                    content.attachments = [attachment]
+                }
+                var comps = cal.dateComponents([.year, .month, .day], from: targetDay)
+                comps.hour = hour
+                comps.minute = minute
+                let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
+                let req = UNNotificationRequest(identifier: "\(identifier).day\(dayOffset)", content: content, trigger: trigger)
+                UNUserNotificationCenter.current().add(req)
+            }
+            return
+        }
+
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = .default
+        content.sound = notificationSound(named: soundFile, fallbackKind: "mealtime_reminder")
         content.userInfo = ["deep_link": "lo://meal/0", "kind": "mealtime_reminder"]
+        if let stickerImage = UIImage(named: stickerAsset),
+           let attachment = Self.writeStickerThumbnailAttachment(image: stickerImage, tag: identifier) {
+            content.attachments = [attachment]
+        }
 
         var comps = DateComponents()
         comps.hour = hour
@@ -809,6 +1317,145 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: true)
         let req = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
         UNUserNotificationCenter.current().add(req)
+    }
+
+    // MARK: - 通知横幅富媒体缩略图合成（菜品抠图白边贴纸 / 实拍图 / 36 枚水粉贴纸）
+
+    private func makeBannerAttachment(for event: AppNotificationEvent) async -> UNNotificationAttachment? {
+        Self.pruneStaleAttachmentFiles()
+
+        if let rawURL = event.imageURL, let url = APIConfig.imageURL(rawURL) {
+            if let remoteImage = await loadBannerImageWithTimeout(url: url, timeoutSeconds: 1.8) {
+                let isCutoutCandidate = rawURL.lowercased().contains("cutout") || rawURL.lowercased().hasSuffix(".png")
+                let styled: UIImage
+                if isCutoutCandidate {
+                    styled = await StickerBorderRenderer.shared.makeDieCutSticker(
+                        from: remoteImage,
+                        cacheKey: url.absoluteString
+                    )
+                } else {
+                    styled = remoteImage
+                }
+                if let att = Self.writeStickerThumbnailAttachment(
+                    image: styled,
+                    tag: "ev-\(event.id)",
+                    addCardBackdrop: !isCutoutCandidate
+                ) {
+                    return att
+                }
+            }
+        }
+
+        if let assetName = event.stickerAssetName, let stickerImage = UIImage(named: assetName) {
+            return Self.writeStickerThumbnailAttachment(image: stickerImage, tag: "ev-\(event.id)")
+        }
+        return nil
+    }
+
+    private func loadBannerImageWithTimeout(url: URL, timeoutSeconds: Double) async -> UIImage? {
+        if let cached = RemoteImageCache.shared.cachedImage(for: url) {
+            return cached
+        }
+        // RemoteImageCache.load 内部使用非结构化 Task 单飞，这里用 AsyncStream 竞速确保超时后立即放行横幅，不被慢网拖住
+        let stream = AsyncStream<UIImage?> { continuation in
+            let fetchTask = Task {
+                let image = await RemoteImageCache.shared.load(url: url)
+                continuation.yield(image)
+                continuation.finish()
+            }
+            let timeoutTask = Task {
+                try? await Task.sleep(for: .seconds(timeoutSeconds))
+                guard !Task.isCancelled else { return }
+                continuation.yield(nil)
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                timeoutTask.cancel()
+                _ = fetchTask
+            }
+        }
+        for await result in stream {
+            return result
+        }
+        return nil
+    }
+
+    private static var attachmentDir: URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("LoverOrderNotifThumbs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private static func pruneStaleAttachmentFiles() {
+        let fm = FileManager.default
+        let dir = attachmentDir
+        guard let urls = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.creationDateKey]) else {
+            return
+        }
+        let cutoff = Date().addingTimeInterval(-3600)
+        for url in urls {
+            if let created = (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate,
+               created < cutoff {
+                try? fm.removeItem(at: url)
+            }
+        }
+    }
+
+    private static func writeStickerThumbnailAttachment(
+        image: UIImage,
+        tag: String,
+        addCardBackdrop: Bool = false
+    ) -> UNNotificationAttachment? {
+        let canvasSide: CGFloat = 240
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = addCardBackdrop
+
+        let rendered = UIGraphicsImageRenderer(size: CGSize(width: canvasSide, height: canvasSide), format: format).image { ctx in
+            let bounds = CGRect(x: 0, y: 0, width: canvasSide, height: canvasSide)
+            if addCardBackdrop {
+                let path = UIBezierPath(roundedRect: bounds, cornerRadius: 36)
+                path.addClip()
+                let scale = max(canvasSide / max(1, image.size.width), canvasSide / max(1, image.size.height))
+                let drawW = image.size.width * scale
+                let drawH = image.size.height * scale
+                let rect = CGRect(
+                    x: (canvasSide - drawW) * 0.5,
+                    y: (canvasSide - drawH) * 0.5,
+                    width: drawW,
+                    height: drawH
+                )
+                image.draw(in: rect)
+            } else {
+                let inset: CGFloat = 14
+                let avail = canvasSide - inset * 2
+                let scale = min(avail / max(1, image.size.width), avail / max(1, image.size.height))
+                let drawW = image.size.width * scale
+                let drawH = image.size.height * scale
+                let rect = CGRect(
+                    x: (canvasSide - drawW) * 0.5,
+                    y: (canvasSide - drawH) * 0.5,
+                    width: drawW,
+                    height: drawH
+                )
+                ctx.cgContext.setShadow(
+                    offset: CGSize(width: 0, height: 6),
+                    blur: 14,
+                    color: UIColor.black.withAlphaComponent(0.18).cgColor
+                )
+                image.draw(in: rect)
+            }
+        }
+
+        guard let png = rendered.pngData() else { return nil }
+        let safeTag = tag.replacingOccurrences(of: ".", with: "-")
+        let fileURL = attachmentDir.appendingPathComponent("\(safeTag)-\(UUID().uuidString.prefix(8)).png")
+        do {
+            try png.write(to: fileURL, options: .atomic)
+            return try UNNotificationAttachment(identifier: "thumb", url: fileURL, options: nil)
+        } catch {
+            return nil
+        }
     }
 
     private func updateUnreadCount(_ count: Int) {

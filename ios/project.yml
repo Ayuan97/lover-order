@@ -21,6 +21,9 @@ targets:
     resources:
       - path: LoverOrder/Resources/Assets.xcassets
       - path: LoverOrder/Resources/PrivacyInfo.xcprivacy
+      - path: LoverOrder/Resources/Sounds/plate_pop.caf
+      - path: LoverOrder/Resources/Sounds/dinner_chime.caf
+      - path: LoverOrder/Resources/Sounds/nudge_boing.caf
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.loverorder.app

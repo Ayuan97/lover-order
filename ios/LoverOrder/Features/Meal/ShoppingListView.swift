@@ -4,6 +4,7 @@ import SwiftUI
 struct ShoppingListView: View {
     let mealId: UInt
     var title: String = "购物清单"
+    var allowNudgePartner: Bool = true
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -12,6 +13,7 @@ struct ShoppingListView: View {
     @State private var checkedNames: Set<String> = []
     @State private var checkSyncVersion: Int = 0
     @State private var isLoading: Bool = false
+    @State private var isSendingNudge: Bool = false
     @State private var errorMessage: String?
     @State private var tipMessage: String?
 
@@ -187,22 +189,81 @@ struct ShoppingListView: View {
     }
 
     private func bottomBar(_ list: ShoppingList) -> some View {
-        PrimaryButton(title: "复制清单发给 Ta", icon: "doc.on.doc") {
-            let lines = list.items.map { item -> String in
-                let box = checkedSet.contains(key(for: item)) ? "☑" : "☐"
-                let amt = (item.amounts ?? []).joined(separator: " + ")
-                return amt.isEmpty ? "\(box) \(item.name)" : "\(box) \(item.name)  \(amt)"
+        HStack(spacing: 10) {
+            if allowNudgePartner {
+                Button {
+                    copyListToPasteboard(list)
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 13.5, weight: .semibold))
+                        Text("复制文本")
+                            .font(AppFont.headline(15))
+                    }
+                    .foregroundStyle(Color.inkPrimary)
+                    .padding(.horizontal, 16)
+                    .frame(height: 48)
+                    .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .strokeBorder(Color.dividerLine.opacity(0.8), lineWidth: 0.8)
+                    }
+                }
+                .buttonStyle(SoftPressStyle())
+
+                PrimaryButton(
+                    title: "提醒 Ta 看清单",
+                    icon: "bell.and.waves.left.and.right.fill",
+                    isLoading: isSendingNudge
+                ) {
+                    Task { await nudgePartnerForShopping(list) }
+                }
+            } else {
+                PrimaryButton(title: "复制清单发给 Ta", icon: "doc.on.doc") {
+                    copyListToPasteboard(list)
+                }
             }
-            let text = (["🛒 买菜清单（共 \(list.items.count) 项）"] + lines).joined(separator: "\n")
-            UIPasteboard.general.string = text
-            Haptics.success()
-            tipMessage = "清单已复制，可直接发给 Ta"
         }
         .padding(.horizontal, AppSpacing.lg)
         .padding(.vertical, 10)
         .background(Color.appBackground)
         .overlay(alignment: .top) {
             Divider().overlay(Color.dividerLine.opacity(0.6))
+        }
+    }
+
+    private func copyListToPasteboard(_ list: ShoppingList) {
+        let lines = list.items.map { item -> String in
+            let box = checkedSet.contains(key(for: item)) ? "☑" : "☐"
+            let amt = (item.amounts ?? []).joined(separator: " + ")
+            return amt.isEmpty ? "\(box) \(item.name)" : "\(box) \(item.name)  \(amt)"
+        }
+        let text = (["🛒 买菜清单（共 \(list.items.count) 项）"] + lines).joined(separator: "\n")
+        UIPasteboard.general.string = text
+        Haptics.success()
+        tipMessage = "清单已复制，可直接发给 Ta"
+    }
+
+    private func nudgePartnerForShopping(_ list: ShoppingList) async {
+        guard !isSendingNudge else { return }
+        isSendingNudge = true
+        defer { isSendingNudge = false }
+        let remaining = list.items.filter { !checkedSet.contains(key(for: $0)) }.count
+        let customNote = remaining > 0 && remaining < list.items.count
+            ? "买菜清单还差 \(remaining) 项食材没打勾，点开就能看"
+            : nil
+        do {
+            _ = try await NotificationService.shared.sendNudge(
+                preset: "shopping_list",
+                message: customNote,
+                stickerCode: "food_croissant",
+                mealId: mealId
+            )
+            CanvasSoundEngine.shared.playNudgePing()
+            Haptics.success()
+            tipMessage = "买菜清单提醒已推给 Ta 啦"
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 

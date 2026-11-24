@@ -47,6 +47,9 @@ struct MealNowView: View {
                         sharePosterMeal = meal
                     }
                 },
+                onInvitePartner: {
+                    showInviteTicket = true
+                },
                 onRemoteMealSync: { reason in
                     switch reason {
                     case "recipes_changed":
@@ -109,7 +112,8 @@ struct MealNowView: View {
                         }
                     }
                 },
-                isSheetPresented: showAddDish
+                isSheetPresented: showAddDish,
+                isModalCoveringCanvas: showAddDish || showReview || showCreateRecipe || showShoppingList || showDiningHost || showInviteTicket || resumeDining != nil || sharePosterMeal != nil
             )
             .environmentObject(appState)
             .background(Color.appBackground.ignoresSafeArea())
@@ -183,6 +187,15 @@ struct MealNowView: View {
             .onChange(of: vm.meal?.id) { _, newMealId in
                 if scenePhase == .active && appState.activeTab == 0 {
                     NotificationManager.shared.setActiveViewedMeal(newMealId)
+                }
+                NotificationManager.shared.updateMealContext(meal: vm.meal)
+            }
+            .onChange(of: "\(vm.meal?.status.rawValue ?? "")|\(vm.dishes.map(\.recipeName).joined(separator: ","))") { _, _ in
+                NotificationManager.shared.updateMealContext(meal: vm.meal)
+            }
+            .onChange(of: vm.pendingReviewMealId) { oldVal, newVal in
+                if newVal != nil && newVal != oldVal {
+                    NotificationManager.shared.updateMealContext(meal: vm.meal, markCompletedNow: true)
                 }
             }
             .navigationBarHidden(true)

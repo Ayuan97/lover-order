@@ -921,6 +921,9 @@ private struct NotificationCenterSheet: View {
 
     @State private var tab: SectionTab = .feed
     @State private var isSendingTest = false
+    @State private var showNudgeSheet = false
+    @State private var showInviteFromNudge = false
+    @State private var repliedEventIds: Set<UInt> = []
     @State private var tipMessage: String?
     @State private var sessionFreshIds: Set<UInt> = []
 
@@ -992,34 +995,77 @@ private struct NotificationCenterSheet: View {
                 await manager.syncServerNotifications(allowLocalBanner: false)
                 await markFeedViewedIfNeeded()
             }
+            .sheet(isPresented: $showNudgeSheet) {
+                MealNudgeSheet(
+                    meal: nil,
+                    onInvitePartner: {
+                        showInviteFromNudge = true
+                    },
+                    onSent: { toastText in
+                        tipMessage = toastText
+                    }
+                )
+                .environmentObject(appState)
+                .presentationDetents([.height(540), .large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
+                .preferredColorScheme(.light)
+            }
+            .sheet(isPresented: $showInviteFromNudge) {
+                if let h = appState.household {
+                    InviteTicketView(
+                        household: h,
+                        inviterName: appState.currentUser?.displayName ?? "家人"
+                    )
+                    .preferredColorScheme(.light)
+                }
+            }
             .tipToast($tipMessage)
         }
+    }
+
+    private var partnerMember: AppUser? {
+        let myID = appState.currentUser?.id ?? 0
+        return (appState.household?.members ?? []).first { $0.id != 0 && $0.id != myID }
     }
 
     @ViewBuilder
     private var feedContent: some View {
         SectionCard {
             HStack(spacing: 12) {
+                ZStack(alignment: .bottomTrailing) {
+                    if let partner = partnerMember {
+                        AvatarView(user: partner, size: 42)
+                        Image("StickerEmoji_food_cheers")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 20, height: 20)
+                            .offset(x: 4, y: 4)
+                    } else {
+                        Image("StickerEmoji_food_cheers")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 40, height: 40)
+                    }
+                }
+
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("试试程序外通知")
+                    Text(partnerMember != nil ? "喊 \(partnerMember!.displayName) 一下" : "喊 Ta 一下")
                         .font(AppFont.headline(15))
                         .foregroundStyle(Color.inkPrimary)
-                    Text("触发一条真实系统横幅，点通知可直接跳进画布或历史")
+                    Text("饿了挑菜、快看画布或摇铃开饭，选个暗号飞过去")
                         .font(AppFont.caption(11.5))
                         .foregroundStyle(Color.inkMuted)
                 }
                 Spacer(minLength: 8)
                 Button {
-                    Task { await sendTestBanner() }
+                    Haptics.light()
+                    showNudgeSheet = true
                 } label: {
                     HStack(spacing: 5) {
-                        if isSendingTest {
-                            ProgressView().tint(.white).controlSize(.mini)
-                        } else {
-                            Image(systemName: "paperplane.fill")
-                                .font(.system(size: 11, weight: .semibold))
-                        }
-                        Text(isSendingTest ? "发送中" : "演示提醒")
+                        Image(systemName: "bell.and.waves.left.and.right.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("去传呼")
                             .font(.system(size: 12.5, weight: .semibold, design: .rounded))
                     }
                     .foregroundStyle(.white)
@@ -1028,7 +1074,6 @@ private struct NotificationCenterSheet: View {
                     .background(Color.actionInk, in: Capsule())
                 }
                 .buttonStyle(SoftPressStyle())
-                .disabled(isSendingTest)
             }
         }
 
@@ -1065,17 +1110,37 @@ private struct NotificationCenterSheet: View {
 
     private func eventRow(_ event: AppNotificationEvent) -> some View {
         let isFreshInThisVisit = !event.isRead || sessionFreshIds.contains(event.id)
+        let myID = appState.currentUser?.id ?? 0
+        let showReplyButton = event.canQuickReply && event.actorId != nil && event.actorId != myID
+        let hasReplied = repliedEventIds.contains(event.id)
+
         return HStack(alignment: .top, spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(isFreshInThisVisit ? Color.actionInk : Color.appBackground)
-                    .frame(width: 38, height: 38)
-                Image(systemName: event.iconName)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(isFreshInThisVisit ? .white : Color.inkSecondary)
+            if let actor = event.actor, event.kind != "test" {
+                ZStack(alignment: .bottomTrailing) {
+                    AvatarView(user: actor, size: 40)
+                    ZStack {
+                        Circle()
+                            .fill(isFreshInThisVisit ? Color.actionInk : Color.appBackground)
+                            .frame(width: 18, height: 18)
+                            .overlay(Circle().stroke(Color.cardBackground, lineWidth: 1.5))
+                        Image(systemName: event.iconName)
+                            .font(.system(size: 8.5, weight: .bold))
+                            .foregroundStyle(isFreshInThisVisit ? .white : Color.inkSecondary)
+                    }
+                    .offset(x: 3, y: 3)
+                }
+            } else {
+                ZStack {
+                    Circle()
+                        .fill(isFreshInThisVisit ? Color.actionInk : Color.appBackground)
+                        .frame(width: 40, height: 40)
+                    Image(systemName: event.iconName)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(isFreshInThisVisit ? .white : Color.inkSecondary)
+                }
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(event.title)
                         .font(AppFont.headline(14.5))
@@ -1101,12 +1166,32 @@ private struct NotificationCenterSheet: View {
                     .foregroundStyle(Color.inkSecondary)
                     .multilineTextAlignment(.leading)
                     .lineLimit(2)
+
+                if showReplyButton {
+                    Button {
+                        sendInlineReply(for: event)
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: hasReplied ? "checkmark" : "hand.wave.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text(hasReplied ? "已回应 Ta" : event.quickReplyButtonTitle)
+                                .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                        }
+                        .foregroundStyle(hasReplied ? Color.inkMuted : Color.inkPrimary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4.5)
+                        .background(Color.appBackground, in: Capsule())
+                        .overlay {
+                            Capsule().strokeBorder(Color.dividerLine.opacity(0.85), lineWidth: 0.7)
+                        }
+                    }
+                    .buttonStyle(SoftPressStyle())
+                    .disabled(hasReplied)
+                    .padding(.top, 2)
+                }
             }
 
-            Image(systemName: "chevron.right")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.inkMuted.opacity(0.65))
-                .padding(.top, 4)
+            NotificationEventThumbView(event: event)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1117,6 +1202,26 @@ private struct NotificationCenterSheet: View {
                     isFreshInThisVisit ? Color.actionInk.opacity(0.20) : Color.dividerLine.opacity(0.6),
                     lineWidth: isFreshInThisVisit ? 1.0 : 0.7
                 )
+        }
+    }
+
+    private func sendInlineReply(for event: AppNotificationEvent) {
+        guard !repliedEventIds.contains(event.id) else { return }
+        repliedEventIds.insert(event.id)
+        Haptics.popSequence()
+        CanvasSoundEngine.shared.playNudgeHeartReply()
+        Task {
+            do {
+                _ = try await NotificationService.shared.sendReply(
+                    eventId: event.id,
+                    replyCode: event.quickReplyDefaultCode,
+                    mealId: event.mealId
+                )
+                tipMessage = "已回应 \(event.actor?.displayName ?? "Ta")"
+            } catch {
+                repliedEventIds.remove(event.id)
+                tipMessage = error.localizedDescription
+            }
         }
     }
 
@@ -1184,7 +1289,21 @@ private struct NotificationCenterSheet: View {
                     Text("加菜与定下这一顿")
                         .font(AppFont.body(14.5))
                         .foregroundStyle(Color.inkPrimary)
-                    Text("Ta 加了想吃的菜、定好了菜单或标记吃完时提醒")
+                    Text("Ta 加了想吃的菜（连加自动合并）、定好菜单或吃完时提醒")
+                        .font(AppFont.caption(11))
+                        .foregroundStyle(Color.inkMuted)
+                }
+            }
+            .tint(Color.actionInk)
+
+            Divider()
+
+            Toggle(isOn: prefBinding(\.notifyNudges)) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("趣味传呼与回戳")
+                        .font(AppFont.body(14.5))
+                        .foregroundStyle(Color.inkPrimary)
+                    Text("Ta 发来饿啦、快看画布、摇铃开饭或回戳暗号时提醒")
                         .font(AppFont.caption(11))
                         .foregroundStyle(Color.inkMuted)
                 }
@@ -1218,6 +1337,20 @@ private struct NotificationCenterSheet: View {
                 }
             }
             .tint(Color.actionInk)
+
+            Divider()
+
+            Toggle(isOn: prefBinding(\.useCustomSounds)) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("餐桌定制提示音")
+                        .font(AppFont.body(14.5))
+                        .foregroundStyle(Color.inkPrimary)
+                    Text("按场景播放上菜轻叩、开饭铜铃与果冻啵啵专属短音效")
+                        .font(AppFont.caption(11))
+                        .foregroundStyle(Color.inkMuted)
+                }
+            }
+            .tint(Color.actionInk)
         }
 
         SectionCard {
@@ -1226,7 +1359,7 @@ private struct NotificationCenterSheet: View {
                     Text("每日饭点提醒")
                         .font(AppFont.headline(15))
                         .foregroundStyle(Color.inkPrimary)
-                    Text("每天固定时间轻轻问一句“今天吃什么”，点通知直达画布")
+                    Text("已定菜单自动报菜名，刚吃完自动免打扰；点通知直达画布")
                         .font(AppFont.caption(11.5))
                         .foregroundStyle(Color.inkMuted)
                 }
@@ -1278,6 +1411,40 @@ private struct NotificationCenterSheet: View {
                     }
                     .padding(.vertical, 2)
                 }
+            }
+        }
+
+        SectionCard {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("试试程序外富媒体通知")
+                        .font(AppFont.headline(15))
+                        .foregroundStyle(Color.inkPrimary)
+                    Text("发送一条含贴纸缩略图、定制音效与长按快捷回应的系统横幅")
+                        .font(AppFont.caption(11.5))
+                        .foregroundStyle(Color.inkMuted)
+                }
+                Spacer(minLength: 8)
+                Button {
+                    Task { await sendTestBanner() }
+                } label: {
+                    HStack(spacing: 5) {
+                        if isSendingTest {
+                            ProgressView().tint(.white).controlSize(.mini)
+                        } else {
+                            Image(systemName: "paperplane.fill")
+                                .font(.system(size: 11, weight: .semibold))
+                        }
+                        Text(isSendingTest ? "发送中" : "演示提醒")
+                            .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .frame(height: 34)
+                    .background(Color.actionInk, in: Capsule())
+                }
+                .buttonStyle(SoftPressStyle())
+                .disabled(isSendingTest)
             }
         }
     }
@@ -1368,6 +1535,78 @@ private struct NotificationCenterSheet: View {
         if let link = event.resolvedDeepLink {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
                 appState.handleDeepLink(link)
+            }
+        }
+    }
+}
+
+private struct NotificationEventThumbView: View {
+    let event: AppNotificationEvent
+
+    @State private var loadedImage: UIImage?
+    @State private var loadedURL: URL?
+
+    private var resolvedURL: URL? {
+        APIConfig.imageURL(event.imageURL)
+    }
+
+    private var isCutoutLike: Bool {
+        guard let raw = event.imageURL?.lowercased() else { return false }
+        return raw.contains("cutout") || raw.hasSuffix(".png")
+    }
+
+    var body: some View {
+        let displayImage = (loadedURL == resolvedURL ? loadedImage : nil)
+            ?? resolvedURL.flatMap { RemoteImageCache.shared.cachedImage(for: $0) }
+
+        Group {
+            if let displayImage {
+                if isCutoutLike {
+                    Image(uiImage: displayImage)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 42, height: 42)
+                        .shadow(color: Color.black.opacity(0.12), radius: 4, y: 2)
+                } else {
+                    Image(uiImage: displayImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 42, height: 42)
+                        .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .strokeBorder(Color.dividerLine.opacity(0.6), lineWidth: 0.6)
+                        }
+                }
+            } else if let asset = event.stickerAssetName {
+                Image(asset)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 38, height: 38)
+            } else {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.inkMuted.opacity(0.65))
+                    .padding(.top, 8)
+            }
+        }
+        .task(id: resolvedURL) {
+            guard let url = resolvedURL else {
+                loadedURL = nil
+                loadedImage = nil
+                return
+            }
+            if let cached = RemoteImageCache.shared.cachedImage(for: url) {
+                loadedURL = url
+                loadedImage = cached
+                return
+            }
+            loadedURL = url
+            loadedImage = nil
+            let fetched = await RemoteImageCache.shared.load(url: url)
+            if !Task.isCancelled {
+                loadedURL = url
+                loadedImage = fetched
             }
         }
     }

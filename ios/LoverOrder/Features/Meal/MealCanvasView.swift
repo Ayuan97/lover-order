@@ -18,6 +18,7 @@ struct MealCanvasView: View {
     var onCloseLaunchStudio: (() -> Void)? = nil
     var onLaunchLightSurfaceChange: ((Bool) -> Void)? = nil
     var onShareMeal: (() -> Void)? = nil
+    var onInvitePartner: (() -> Void)? = nil
     var isGuestMode: Bool = false
     var guestHostName: String? = nil
     var guestParticipants: [MealParticipant] = []
@@ -27,6 +28,7 @@ struct MealCanvasView: View {
     var onRemoteMealSync: ((String) -> Void)? = nil
     var onGuestLightSurfaceChange: ((Bool) -> Void)? = nil
     var isSheetPresented: Bool = false
+    var isModalCoveringCanvas: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -120,6 +122,10 @@ struct MealCanvasView: View {
     @State private var isSettingCover = false
     @State private var showCanvasMoreMenu = false
     @State private var canvasMoreAnchorRect: CGRect = .zero
+    @State private var showNudgeSheet = false
+    @State private var nudgeInitialTargetID: UInt?
+    @State private var activeNudgeBanner: CanvasNudgeRealtimeMessage?
+    @State private var nudgeBannerDismissTask: Task<Void, Never>?
     @FocusState private var textEditorFocused: Bool
 
     private static let todayDateFormatter: DateFormatter = {
@@ -199,6 +205,28 @@ struct MealCanvasView: View {
                 header
                     .padding(.horizontal, 18)
                     .padding(.top, 4)
+
+                if !isGuestMode, let banner = activeNudgeBanner {
+                    CanvasNudgeBanner(
+                        message: banner,
+                        isLightSurface: background.isLightSurface,
+                        onReply: { replyCode in
+                            sendQuickReplyFromBanner(banner, replyCode: replyCode)
+                        },
+                        onOpenLink: { link in
+                            dismissNudgeBanner()
+                            appState.handleDeepLink(link)
+                        },
+                        onDismiss: {
+                            dismissNudgeBanner()
+                        }
+                    )
+                    .padding(.horizontal, 16)
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .top).combined(with: .scale(scale: 0.94)).combined(with: .opacity),
+                        removal: .move(edge: .top).combined(with: .opacity)
+                    ))
+                }
 
                 if vm.loadFailed && vm.meal == nil {
                     retryStrip
@@ -350,6 +378,24 @@ struct MealCanvasView: View {
                     .presentationCornerRadius(28)
                     .preferredColorScheme(.light)
                 }
+            }
+            .sheet(isPresented: $showNudgeSheet) {
+                MealNudgeSheet(
+                    meal: vm.meal,
+                    onlineUserIDs: Set(realtime.onlineUsers.filter { $0.role == "host" }.map(\.id)),
+                    hasCanvasAdditions: hasCanvasAdditions,
+                    hasPendingReview: pendingReviewMealId != nil,
+                    initialTargetUserID: nudgeInitialTargetID,
+                    onInvitePartner: onInvitePartner,
+                    onSent: { toastText in
+                        showCanvasTip(toastText)
+                    }
+                )
+                .environmentObject(appState)
+                .presentationDetents([.height(540), .large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
+                .preferredColorScheme(.light)
             }
             .background { launchOptionsSheetHost }
     }
@@ -680,10 +726,16 @@ struct MealCanvasView: View {
         var seen: Set<UInt> = []
         var result: [AppUser] = []
         func appendUser(_ user: AppUser) {
-            guard result.count < 4, seen.insert(user.id).inserted else { return }
+            guard user.id != 0, result.count < 4, seen.insert(user.id).inserted else { return }
             result.append(freshest(user))
         }
 
+        if !isGuestMode {
+            let myID = appState.currentUser?.id ?? 0
+            for member in appState.household?.members ?? [] where member.id != myID {
+                appendUser(member)
+            }
+        }
         for actor in realtime.onlineUsers {
             appendUser(actor.asAppUser)
         }
@@ -697,7 +749,7 @@ struct MealCanvasView: View {
                 appendUser(adder)
             }
         }
-        if !isGuestMode, result.isEmpty, let me = appState.currentUser {
+        if !isGuestMode, let me = appState.currentUser {
             appendUser(me)
         }
         return result
@@ -1327,6 +1379,7 @@ struct MealCanvasView: View {
                             }
                             Text("\(Self.todayDateFormatter.string(from: Date())) · \(statusBadgeText)")
                                 .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .lineLimit(1)
                                 .contentTransition(.numericText())
                                 .animation(reduceMotion ? nil : .easeOut(duration: 0.22), value: vm.dishCount)
                         }
@@ -1370,13 +1423,67 @@ struct MealCanvasView: View {
                 }
 
                 if !headerParticipants.isEmpty {
-                    HStack(spacing: -6) {
-                        ForEach(headerParticipants) { user in
-                            AvatarView(user: user, size: 20)
-                                .overlay(Circle().stroke(isLight ? Color.white : Color.white.opacity(0.65), lineWidth: 1.2))
+                    if isGuestMode {
+                        HStack(spacing: -6) {
+                            ForEach(headerParticipants) { user in
+                                AvatarView(user: user, size: 20)
+                                    .overlay(Circle().stroke(isLight ? Color.white : Color.white.opacity(0.65), lineWidth: 1.2))
+                            }
+                        }
+                        .accessibilityHidden(true)
+                    } else {
+                        let myID = appState.currentUser?.id ?? 0
+                        let onlineHostIDs = Set(realtime.onlineUsers.filter { $0.role == "host" }.map(\.id))
+                        let partnerCandidates = (appState.household?.members ?? []).filter { $0.id != 0 && $0.id != myID }
+                        let hasPartner = !partnerCandidates.isEmpty
+                        let hasGuestsOnly = !hasPartner && (vm.hasActiveDiningRoom || !guestParticipants.isEmpty)
+                        let displayUsers = hasPartner ? partnerCandidates : headerParticipants
+                        if hasGuestsOnly {
+                            HStack(spacing: -6) {
+                                ForEach(headerParticipants) { user in
+                                    AvatarView(user: user, size: 20)
+                                        .overlay(Circle().stroke(isLight ? Color.white : Color.white.opacity(0.65), lineWidth: 1.2))
+                                }
+                            }
+                            .accessibilityHidden(true)
+                        } else {
+                            Button {
+                                openNudgeSheet(targetUserID: partnerCandidates.count == 1 ? partnerCandidates.first?.id : nil)
+                            } label: {
+                                HStack(spacing: -5) {
+                                    ForEach(Array(displayUsers.prefix(3))) { user in
+                                        ZStack(alignment: .bottomTrailing) {
+                                            AvatarView(user: user, size: 22)
+                                                .overlay(Circle().stroke(isLight ? Color.white : Color.white.opacity(0.75), lineWidth: 1.3))
+                                            if user.id != myID && onlineHostIDs.contains(user.id) {
+                                                Circle()
+                                                    .fill(Color(red: 0.22, green: 0.84, blue: 0.48))
+                                                    .frame(width: 6.5, height: 6.5)
+                                                    .overlay(Circle().stroke(Color.white, lineWidth: 1.0))
+                                                    .offset(x: 1, y: 1)
+                                            }
+                                        }
+                                    }
+                                    ZStack {
+                                        Circle()
+                                            .fill(isLight ? CanvasPalette.obsidianInk : Color.white)
+                                        Image(systemName: hasPartner ? "bell.fill" : "person.badge.plus")
+                                            .font(.system(size: 8.5, weight: .bold))
+                                            .foregroundStyle(isLight ? Color.white : CanvasPalette.obsidianInk)
+                                    }
+                                    .frame(width: 18, height: 18)
+                                    .overlay(Circle().stroke(isLight ? Color.white : Color.black.opacity(0.22), lineWidth: 1.2))
+                                }
+                                .fixedSize(horizontal: true, vertical: false)
+                                .padding(.horizontal, 4)
+                                .frame(minHeight: 30)
+                                .contentShape(Capsule())
+                            }
+                            .buttonStyle(CanvasPressStyle(scale: 0.94))
+                            .disabled(isCanvasInteracting || drawingEnabled)
+                            .accessibilityLabel(hasPartner ? "喊 Ta 一下，发送提醒" : "邀请家人一起用画布")
                         }
                     }
-                    .accessibilityHidden(true)
                 }
 
                 Spacer(minLength: 0)
@@ -3988,6 +4095,11 @@ struct MealCanvasView: View {
                     }
                 }
 
+                FloatingMenuRow(title: "喊 Ta 一下", systemImage: "bell.and.waves.left.and.right") {
+                    closeCanvasMoreMenu()
+                    openNudgeSheet(targetUserID: nil)
+                }
+
                 FloatingMenuRow(title: "买菜清单", systemImage: "cart") {
                     closeCanvasMoreMenu()
                     onShoppingList()
@@ -5801,6 +5913,11 @@ struct MealCanvasView: View {
             onRemoteMealSync?(msg.reason)
         }
 
+        realtime.onCanvasNudge = { msg in
+            guard !isGuestMode, !isLaunchStudio else { return }
+            presentIncomingNudgeBanner(msg)
+        }
+
         realtime.onNetworkRecovered = {
             onRemoteMealSync?("network_recovered")
         }
@@ -5825,6 +5942,91 @@ struct MealCanvasView: View {
 
         realtime.onError = { message in
             showCanvasTip(message)
+        }
+    }
+
+    private func openNudgeSheet(targetUserID: UInt?) {
+        guard !isGuestMode, !isLaunchStudio else { return }
+        Haptics.light()
+        finishEditing()
+        selectedStickerID = nil
+        selectedNoteID = nil
+        toolsExpanded = false
+        nudgeInitialTargetID = targetUserID
+        showNudgeSheet = true
+    }
+
+    private var isCanvasUnobstructedAndVisible: Bool {
+        scenePhase == .active
+            && appState.activeTab == 0
+            && !isModalCoveringCanvas
+            && !isSheetPresented
+            && !showNudgeSheet
+            && !isEditing
+            && !showPhotoSticker
+            && appState.deepLinkedHistoryMeal == nil
+            && appState.deepLinkedShoppingMeal == nil
+            && appState.deepLinkedDiningRoom == nil
+            && appState.deepLinkedGuestMeal == nil
+    }
+
+    private func presentIncomingNudgeBanner(_ msg: CanvasNudgeRealtimeMessage) {
+        // 仅当用户正在前台直视当前画布时才用画布浮条+桌面粒子消费；处于其他 Tab 或弹窗内时立即唤醒系统横幅，避免隐身吞掉提醒
+        guard isCanvasUnobstructedAndVisible else {
+            Task {
+                await NotificationManager.shared.syncServerNotifications(allowLocalBanner: true)
+            }
+            return
+        }
+
+        NotificationManager.shared.noteReceivedCanvasNudge(eventId: msg.eventId)
+        guard NotificationManager.shared.prefs.notifyNudges else { return }
+
+        nudgeBannerDismissTask?.cancel()
+        withAnimation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.78)) {
+            activeNudgeBanner = msg
+        }
+
+        let stageSize = canvasFrame.size.width > 0 ? canvasFrame.size : UIScreen.main.bounds.size
+        fx.emitNudgeArrival(kind: msg.kind, presetKey: msg.presetKey, in: stageSize)
+
+        if msg.presetKey == "dinner_ready" || msg.presetKey == "washing_hands" {
+            CanvasSoundEngine.shared.playDinnerBell()
+            Haptics.success()
+        } else if msg.kind == "meal_nudge_reply" {
+            CanvasSoundEngine.shared.playNudgeHeartReply()
+            Haptics.popSequence()
+        } else {
+            CanvasSoundEngine.shared.playNudgePing()
+            Haptics.popSequence()
+        }
+
+        nudgeBannerDismissTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(6.5))
+            guard !Task.isCancelled else { return }
+            dismissNudgeBanner()
+        }
+    }
+
+    private func dismissNudgeBanner() {
+        nudgeBannerDismissTask?.cancel()
+        nudgeBannerDismissTask = nil
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+            activeNudgeBanner = nil
+        }
+    }
+
+    private func sendQuickReplyFromBanner(_ msg: CanvasNudgeRealtimeMessage, replyCode: String) {
+        let stageSize = canvasFrame.size.width > 0 ? canvasFrame.size : UIScreen.main.bounds.size
+        fx.emitNudgeArrival(kind: "meal_nudge_reply", presetKey: replyCode, in: stageSize)
+        Task {
+            _ = try? await NotificationService.shared.sendReply(
+                eventId: msg.eventId,
+                replyCode: replyCode,
+                mealId: msg.mealId > 0 ? msg.mealId : vm.meal?.id
+            )
+            try? await Task.sleep(for: .milliseconds(700))
+            dismissNudgeBanner()
         }
     }
 

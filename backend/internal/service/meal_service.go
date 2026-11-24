@@ -260,7 +260,7 @@ func (s *MealService) Confirm(householdID, actorUserID, id uint) (*model.MealSes
 	for _, d := range m.Dishes {
 		dishNames = append(dishNames, d.RecipeName)
 	}
-	NewNotificationService().NotifyMealConfirmed(householdID, actorUserID, m.ID, dishNames)
+	NewNotificationService().NotifyMealConfirmed(householdID, actorUserID, m.ID, dishNames, leadDishImage(m.Dishes))
 	GlobalCanvasHub().BroadcastMealSync(m.ID, "confirmed", actorUserID)
 	if countedAny {
 		GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", actorUserID)
@@ -301,7 +301,7 @@ func (s *MealService) Complete(householdID, actorUserID, id uint) (*model.MealSe
 	if err != nil {
 		return nil, err
 	}
-	NewNotificationService().NotifyMealCompleted(householdID, actorUserID, m.ID, m.Title)
+	NewNotificationService().NotifyMealCompleted(householdID, actorUserID, m.ID, m.Title, leadDishImage(m.Dishes))
 	GlobalCanvasHub().BroadcastMealSync(m.ID, "completed", actorUserID)
 	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "history_changed", actorUserID)
 	GlobalCanvasHub().EvictGuests(m.ID)
@@ -439,7 +439,11 @@ func (s *MealService) AddDish(householdID, userID, id uint, in DishInput) (*mode
 	if !added {
 		return dish, nil
 	}
-	NewNotificationService().NotifyMealDishAdded(householdID, userID, id, dish.RecipeName)
+	dishImage := dish.RecipeCutoutImage
+	if dishImage == "" {
+		dishImage = dish.RecipeImage
+	}
+	NewNotificationService().NotifyMealDishAdded(householdID, userID, id, dish.RecipeName, dishImage)
 	GlobalCanvasHub().BroadcastMealSync(id, "dish_added", userID)
 	if countedNow {
 		GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", userID)
@@ -669,7 +673,7 @@ func (s *MealService) AddReview(householdID, userID, mealID uint, in ReviewInput
 	}); err != nil {
 		return nil, err
 	}
-	NewNotificationService().NotifyMealReviewed(householdID, userID, m.ID, in.Rating, in.Comment, len(in.Photos))
+	NewNotificationService().NotifyMealReviewed(householdID, userID, m.ID, in.Rating, in.Comment, in.Photos)
 	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "history_changed", userID)
 	return review, nil
 }

@@ -345,6 +345,87 @@ func (h *CanvasHub) BroadcastHouseholdSync(householdID uint, reason string, acto
 	}
 }
 
+// CanvasNudgeMessage 在线家庭成员画布瞬时传呼载荷（仅在家庭成员间传递，不落盘进画布文档，不发给来客）
+type CanvasNudgeMessage struct {
+	Type        string      `json:"type"`
+	EventID     uint        `json:"event_id"`
+	MealID      uint        `json:"meal_id"`
+	Actor       CanvasActor `json:"actor"`
+	Kind        string      `json:"kind"`
+	PresetKey   string      `json:"preset_key,omitempty"`
+	Title       string      `json:"title"`
+	Body        string      `json:"body"`
+	StickerCode string      `json:"sticker_code,omitempty"`
+	SoundName   string      `json:"sound_name,omitempty"`
+	DeepLink    string      `json:"deep_link,omitempty"`
+}
+
+// BroadcastHouseholdNudge 向同一家庭正在浏览画布的成员推送瞬时传呼与桌面特效（严格排除来客 Role != "host"）
+func (h *CanvasHub) BroadcastHouseholdNudge(
+	householdID uint,
+	actor CanvasActor,
+	recipientEvents map[uint]uint,
+	kind, presetKey, title, body, stickerCode, soundName, deepLink string,
+) {
+	if householdID == 0 || len(recipientEvents) == 0 {
+		return
+	}
+	h.mu.Lock()
+	rooms := make([]*canvasRoom, 0, len(h.rooms))
+	for _, r := range h.rooms {
+		rooms = append(rooms, r)
+	}
+	h.mu.Unlock()
+
+	for _, r := range rooms {
+		r.mu.Lock()
+		if r.evicted {
+			r.mu.Unlock()
+			continue
+		}
+		r.ensureHouseholdLocked()
+		if r.householdID != householdID {
+			r.mu.Unlock()
+			continue
+		}
+		mealID := r.mealID
+		byUser := make(map[uint][]*canvasClient)
+		for c := range r.clients {
+			if c.userID == actor.ID || c.snapshotActor().Role != "host" {
+				continue
+			}
+			if _, ok := recipientEvents[c.userID]; !ok {
+				continue
+			}
+			byUser[c.userID] = append(byUser[c.userID], c)
+		}
+		r.mu.Unlock()
+
+		for uid, clients := range byUser {
+			if len(clients) == 0 {
+				continue
+			}
+			msg, err := json.Marshal(CanvasNudgeMessage{
+				Type:        "canvas_nudge",
+				EventID:     recipientEvents[uid],
+				MealID:      mealID,
+				Actor:       actor,
+				Kind:        kind,
+				PresetKey:   presetKey,
+				Title:       title,
+				Body:        body,
+				StickerCode: stickerCode,
+				SoundName:   soundName,
+				DeepLink:    deepLink,
+			})
+			if err != nil {
+				continue
+			}
+			sendToClients(clients, msg)
+		}
+	}
+}
+
 // DeleteDishSticker 服务端删菜后同步从画布文档移除对应菜品贴图并广播，避免脏贴图残留或双端互删竞态
 func (h *CanvasHub) DeleteDishSticker(mealID, dishID, actorID uint) {
 	if mealID == 0 || dishID == 0 {

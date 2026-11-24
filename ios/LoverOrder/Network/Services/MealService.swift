@@ -470,6 +470,40 @@ struct CanvasMealSyncMessage: Decodable {
     }
 }
 
+struct CanvasNudgeRealtimeMessage: Decodable, Identifiable, Equatable {
+    let type: String
+    let eventId: UInt
+    let mealId: UInt
+    let actor: CanvasRemoteActor
+    let kind: String
+    let presetKey: String?
+    let title: String
+    let body: String
+    let stickerCode: String?
+    let soundName: String?
+    let deepLink: String?
+
+    var id: String { "\(eventId)-\(actor.id)-\(title)" }
+
+    var stickerAssetName: String? {
+        guard let raw = stickerCode?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        return raw.hasPrefix("StickerEmoji_") ? raw : "StickerEmoji_\(raw)"
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case eventId = "event_id"
+        case mealId = "meal_id"
+        case actor, kind, title, body
+        case presetKey = "preset_key"
+        case stickerCode = "sticker_code"
+        case soundName = "sound_name"
+        case deepLink = "deep_link"
+    }
+}
+
 private struct CanvasWSEnvelopeType: Decodable {
     let type: String
     let message: String?
@@ -538,6 +572,7 @@ final class CanvasRealtimeSession: ObservableObject {
     var onSnapshot: ((CanvasSnapshotBroadcastMessage) -> Void)?
     var onOpApplied: ((CanvasAppliedOpMessage) -> Void)?
     var onMealSync: ((CanvasMealSyncMessage) -> Void)?
+    var onCanvasNudge: ((CanvasNudgeRealtimeMessage) -> Void)?
     var onNetworkRecovered: (() -> Void)?
     var onConnectionLost: (() -> Void)?
     var onLegacyOpFallback: (() -> Void)?
@@ -1071,6 +1106,13 @@ final class CanvasRealtimeSession: ObservableObject {
                 onMealSync?(msg)
             } catch {
                 print("[CanvasWS] decode meal_sync failed: \(error)")
+            }
+        case "canvas_nudge":
+            do {
+                let msg = try decoder.decode(CanvasNudgeRealtimeMessage.self, from: data)
+                onCanvasNudge?(msg)
+            } catch {
+                print("[CanvasWS] decode canvas_nudge failed: \(error)")
             }
         case "error":
             if let message = env.message, !message.isEmpty {

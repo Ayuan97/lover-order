@@ -93,3 +93,37 @@ func (h *NotificationHandler) SendTest(c *gin.Context) {
 	}
 	OK(c, ev)
 }
+
+// Nudge 向家里同伴发送阶段化餐桌传呼/提醒（仅家庭日常成员间互发）
+func (h *NotificationHandler) Nudge(c *gin.Context) {
+	uid, _ := middleware.CurrentUserID(c)
+	var in service.NudgeInput
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&in); err != nil {
+			Fail(c, CodeBadRequest, "参数有误")
+			return
+		}
+	}
+	res, err := h.svc.SendNudge(uid, in)
+	if err != nil {
+		Fail(c, CodeBadRequest, err.Error())
+		return
+	}
+	OK(c, res)
+}
+
+// Reply 一键轻回应通知或传呼（如锁屏下拉快捷按钮与站内回戳）
+func (h *NotificationHandler) Reply(c *gin.Context) {
+	uid, _ := middleware.CurrentUserID(c)
+	var in service.NudgeReplyInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		Fail(c, CodeBadRequest, "参数有误")
+		return
+	}
+	res, err := h.svc.SendNudgeReply(uid, in)
+	if err != nil {
+		Fail(c, CodeBadRequest, err.Error())
+		return
+	}
+	OK(c, res)
+}

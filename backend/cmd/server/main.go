@@ -157,6 +157,8 @@ func registerRoutes(r *gin.Engine, ossClient *oss.Client) {
 				notifications.GET("", notificationH.List)
 				notifications.POST("/read", notificationH.MarkRead)
 				notifications.POST("/test", notificationH.SendTest)
+				notifications.POST("/nudge", notificationH.Nudge)
+				notifications.POST("/reply", notificationH.Reply)
 			}
 
 			dining := secured.Group("/dining")

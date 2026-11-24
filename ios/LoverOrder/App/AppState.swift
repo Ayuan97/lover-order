@@ -80,9 +80,15 @@ final class AppState: ObservableObject {
         let code: String
     }
 
+    struct DeepLinkedShoppingMeal: Identifiable {
+        let id = UUID()
+        let mealId: UInt
+    }
+
     @Published var pendingDeepLink: AppDeepLink?
     @Published var deepLinkedHistoryMeal: DeepLinkedHistoryMeal?
     @Published var deepLinkedDiningRoom: DeepLinkedDiningRoom?
+    @Published var deepLinkedShoppingMeal: DeepLinkedShoppingMeal?
     @Published var deepLinkedGuestMeal: MealSession?
     @Published var pendingJoinHomeCode: String?
     @Published var deepLinkToast: String?
@@ -155,7 +161,17 @@ final class AppState: ObservableObject {
                 return
             }
             deepLinkedDiningRoom = nil
+            deepLinkedShoppingMeal = nil
             deepLinkedHistoryMeal = DeepLinkedHistoryMeal(mealId: mealId)
+        case .shopping(let mealId):
+            guard currentUser?.hasHousehold == true || household != nil else {
+                deepLinkToast = "先创建或加入一个家，就能查看买菜清单了"
+                return
+            }
+            deepLinkedHistoryMeal = nil
+            deepLinkedDiningRoom = nil
+            switchToMealTab()
+            deepLinkedShoppingMeal = DeepLinkedShoppingMeal(mealId: mealId)
         case .room(let code):
             deepLinkedHistoryMeal = nil
             deepLinkedDiningRoom = DeepLinkedDiningRoom(code: code)
@@ -316,6 +332,7 @@ final class AppState: ObservableObject {
         pendingDeepLink = nil
         deepLinkedHistoryMeal = nil
         deepLinkedDiningRoom = nil
+        deepLinkedShoppingMeal = nil
         deepLinkedGuestMeal = nil
         pendingJoinHomeCode = nil
         unreadNotificationCount = 0

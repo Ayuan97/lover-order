@@ -350,6 +350,82 @@ final class CanvasFXController: ObservableObject {
         scheduleCleanup(until: impactAt + 0.74)
     }
 
+    /// 在线收到家庭同伴的画布传呼或回戳：顶栏波纹扩散 + 主题微粒雨（开饭铃洒暖金星芒与热气，回戳飘珊瑚小爱心）
+    func emitNudgeArrival(kind: String, presetKey: String?, in size: CGSize) {
+        guard !UIAccessibility.isReduceMotionEnabled, size.width > 0, size.height > 0 else { return }
+        let now = Date.timeIntervalSinceReferenceDate
+        let anchor = CGPoint(x: size.width * 0.5, y: min(max(132, size.height * 0.18), 186))
+        let isReply = (kind == "meal_nudge_reply")
+        let isDinnerBell = (presetKey == "dinner_ready" || presetKey == "washing_hands")
+
+        let palette: [Color]
+        if isDinnerBell {
+            palette = [
+                Color(red: 1.00, green: 0.84, blue: 0.42),
+                Color(red: 1.00, green: 0.95, blue: 0.78),
+                Color(red: 0.98, green: 0.64, blue: 0.40),
+                .white
+            ]
+        } else if isReply {
+            palette = [
+                Color(red: 0.98, green: 0.48, blue: 0.58),
+                Color(red: 1.00, green: 0.78, blue: 0.84),
+                Color(red: 1.00, green: 0.88, blue: 0.56),
+                .white
+            ]
+        } else {
+            palette = [
+                Color(red: 0.64, green: 0.90, blue: 1.00),
+                Color(red: 1.00, green: 0.86, blue: 0.52),
+                Color(red: 0.98, green: 0.62, blue: 0.76),
+                .white
+            ]
+        }
+
+        appendRing(FXRing(
+            bornAt: now, life: 0.68, origin: anchor,
+            startRadius: 20, endRadius: min(size.width * 0.46, 170), lineWidth: 2.2,
+            color: palette[0], isDashed: false
+        ))
+        appendRing(FXRing(
+            bornAt: now + 0.10, life: 0.62, origin: anchor,
+            startRadius: 14, endRadius: min(size.width * 0.34, 128), lineWidth: 1.6,
+            color: palette[1], isDashed: isDinnerBell
+        ))
+
+        let count = isDinnerBell ? 24 : 18
+        for idx in 0..<count {
+            let spread = CGFloat.random(in: -size.width * 0.38 ... size.width * 0.38)
+            let origin = CGPoint(x: anchor.x + spread * 0.55, y: anchor.y + CGFloat.random(in: -12...14))
+            let shape: ParticleShape
+            if isReply {
+                shape = idx % 3 == 0 ? .star : .heart
+            } else if isDinnerBell {
+                shape = idx % 4 == 0 ? .diamond : (idx % 3 == 0 ? .wisp : .star)
+            } else {
+                shape = idx.isMultiple(of: 2) ? .star : (idx % 3 == 0 ? .heart : .dot)
+            }
+            appendParticle(FXParticle(
+                bornAt: now + Double(idx) * 0.016,
+                life: Double.random(in: 0.66...1.05),
+                origin: origin,
+                velocity: CGVector(
+                    dx: spread * 0.65 + CGFloat.random(in: -38...38),
+                    dy: isReply ? CGFloat.random(in: -88 ... -24) : CGFloat.random(in: 22...138)
+                ),
+                gravity: isReply ? 34 : 68,
+                drag: 1.6,
+                size: CGFloat.random(in: 7.0...13.5),
+                rotation: Double.random(in: -35...35),
+                spin: Double.random(in: -140...140),
+                color: palette[idx % palette.count],
+                shape: shape
+            ))
+        }
+
+        scheduleCleanup(until: now + 1.45)
+    }
+
     /// 应用贴纸样式/动效特效：聚焦高光圈 + 四散微星
     func emitEffectApplied(at normalized: CanvasPoint, in size: CGSize, accent: Color) {
         guard !UIAccessibility.isReduceMotionEnabled else { return }

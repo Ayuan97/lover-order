@@ -76,7 +76,7 @@ struct HistoryDetailView: View {
         }
         .sheet(isPresented: $showShoppingList) {
             if let mid = meal?.id {
-                ShoppingListView(mealId: mid)
+                ShoppingListView(mealId: mid, allowNudgePartner: false)
             }
         }
         .sheet(isPresented: $showSharePoster) {

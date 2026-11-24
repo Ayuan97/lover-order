@@ -48,9 +48,9 @@
 
 依据：[当前首页组成与未挂载片段](../../ios/LoverOrder/Features/Meal/MealNowView.swift)、[首页模型与推荐查询](../../ios/LoverOrder/Features/Meal/MealNowViewModel.swift)、[菜谱页及装饰组件](../../ios/LoverOrder/Features/Menu/MenuView.swift)。
 
-## 7. 远端系统推送待生产 `.p8` 密钥启用，当前由通知流与本地横幅兜底
+## 7. 远端系统推送待生产 `.p8` 密钥启用，当前由通知流、WebSocket 传呼与本地富媒体横幅兜底
 
-后端已落库 `device_tokens` 与 `notification_events`，并在加菜、定餐、完成、评价、来客点菜与成员入伙事件发生时异步写入通知并尝试发送 APNs HTTP/2 请求；iOS 端已配置 `aps-environment` 并注册 `lo://` 深链路由。`backend/config.yaml` 默认 `apns.enabled: false`，未配置 Apple Push `.p8` 私钥与签名证书前仅记录干跑日志，系统横幅由客户端活跃期拉取 `/api/v1/notifications` 后本地触发及“演示提醒”/饭点定时本地通知承担；离线真后台远端静默唤醒推送需在真机签名后填入 `.p8` 参数启用。
+后端已落库 `device_tokens` 与 `notification_events`，支持加菜（45 秒连加合并）、定餐、完成、评价、来客点菜、成员入伙以及家庭日常成员间的阶段化主动提醒（`POST /api/v1/notifications/nudge`）与快捷轻回应（`POST /api/v1/notifications/reply`），并在双方在线浏览画布时经 WebSocket `canvas_nudge` 秒级推送桌面粒子/音效互动；iOS 端已配置 `aps-environment`、内置 3 款 `.caf` 定制提示音、交互式横幅快捷动作与 `lo://` 深链路由（含 `lo://shopping/` 直达买菜清单）。`backend/config.yaml` 默认 `apns.enabled: false`，未配置 Apple Push `.p8` 私钥前仅记录干跑日志，系统横幅（含菜品抠图/水粉贴纸缩略图附件）由客户端活跃期拉取 `/api/v1/notifications` 后本地触发及智能饭点定时通知承担；离线真后台远端静默唤醒需在真机签名后填入 `.p8` 参数启用（若需锁屏远端 APNs 直接下载远程图片附件，后续可按需扩展 Notification Service Extension，内置 `.caf` 音效与快捷回应类别在启用 `.p8` 后直接生效）。
 
 依据：[APNs 配置与路由](../../backend/internal/config/config.go)、[通知推送服务](../../backend/internal/service/notification_service.go)、[通知管理器与深链](../../ios/LoverOrder/App/AppNotifications.swift)、[应用权限描述](../../ios/LoverOrder/Resources/LoverOrder.entitlements)。
 
