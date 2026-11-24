@@ -95,6 +95,7 @@ struct ProfileView: View {
             .onChange(of: appState.activeTab) { _, tab in
                 guard tab == 3 else { return }
                 Task {
+                    await NotificationManager.shared.markHouseholdEventsRead()
                     _ = await appState.refreshProfile()
                     await appState.refreshHousehold()
                     await loadStats()
@@ -921,6 +922,18 @@ private struct NotificationCenterSheet: View {
     @State private var tab: SectionTab = .feed
     @State private var isSendingTest = false
     @State private var tipMessage: String?
+    @State private var sessionFreshIds: Set<UInt> = []
+
+    private func markFeedViewedIfNeeded() async {
+        guard tab == .feed else { return }
+        let currentUnread = manager.events.filter { !$0.isRead }.map(\.id)
+        if !currentUnread.isEmpty {
+            sessionFreshIds.formUnion(currentUnread)
+        }
+        if manager.unreadCount > 0 || !currentUnread.isEmpty {
+            await manager.markAllRead()
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -949,6 +962,7 @@ private struct NotificationCenterSheet: View {
                 .refreshable {
                     await manager.refreshAuthorizationStatus()
                     await manager.syncServerNotifications(allowLocalBanner: false)
+                    await markFeedViewedIfNeeded()
                 }
             }
             .background(Color.appBackground.ignoresSafeArea())
@@ -958,21 +972,25 @@ private struct NotificationCenterSheet: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button("关闭") { dismiss() }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    if tab == .feed && manager.unreadCount > 0 {
-                        Button("全部已读") {
-                            Task {
-                                await manager.markAllRead()
-                                Haptics.light()
-                            }
-                        }
-                        .font(.system(size: 13.5, weight: .semibold, design: .rounded))
-                    }
+            }
+            .onAppear {
+                let currentUnread = manager.events.filter { !$0.isRead }.map(\.id)
+                if !currentUnread.isEmpty {
+                    sessionFreshIds.formUnion(currentUnread)
+                }
+                if tab == .feed, manager.unreadCount > 0 {
+                    Task { await manager.markAllRead() }
+                }
+            }
+            .onChange(of: tab) { _, nextTab in
+                if nextTab == .feed {
+                    Task { await markFeedViewedIfNeeded() }
                 }
             }
             .task {
                 await manager.refreshAuthorizationStatus()
                 await manager.syncServerNotifications(allowLocalBanner: false)
+                await markFeedViewedIfNeeded()
             }
             .tipToast($tipMessage)
         }
@@ -1046,14 +1064,15 @@ private struct NotificationCenterSheet: View {
     }
 
     private func eventRow(_ event: AppNotificationEvent) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        let isFreshInThisVisit = !event.isRead || sessionFreshIds.contains(event.id)
+        return HStack(alignment: .top, spacing: 12) {
             ZStack {
                 Circle()
-                    .fill(event.isRead ? Color.appBackground : Color.actionInk)
+                    .fill(isFreshInThisVisit ? Color.actionInk : Color.appBackground)
                     .frame(width: 38, height: 38)
                 Image(systemName: event.iconName)
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(event.isRead ? Color.inkSecondary : .white)
+                    .foregroundStyle(isFreshInThisVisit ? .white : Color.inkSecondary)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -1062,10 +1081,13 @@ private struct NotificationCenterSheet: View {
                         .font(AppFont.headline(14.5))
                         .foregroundStyle(Color.inkPrimary)
                         .lineLimit(1)
-                    if !event.isRead {
-                        Circle()
-                            .fill(Color(red: 0.90, green: 0.30, blue: 0.25))
-                            .frame(width: 7, height: 7)
+                    if isFreshInThisVisit {
+                        Text("新")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1.5)
+                            .background(Color(red: 0.90, green: 0.30, blue: 0.25), in: Capsule())
                     }
                     Spacer(minLength: 4)
                     if let created = event.createdAt {
@@ -1092,8 +1114,8 @@ private struct NotificationCenterSheet: View {
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .strokeBorder(
-                    event.isRead ? Color.dividerLine.opacity(0.6) : Color.actionInk.opacity(0.20),
-                    lineWidth: event.isRead ? 0.7 : 1.0
+                    isFreshInThisVisit ? Color.actionInk.opacity(0.20) : Color.dividerLine.opacity(0.6),
+                    lineWidth: isFreshInThisVisit ? 1.0 : 0.7
                 )
         }
     }

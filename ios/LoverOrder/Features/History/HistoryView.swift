@@ -32,12 +32,22 @@ struct HistoryView: View {
                 .padding(.bottom, 92)
             }
             .background(Color.appBackground.ignoresSafeArea())
-            .refreshable { await vm.load(filter: filter) }
-            .task { await vm.load(filter: filter) }
+            .refreshable {
+                await Task { @MainActor in
+                    await vm.load(filter: filter)
+                }.value
+            }
+            .task {
+                await NotificationManager.shared.markHistoryEventsRead()
+                await vm.load(filter: filter)
+            }
             .onChange(of: filter) { _, value in Task { await vm.load(filter: value) } }
             .onChange(of: appState.activeTab) { _, tab in
                 guard tab == 2 else { return }
-                Task { await vm.load(filter: filter) }
+                Task {
+                    await NotificationManager.shared.markHistoryEventsRead()
+                    await vm.load(filter: filter)
+                }
             }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active, appState.activeTab == 2 else { return }
@@ -411,8 +421,11 @@ final class HistoryViewModel: ObservableObject {
                 }
             }
         } catch {
-            guard loadID == listLoadID else { return }
-            loadFailed = true; errorMessage = error.localizedDescription
+            guard loadID == listLoadID, !error.isCancellationError, !Task.isCancelled else { return }
+            if meals.isEmpty {
+                loadFailed = true
+            }
+            errorMessage = error.localizedDescription
         }
     }
 

@@ -1,3 +1,5 @@
+import CryptoKit
+import ImageIO
 import SwiftUI
 import UIKit
 
@@ -96,6 +98,9 @@ struct MealNowView: View {
                                 mood: appState.currentMood,
                                 selfUserId: appState.currentUser?.id
                             )
+                            if reason == "dish_missing" {
+                                AppNotifications.reconcileCanvasDishes()
+                            }
                             await checkDining()
                             if reason == "completed" {
                                 AppNotifications.historyChanged()
@@ -114,6 +119,9 @@ struct MealNowView: View {
                     appState.currentScene = .household
                 }
                 await vm.load(scene: householdScene, mood: appState.currentMood)
+                if scenePhase == .active && appState.activeTab == 0 {
+                    NotificationManager.shared.setActiveViewedMeal(vm.meal?.id)
+                }
             }
             .task {
                 await checkDining()
@@ -145,6 +153,9 @@ struct MealNowView: View {
                 Task { await vm.refreshIdeas(scene: householdScene, mood: appState.currentMood) }
             }
             .onChange(of: scenePhase) { _, phase in
+                NotificationManager.shared.setActiveViewedMeal(
+                    (phase == .active && appState.activeTab == 0) ? vm.meal?.id : nil
+                )
                 guard phase == .active else { return }
                 Task {
                     await vm.syncMeal(
@@ -156,6 +167,9 @@ struct MealNowView: View {
                 }
             }
             .onChange(of: appState.activeTab) { _, tab in
+                NotificationManager.shared.setActiveViewedMeal(
+                    (scenePhase == .active && tab == 0) ? vm.meal?.id : nil
+                )
                 guard tab == 0 else { return }
                 Task {
                     await vm.syncMeal(
@@ -164,6 +178,11 @@ struct MealNowView: View {
                         selfUserId: appState.currentUser?.id
                     )
                     await checkDining()
+                }
+            }
+            .onChange(of: vm.meal?.id) { _, newMealId in
+                if scenePhase == .active && appState.activeTab == 0 {
+                    NotificationManager.shared.setActiveViewedMeal(newMealId)
                 }
             }
             .navigationBarHidden(true)
@@ -1214,50 +1233,169 @@ private struct CookingProgressView: View {
     }
 }
 
-// 共享内存图片缓存：避免 LazyVGrid / 画布切换重复下载并解决原生 AsyncImage 在按钮网格里偶发空白的问题
+// 双层图片缓存（内存 NSCache + 本地磁盘持久化 + ImageIO 后台降采样解码）：
+// 彻底解决头像与菜谱封面每次冷启动/切页重下、大图撑爆内存导致缓存频繁失效的问题。
 @MainActor
 final class RemoteImageCache {
     static let shared = RemoteImageCache()
 
-    private let cache = NSCache<NSURL, UIImage>()
-    private var inFlight: [URL: Task<UIImage?, Never>] = [:]
+    private let cache = NSCache<NSString, UIImage>()
+    private var inFlight: [String: Task<UIImage?, Never>] = [:]
+    private let diskDirectory: URL
+    private nonisolated static let maxDecodePixelSize: CGFloat = 1440
 
     private init() {
-        cache.countLimit = 120
+        cache.countLimit = 260
+        cache.totalCostLimit = 120 * 1024 * 1024
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        let dir = base.appendingPathComponent("LoverOrderImageCache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        diskDirectory = dir
+    }
+
+    private nonisolated static func cacheKey(for url: URL) -> String {
+        if url.path.hasPrefix("/static/uploads/") {
+            let suffix = url.path.dropFirst("/static/uploads/".count)
+            return "/uploads/\(suffix)"
+        }
+        if url.path.hasPrefix("/uploads/") {
+            return url.path
+        }
+        return url.absoluteString
+    }
+
+    private nonisolated static func diskFileURL(in directory: URL, key: String) -> URL {
+        let digest = SHA256.hash(data: Data(key.utf8))
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return directory.appendingPathComponent(hex, isDirectory: false)
+    }
+
+    private nonisolated static func decodeDownsampledImage(from data: Data, maxPixelSize: CGFloat = maxDecodePixelSize) -> UIImage? {
+        let sourceOptions: [CFString: Any] = [kCGImageSourceShouldCache: false]
+        if let source = CGImageSourceCreateWithData(data as CFData, sourceOptions as CFDictionary) {
+            let thumbOptions: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+            ]
+            if let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbOptions as CFDictionary) {
+                return UIImage(cgImage: cgImage)
+            }
+        }
+        return UIImage(data: data)
+    }
+
+    private nonisolated static func memoryCost(of image: UIImage) -> Int {
+        if let cg = image.cgImage {
+            return cg.bytesPerRow * cg.height
+        }
+        let w = Int(image.size.width * image.scale)
+        let h = Int(image.size.height * image.scale)
+        return max(1, w * h * 4)
     }
 
     func cachedImage(for url: URL) -> UIImage? {
-        cache.object(forKey: url as NSURL)
+        let key = Self.cacheKey(for: url)
+        if let hit = cache.object(forKey: key as NSString) {
+            return hit
+        }
+        // 小体积磁盘缓存（如头像、缩略封面）首帧同步秒读入内存，避免冷启动闪回首字占位
+        let fileURL = Self.diskFileURL(in: diskDirectory, key: key)
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+           let fileSize = attrs[.size] as? Int,
+           fileSize > 0, fileSize <= 900_000,
+           let data = try? Data(contentsOf: fileURL),
+           let decoded = Self.decodeDownsampledImage(from: data) {
+            cache.setObject(decoded, forKey: key as NSString, cost: Self.memoryCost(of: decoded))
+            return decoded
+        }
+        return nil
     }
 
     func store(_ image: UIImage, for url: URL) {
-        cache.setObject(image, forKey: url as NSURL)
+        let key = Self.cacheKey(for: url)
+        cache.setObject(image, forKey: key as NSString, cost: Self.memoryCost(of: image))
+    }
+
+    /// 上传图片成功后直接写入内存与磁盘缓存，后续显示零网络等待
+    func storeData(_ data: Data, forPath path: String) async {
+        guard let url = APIConfig.imageURL(path) else { return }
+        let key = Self.cacheKey(for: url)
+        let dir = diskDirectory
+        let decoded = await Task.detached(priority: .utility) { () -> UIImage? in
+            let fileURL = Self.diskFileURL(in: dir, key: key)
+            try? data.write(to: fileURL, options: .atomic)
+            return Self.decodeDownsampledImage(from: data)
+        }.value
+        if let decoded {
+            cache.setObject(decoded, forKey: key as NSString, cost: Self.memoryCost(of: decoded))
+        }
+    }
+
+    /// 批量后台预热头像或菜谱封面
+    func prefetch(paths: [String?]) {
+        let urls = Array(Set(paths.compactMap { APIConfig.imageURL($0) }))
+        guard !urls.isEmpty else { return }
+        for url in urls.prefix(24) {
+            let key = Self.cacheKey(for: url)
+            if cache.object(forKey: key as NSString) != nil || inFlight[key] != nil {
+                continue
+            }
+            Task(priority: .utility) {
+                _ = await self.load(url: url)
+            }
+        }
     }
 
     func load(url: URL) async -> UIImage? {
-        if let hit = cachedImage(for: url) { return hit }
-        if let existing = inFlight[url] {
+        let key = Self.cacheKey(for: url)
+        if let hit = cache.object(forKey: key as NSString) {
+            return hit
+        }
+        if let existing = inFlight[key] {
             return await existing.value
         }
+        let dir = diskDirectory
         let task = Task<UIImage?, Never> { [weak self] in
             defer {
-                self?.inFlight[url] = nil
+                self?.inFlight[key] = nil
             }
+            let fileURL = Self.diskFileURL(in: dir, key: key)
+            // 1. 先查本地磁盘缓存（后台线程解码）
+            if let diskImage = await Task.detached(priority: .userInitiated, operation: { () -> UIImage? in
+                guard let data = try? Data(contentsOf: fileURL), !data.isEmpty else { return nil }
+                return Self.decodeDownsampledImage(from: data)
+            }).value {
+                self?.cache.setObject(diskImage, forKey: key as NSString, cost: Self.memoryCost(of: diskImage))
+                return diskImage
+            }
+
+            // 2. 磁盘未命中再走网络下载并落盘
             do {
-                let (data, response) = try await URLSession.shared.data(from: url)
-                guard !Task.isCancelled,
-                      let http = response as? HTTPURLResponse,
+                var req = URLRequest(url: url)
+                req.cachePolicy = .returnCacheDataElseLoad
+                let (data, response) = try await URLSession.shared.data(for: req)
+                guard let http = response as? HTTPURLResponse,
                       (200..<300).contains(http.statusCode),
-                      let image = UIImage(data: data) else {
+                      !data.isEmpty else {
                     return nil
                 }
-                self?.cache.setObject(image, forKey: url as NSURL)
-                return image
+                let decoded = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+                    try? data.write(to: fileURL, options: .atomic)
+                    return Self.decodeDownsampledImage(from: data)
+                }.value
+                if let decoded {
+                    self?.cache.setObject(decoded, forKey: key as NSString, cost: Self.memoryCost(of: decoded))
+                    return decoded
+                }
             } catch {
                 return nil
             }
+            return nil
         }
-        inFlight[url] = task
+        inFlight[key] = task
         return await task.value
     }
 }

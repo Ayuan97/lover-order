@@ -350,6 +350,21 @@ func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, mealID uint, kind st
 		next.Strokes = filtered
 		return next, true, false, nil
 
+	case "clear_strokes":
+		if len(next.Strokes) == 0 {
+			return next, false, false, nil
+		}
+		next.Strokes = []json.RawMessage{}
+		return next, true, false, nil
+
+	case "clear_additions":
+		if len(next.Notes) == 0 && len(next.Strokes) == 0 {
+			return next, false, false, nil
+		}
+		next.Notes = []json.RawMessage{}
+		next.Strokes = []json.RawMessage{}
+		return next, true, false, nil
+
 	case "update_background":
 		if payload.Background != nil && strings.TrimSpace(*payload.Background) != "" {
 			next.Background = strings.TrimSpace(*payload.Background)
@@ -374,10 +389,12 @@ func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, mealID uint, kind st
 
 	case "batch_stickers_notes":
 		if payload.Stickers != nil {
-			if err := syncCanvasDishPhotos(mealID, payload.Stickers); err != nil {
+			reconciled, _, err := reconcileCanvasDishStickers(mealID, payload.Stickers)
+			if err != nil {
 				return nil, false, false, err
 			}
-			next.Stickers = cloneRawSlice(payload.Stickers)
+			payload.Stickers = reconciled
+			next.Stickers = cloneRawSlice(reconciled)
 		}
 		if payload.Notes != nil {
 			next.Notes = cloneRawSlice(payload.Notes)
@@ -385,11 +402,13 @@ func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, mealID uint, kind st
 		return next, true, false, nil
 
 	case "batch_upsert":
-		if err := syncCanvasDishPhotos(mealID, payload.Stickers); err != nil {
+		reconciled, _, err := reconcileCanvasDishStickers(mealID, payload.Stickers)
+		if err != nil {
 			return nil, false, false, err
 		}
+		payload.Stickers = reconciled
 		didChange := false
-		for _, raw := range payload.Stickers {
+		for _, raw := range reconciled {
 			var meta canvasStickerMeta
 			if json.Unmarshal(raw, &meta) != nil || strings.TrimSpace(meta.ID) == "" {
 				continue
@@ -479,9 +498,11 @@ func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, mealID uint, kind st
 			return next, false, true, nil
 		}
 		next = normalizeCanvasDoc(payload.Document)
-		if err := syncCanvasDishPhotos(mealID, next.Stickers); err != nil {
+		reconciled, _, err := reconcileCanvasDishStickers(mealID, next.Stickers)
+		if err != nil {
 			return nil, false, false, err
 		}
+		next.Stickers = reconciled
 		return next, true, false, nil
 
 	default:
@@ -496,37 +517,67 @@ func loadCanvasDish(mealID, dishID uint) (model.MealDish, error) {
 	return dish, err
 }
 
-// syncCanvasDishPhotos 用餐次菜品照片校准画布快照及批量操作携带的旧图。
-func syncCanvasDishPhotos(mealID uint, stickers []json.RawMessage) error {
+// reconcileCanvasDishStickers 移除已从餐次删除的孤儿菜贴纸、按菜品去重并校准最新菜图。
+func reconcileCanvasDishStickers(mealID uint, stickers []json.RawMessage) ([]json.RawMessage, bool, error) {
+	if len(stickers) == 0 {
+		return cloneRawSlice(stickers), false, nil
+	}
 	var dishIDs []uint
-	stickerDishes := make(map[int]uint)
-	for index, raw := range stickers {
+	for _, raw := range stickers {
 		var meta canvasStickerMeta
 		if json.Unmarshal(raw, &meta) == nil && meta.MealDishID != nil {
 			dishIDs = append(dishIDs, *meta.MealDishID)
-			stickerDishes[index] = *meta.MealDishID
 		}
 	}
 	if len(dishIDs) == 0 {
-		return nil
+		return cloneRawSlice(stickers), false, nil
 	}
 	var dishes []model.MealDish
 	if err := model.DB.Select("id", "recipe_image", "recipe_cutout_image").
 		Where("meal_session_id = ? AND id IN ?", mealID, dishIDs).Find(&dishes).Error; err != nil {
-		return err
+		return nil, false, err
 	}
 	byID := make(map[uint]model.MealDish, len(dishes))
 	for _, dish := range dishes {
 		byID[dish.ID] = dish
 	}
-	for index, dishID := range stickerDishes {
-		if dish, ok := byID[dishID]; ok {
-			if _, err := patchCanvasDishPhoto(stickers, index, dish); err != nil {
-				return err
+
+	out := make([]json.RawMessage, 0, len(stickers))
+	seenDishIdx := make(map[uint]int, len(dishes))
+	modified := false
+	for _, raw := range stickers {
+		var meta canvasStickerMeta
+		if json.Unmarshal(raw, &meta) != nil || meta.MealDishID == nil {
+			out = append(out, raw)
+			continue
+		}
+		dish, ok := byID[*meta.MealDishID]
+		if !ok {
+			modified = true
+			continue
+		}
+		if prevIdx, dup := seenDishIdx[*meta.MealDishID]; dup {
+			out[prevIdx] = raw
+			patched, err := patchCanvasDishPhoto(out, prevIdx, dish)
+			if err != nil {
+				return nil, false, err
 			}
+			modified = true
+			_ = patched
+			continue
+		}
+		out = append(out, raw)
+		curIdx := len(out) - 1
+		seenDishIdx[*meta.MealDishID] = curIdx
+		patched, err := patchCanvasDishPhoto(out, curIdx, dish)
+		if err != nil {
+			return nil, false, err
+		}
+		if patched {
+			modified = true
 		}
 	}
-	return nil
+	return out, modified, nil
 }
 
 func patchCanvasDishPhoto(stickers []json.RawMessage, index int, dish model.MealDish) (bool, error) {

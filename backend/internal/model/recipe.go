@@ -65,6 +65,7 @@ type RecipeCategory struct {
 	SortOrder   int            `json:"sort_order" gorm:"default:0;comment:排序"`
 	HouseholdID uint           `json:"household_id" gorm:"not null;index;comment:所属一个家"`
 	IsActive    bool           `json:"is_active" gorm:"default:true;comment:是否启用"`
+	RecipeCount int64          `json:"recipe_count" gorm:"-"`
 	CreatedAt   time.Time      `json:"created_at"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
@@ -145,6 +146,11 @@ func (r *Recipe) SetPhotoGallery(items []RecipePhotoItem) error {
 
 // UpsertGalleryPhoto 把一次实拍的原图与透明抠图存入图库，并同步维护 images 列表。
 func (r *Recipe) UpsertGalleryPhoto(image, cutoutImage, createdAt string) error {
+	return r.UpsertGalleryPhotoMode(image, cutoutImage, createdAt, false)
+}
+
+// UpsertGalleryPhotoMode 支持在主动自定义/清除抠图时覆盖图库内对应图片的抠图字段。
+func (r *Recipe) UpsertGalleryPhotoMode(image, cutoutImage, createdAt string, overwriteCutout bool) error {
 	img := strings.TrimSpace(image)
 	cutout := strings.TrimSpace(cutoutImage)
 	if img == "" && cutout == "" {
@@ -158,7 +164,7 @@ func (r *Recipe) UpsertGalleryPhoto(image, cutoutImage, createdAt string) error 
 	found := false
 	for i := range items {
 		if items[i].Image == img {
-			if cutout != "" {
+			if overwriteCutout || cutout != "" {
 				items[i].CutoutImage = cutout
 			}
 			if items[i].CreatedAt == "" && createdAt != "" {
@@ -291,10 +297,10 @@ func (r *Recipe) IncrViewCount() error {
 	return DB.Model(r).UpdateColumn("view_count", gorm.Expr("view_count + ?", 1)).Error
 }
 
-// MarkUsed 在一顿中被选用时调用
+// MarkUsed 在一顿中被选用时调用（仅更新统计字段，不推进 updated_at 以免误触发编辑冲突）
 func (r *Recipe) MarkUsed() error {
 	now := time.Now()
-	return DB.Model(r).Updates(map[string]any{
+	return DB.Model(r).UpdateColumns(map[string]any{
 		"use_count":    gorm.Expr("use_count + ?", 1),
 		"last_used_at": now,
 	}).Error

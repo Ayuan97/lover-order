@@ -80,8 +80,17 @@ struct AddDishView: View {
             .safeAreaInset(edge: .bottom) {
                 bottomBar
             }
+            .onAppear {
+                if recipes.isEmpty, quickSource != .favorite,
+                   let cached = MenuLocalCache.load(householdId: appState.currentUser?.householdId ?? appState.household?.id) {
+                    recipes = sort(cached.recipes)
+                    RemoteImageCache.shared.prefetch(paths: cached.recipes.map(\.coverImage))
+                }
+            }
             .task(id: quickSource) {
-                isLoading = true
+                if recipes.isEmpty {
+                    isLoading = true
+                }
                 await loadPinned()
                 guard !Task.isCancelled else { return }
                 await loadRecipes()
@@ -417,9 +426,12 @@ struct AddDishView: View {
             let result = try await RecipeService.shared.list(query)
             guard !Task.isCancelled, source == quickSource else { return }
             recipes = sort(result.items)
+            RemoteImageCache.shared.prefetch(paths: result.items.map(\.coverImage))
         } catch {
-            guard !Task.isCancelled, source == quickSource else { return }
-            errorMessage = error.localizedDescription
+            guard !Task.isCancelled, !error.isCancellationError, source == quickSource else { return }
+            if recipes.isEmpty {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

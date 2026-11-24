@@ -107,6 +107,9 @@ struct MealCanvasView: View {
     @State private var fallbackCanvasFetchTask: Task<Void, Never>?
     @State private var justInsertedStickerIDs: Set<UUID> = []
     @State private var justInsertedNoteIDs: Set<UUID> = []
+    @State private var activeTosses: [UUID: CanvasTossArrival] = [:]
+    @State private var tossSequence: Int = 0
+    @State private var recentTossPoints: [CanvasPoint] = []
     @State private var pendingDishRevealIDs: [UUID] = []
     @State private var waitingRevealStickerIDs: Set<UUID> = []
     @State private var dishRevealTask: Task<Void, Never>?
@@ -479,6 +482,8 @@ struct MealCanvasView: View {
                 transformUndoStart = nil
                 justInsertedStickerIDs.removeAll()
                 justInsertedNoteIDs.removeAll()
+                activeTosses.removeAll()
+                recentTossPoints.removeAll()
                 pendingDishRevealIDs.removeAll()
                 waitingRevealStickerIDs.removeAll()
                 dishRevealTask?.cancel()
@@ -583,6 +588,11 @@ struct MealCanvasView: View {
                 guard isLaunchStudio else { return }
                 refreshCreatorMetaAndPreviewIfNeeded()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .reconcileCanvasDishes)) { _ in
+                guard !isLaunchStudio, vm.meal != nil else { return }
+                recentlyAddedRemoteDishIDs.removeAll()
+                syncStickers(broadcast: false, preserveUnknownRemoteDishes: false)
+            }
             .onChange(of: notes.map(\.id)) { _, _ in
                 selectedElements.formIntersection(Set(layerEntries.map(\.selection)))
             }
@@ -619,7 +629,7 @@ struct MealCanvasView: View {
     private var editorDetents: Set<PresentationDetent> {
         switch activeEditor {
         case .transform: return [.height(360)]
-        case .emoji: return [.height(540), .large]
+        case .emoji: return [.height(410), .height(550), .large]
         case .brush: return [.height(540), .large]
         case .effects: return [.height(470), .large]
         case .insert: return [.height(620), .large]
@@ -639,22 +649,45 @@ struct MealCanvasView: View {
     }
 
     private var headerParticipants: [AppUser] {
+        var latestByID: [UInt: AppUser] = [:]
+        for member in appState.household?.members ?? [] {
+            latestByID[member.id] = member
+        }
+        if let me = appState.currentUser {
+            latestByID[me.id] = me
+        }
+
+        func freshest(_ user: AppUser) -> AppUser {
+            guard let latest = latestByID[user.id] else { return user }
+            var merged = latest
+            if (merged.avatar ?? "").isEmpty, let existingAvatar = user.avatar, !existingAvatar.isEmpty {
+                merged.avatar = existingAvatar
+            }
+            return merged
+        }
+
         var seen: Set<UInt> = []
         var result: [AppUser] = []
+        func appendUser(_ user: AppUser) {
+            guard result.count < 4, seen.insert(user.id).inserted else { return }
+            result.append(freshest(user))
+        }
+
         for actor in realtime.onlineUsers {
-            guard seen.insert(actor.id).inserted else { continue }
-            result.append(actor.asAppUser)
-            if result.count >= 4 { return result }
+            appendUser(actor.asAppUser)
         }
         for participant in guestParticipants {
-            guard let user = participant.user, seen.insert(user.id).inserted else { continue }
-            result.append(user)
-            if result.count >= 4 { return result }
+            if let user = participant.user {
+                appendUser(user)
+            }
         }
         for dish in vm.dishes {
-            guard let adder = dish.adder, seen.insert(adder.id).inserted else { continue }
-            result.append(adder)
-            if result.count >= 4 { return result }
+            if let adder = dish.adder {
+                appendUser(adder)
+            }
+        }
+        if !isGuestMode, result.isEmpty, let me = appState.currentUser {
+            appendUser(me)
         }
         return result
     }
@@ -1347,11 +1380,15 @@ struct MealCanvasView: View {
                         isLightSurface: background.isLightSurface,
                         isFreshArrival: justInsertedStickerIDs.contains(stickerID),
                         isPendingReveal: waitingRevealStickerIDs.contains(stickerID),
+                        tossArrival: activeTosses[stickerID],
                         canMoveForward: orderedLayers.first?.selection != .sticker(stickerID),
                         canMoveBackward: orderedLayers.last?.selection != .sticker(stickerID),
                         alignmentTargets: alignmentTargets(excluding: .sticker(stickerID)),
                         remotePreview: preview,
-                        onTransformStart: { rememberTransform($0, for: .sticker(stickerID)) },
+                        onTransformStart: {
+                            activeTosses.removeValue(forKey: stickerID)
+                            rememberTransform($0, for: .sticker(stickerID))
+                        },
                         onSelect: {
                             if selectedStickerID != stickerID { Haptics.light() }
                             withAnimation(.spring(response: 0.30, dampingFraction: 0.76)) {
@@ -1420,11 +1457,15 @@ struct MealCanvasView: View {
                         reportsBounds: isSelecting,
                         isLightSurface: background.isLightSurface,
                         isFreshArrival: justInsertedNoteIDs.contains(noteID),
+                        tossArrival: activeTosses[noteID],
                         canMoveForward: orderedLayers.first?.selection != .note(noteID),
                         canMoveBackward: orderedLayers.last?.selection != .note(noteID),
                         alignmentTargets: alignmentTargets(excluding: .note(noteID)),
                         remotePreview: preview,
-                        onTransformStart: { rememberTransform($0, for: .note(noteID)) },
+                        onTransformStart: {
+                            activeTosses.removeValue(forKey: noteID)
+                            rememberTransform($0, for: .note(noteID))
+                        },
                         onSelect: {
                             if selectedNoteID != noteID { Haptics.light() }
                             withAnimation(.spring(response: 0.30, dampingFraction: 0.76)) {
@@ -3385,18 +3426,24 @@ struct MealCanvasView: View {
         let existingNoteIDs = Set(current.notes.map(\.id))
         let insertedStickers = stickerChanges.upserts.filter { !existingStickerIDs.contains($0.id) }
         let insertedNotes = noteChanges.upserts.filter { !existingNoteIDs.contains($0.id) }
-        if !insertedStickers.isEmpty || !insertedNotes.isEmpty {
-            broadcastOp("batch_upsert", payload: .batchUpsert(
-                stickers: insertedStickers.isEmpty ? nil : insertedStickers,
-                notes: insertedNotes.isEmpty ? nil : insertedNotes
-            ))
-        }
-        broadcastElementEdits(since: current)
-        if !stickerChanges.removals.isEmpty || !noteChanges.removals.isEmpty {
-            broadcastOp("batch_delete", payload: .batchDelete(
-                stickerIds: stickerChanges.removals.isEmpty ? nil : stickerChanges.removals,
-                noteIds: noteChanges.removals.isEmpty ? nil : noteChanges.removals
-            ))
+        if realtime.usesLegacyCanvasOps {
+            if next.stickers != current.stickers || next.notes != current.notes {
+                broadcastOp("batch_stickers_notes", payload: .batch(stickers: stickers, notes: notes))
+            }
+        } else {
+            if !insertedStickers.isEmpty || !insertedNotes.isEmpty {
+                broadcastOp("batch_upsert", payload: .batchUpsert(
+                    stickers: insertedStickers.isEmpty ? nil : insertedStickers,
+                    notes: insertedNotes.isEmpty ? nil : insertedNotes
+                ))
+            }
+            broadcastElementEdits(since: current)
+            if !stickerChanges.removals.isEmpty || !noteChanges.removals.isEmpty {
+                broadcastOp("batch_delete", payload: .batchDelete(
+                    stickerIds: stickerChanges.removals.isEmpty ? nil : stickerChanges.removals,
+                    noteIds: noteChanges.removals.isEmpty ? nil : noteChanges.removals
+                ))
+            }
         }
         for stroke in strokeChanges.upserts {
             broadcastOp("add_stroke", payload: .addStroke(stroke))
@@ -3545,9 +3592,21 @@ struct MealCanvasView: View {
                 Haptics.soft()
                 return
             }
-            guard !isRemovingDish,
-                  let dish = vm.dishes.first(where: { $0.id == sticker.mealDishID }) else { return }
+            guard !isRemovingDish, let targetDishID = sticker.mealDishID else { return }
             let removedPos = sticker.position
+            guard let dish = vm.dishes.first(where: { $0.id == targetDishID }) else {
+                // 菜单中已不存在的残留孤儿菜贴纸：直接从画布移除并同步，不再静默无反应
+                recentlyAddedRemoteDishIDs.removeValue(forKey: targetDishID)
+                stickers.removeAll { $0.id == id || $0.mealDishID == targetDishID }
+                selectedStickerID = nil
+                closeEditor()
+                saveDocument()
+                broadcastOp("delete_sticker", payload: .deleteSticker(id: id, mealDishID: targetDishID))
+                fx.emitDeletePoof(at: removedPos, in: canvasFrame.size)
+                CanvasSoundEngine.shared.playDeletePoof()
+                Haptics.soft()
+                return
+            }
             isRemovingDish = true
             Task {
                 defer { isRemovingDish = false }
@@ -3559,6 +3618,7 @@ struct MealCanvasView: View {
                     deleted = !vm.dishes.contains(where: { $0.id == dish.id })
                 }
                 if deleted {
+                    recentlyAddedRemoteDishIDs.removeValue(forKey: dish.id)
                     syncStickers(broadcast: false)
                     broadcastOp("delete_sticker", payload: .deleteSticker(id: id, mealDishID: dish.id))
                     fx.emitDeletePoof(at: removedPos, in: canvasFrame.size)
@@ -3773,28 +3833,143 @@ struct MealCanvasView: View {
             + notes.filter { .note($0.id) != selection }.map(\.position)
     }
 
-    private func insertionPosition(isEmoji: Bool) -> CanvasPoint {
-        let width = max(canvasFrame.width, 1)
-        let height = max(canvasFrame.height, 1)
-        let preferred = CanvasPoint(x: isEmoji ? 0.78 : 0.5, y: isEmoji ? 0.68 : 0.16)
+    private enum CanvasTossKind {
+        case text
+        case emoji
+        case doodle
+        case photoSticker
+
+        var seedOffset: Int {
+            switch self {
+            case .text: return 0
+            case .emoji: return 2
+            case .doodle: return 5
+            case .photoSticker: return 7
+            }
+        }
+    }
+
+    /// 计算每次随手“丢到画布上”的散落位置、自然落定倾角与抛物线入场轨迹，避免元素统一堆在画布下方。
+    private func nextTossPlacement(for kind: CanvasTossKind, doodleKind: CanvasDoodleKind? = nil) -> (position: CanvasPoint, rotation: Double, arrival: CanvasTossArrival) {
+        let width = max(canvasFrame.width, 320)
+        let height = max(canvasFrame.height, 480)
         let baseSize = max(110, min(width, height) * 0.37)
         let occupied = stickers.map {
-            (point: $0.position, radius: baseSize * 0.56 * min(max($0.scale, 0.3), 3))
+            (point: $0.position, radius: baseSize * 0.50 * min(max($0.scale, 0.3), 3))
         } + notes.map {
-            (point: $0.position, radius: ($0.isEmoji ? 42.0 : 80.0) * min(max($0.scale, 0.3), 3))
+            (point: $0.position, radius: ($0.isEmoji ? 38.0 : ($0.isDoodle ? 44.0 : 72.0)) * min(max($0.scale, 0.3), 3))
         }
-        let columns: [CGFloat] = isEmoji ? [0.22, 0.5, 0.78] : [0.5]
-        let candidates = [preferred] + [CGFloat(0.16), 0.32, 0.48, 0.64, 0.78].flatMap { y in
-            columns.map { CanvasPoint(x: $0, y: y) }
+
+        let xRange: ClosedRange<CGFloat> = kind == .text ? (0.24...0.76) : (0.18...0.82)
+        let keepAboveHalfSheet = isEditing && activeEditor == .emoji && kind != .text
+        let yMin: CGFloat = 0.19
+        let yMax: CGFloat = keepAboveHalfSheet
+            ? (occupied.count >= 6 ? 0.58 : 0.50)
+            : 0.63
+        let ySpan = max(0.18, yMax - yMin)
+
+        // 9 个错落扇区覆盖左上、中右、正上、左中、中心、右上、左腹、右腹、中腹，配合随机扰动不再走固定网格或扎堆底部
+        let zoneAnchors: [CanvasPoint] = [
+            CanvasPoint(x: 0.28, y: yMin + ySpan * 0.22),
+            CanvasPoint(x: 0.72, y: yMin + ySpan * 0.48),
+            CanvasPoint(x: 0.49, y: yMin + ySpan * 0.16),
+            CanvasPoint(x: 0.25, y: yMin + ySpan * 0.68),
+            CanvasPoint(x: 0.70, y: yMin + ySpan * 0.20),
+            CanvasPoint(x: 0.52, y: yMin + ySpan * 0.50),
+            CanvasPoint(x: 0.31, y: yMin + ySpan * 0.42),
+            CanvasPoint(x: 0.74, y: yMin + ySpan * 0.76),
+            CanvasPoint(x: 0.46, y: yMin + ySpan * 0.78)
+        ]
+
+        tossSequence &+= 1
+        let focus = zoneAnchors[abs(tossSequence + kind.seedOffset) % zoneAnchors.count]
+
+        var candidates: [CanvasPoint] = zoneAnchors.map { anchor in
+            CanvasPoint(
+                x: min(max(anchor.x + CGFloat.random(in: -0.055...0.055), xRange.lowerBound), xRange.upperBound),
+                y: min(max(anchor.y + CGFloat.random(in: -0.045...0.045), yMin), yMax)
+            )
         }
+        for _ in 0..<18 {
+            candidates.append(CanvasPoint(
+                x: CGFloat.random(in: xRange),
+                y: CGFloat.random(in: yMin...yMax)
+            ))
+        }
+
         func score(_ point: CanvasPoint) -> CGFloat {
-            let clearance = occupied.map {
+            let rawClearance = occupied.map {
                 hypot((point.x - $0.point.x) * width, (point.y - $0.point.y) * height) - $0.radius
-            }.min() ?? 0
-            let distance = hypot((point.x - preferred.x) * width, (point.y - preferred.y) * height)
-            return clearance - distance * 0.15
+            }.min() ?? 90
+            // 净空达到 72pt 即视为不遮挡并封顶，彻底消除“为了追求最大间距全部逃向画布最底部”的偏置
+            let clearanceScore: CGFloat = rawClearance < 0 ? rawClearance * 2.2 : min(rawClearance, 72)
+
+            var repeatPenalty: CGFloat = 0
+            for (idx, recent) in recentTossPoints.enumerated() {
+                let d = hypot((point.x - recent.x) * width, (point.y - recent.y) * height)
+                let minSep: CGFloat = idx == 0 ? 135 : 88
+                if d < minSep {
+                    repeatPenalty += (minSep - d) * (idx == 0 ? 1.8 : 0.85)
+                }
+            }
+
+            let focusDistance = hypot((point.x - focus.x) * width, (point.y - focus.y) * height)
+            return clearanceScore - repeatPenalty - focusDistance * 0.32
         }
-        return candidates.max { score($0) < score($1) } ?? preferred
+
+        let chosen = candidates.max { score($0) < score($1) } ?? focus
+        rememberTossPoint(chosen)
+
+        let restingRotation: Double
+        switch kind {
+        case .text:
+            restingRotation = Double.random(in: -4.2...4.2)
+        case .emoji:
+            restingRotation = Double.random(in: -11.5...11.5)
+        case .doodle:
+            restingRotation = doodleKind == .washiTape
+                ? Double.random(in: -17.0 ... -7.0)
+                : Double.random(in: -10.5...10.5)
+        case .photoSticker:
+            restingRotation = Double.random(in: -9.5...9.5)
+        }
+
+        let flight: TimeInterval = (kind == .photoSticker) ? 0.20 : 0.19
+        let arrival = CanvasTossArrival.make(
+            target: chosen,
+            in: canvasFrame.size,
+            sequence: tossSequence,
+            flightDuration: flight
+        )
+        return (chosen, restingRotation, arrival)
+    }
+
+    private func rememberTossPoint(_ point: CanvasPoint) {
+        recentTossPoints.insert(point, at: 0)
+        if recentTossPoints.count > 5 {
+            recentTossPoints.removeLast(recentTossPoints.count - 5)
+        }
+    }
+
+    private func registerTossArrival(_ arrival: CanvasTossArrival, for id: UUID, heavyLanding: Bool = false) {
+        guard !reduceMotion else { return }
+        activeTosses[id] = arrival
+        let flight = arrival.flightDuration
+        let total = arrival.totalDuration + 0.05
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(flight))
+            if activeTosses[id]?.bornAt == arrival.bornAt {
+                if heavyLanding {
+                    Haptics.rigid()
+                } else {
+                    Haptics.medium()
+                }
+            }
+            try? await Task.sleep(for: .seconds(max(0.05, total - flight)))
+            if activeTosses[id]?.bornAt == arrival.bornAt {
+                activeTosses.removeValue(forKey: id)
+            }
+        }
     }
 
     private func clearCanvasAdditions() {
@@ -3807,9 +3982,13 @@ struct MealCanvasView: View {
         activeStroke.removeAll()
         selectedNoteID = nil
         saveDocument()
-        broadcastOp("batch_delete", payload: .batchDelete(
-            noteIds: undoBefore.notes.map(\.id), strokeIds: undoBefore.strokes.map(\.id)
-        ))
+        if realtime.usesLegacyCanvasOps {
+            broadcastOp("clear_additions", payload: CanvasOpPayload())
+        } else {
+            broadcastOp("batch_delete", payload: .batchDelete(
+                noteIds: undoBefore.notes.map(\.id), strokeIds: undoBefore.strokes.map(\.id)
+            ))
+        }
     }
 
     private func undoStroke() {
@@ -3838,7 +4017,11 @@ struct MealCanvasView: View {
         strokeRedoStack.removeAll()
         activeStroke.removeAll()
         saveDocument()
-        broadcastOp("batch_delete", payload: .batchDelete(strokeIds: undoBefore.strokes.map(\.id)))
+        if realtime.usesLegacyCanvasOps {
+            broadcastOp("clear_strokes", payload: CanvasOpPayload())
+        } else {
+            broadcastOp("batch_delete", payload: .batchDelete(strokeIds: undoBefore.strokes.map(\.id)))
+        }
         CanvasSoundEngine.shared.playDeletePoof()
         Haptics.light()
     }
@@ -3917,11 +4100,13 @@ struct MealCanvasView: View {
     private func insertText(_ text: String) {
         let undoBefore = currentCanvasSnapshot()
         defer { recordUndoAction(from: undoBefore) }
+        let toss = nextTossPlacement(for: .text)
         let note = CanvasNote(
             text: text,
             isEmoji: false,
-            position: insertionPosition(isEmoji: false),
+            position: toss.position,
             scale: draftScale,
+            rotationDegrees: toss.rotation,
             layer: nextLayerIndex,
             textEffect: draftTextEffect,
             font: draftFont,
@@ -3930,12 +4115,13 @@ struct MealCanvasView: View {
         )
         notes.append(note)
         markFreshNoteArrival(note.id)
+        registerTossArrival(toss.arrival, for: note.id)
         selectedStickerID = nil
         selectedNoteID = note.id
         saveDocument()
         broadcastNoteUpsert(id: note.id)
-        fx.emitTextPlace(at: note.position, in: canvasFrame.size, color: draftColor.color)
-        CanvasSoundEngine.shared.playTextPlace()
+        fx.emitTextPlace(at: note.position, in: canvasFrame.size, color: draftColor.color, toss: toss.arrival)
+        CanvasSoundEngine.shared.playTextToss()
         Haptics.light()
     }
 
@@ -4025,7 +4211,11 @@ struct MealCanvasView: View {
             self.selectedNoteID = nil
         }
         saveDocument()
-        broadcastOp("batch_delete", payload: .batchDelete(noteIds: removedIDs))
+        if realtime.usesLegacyCanvasOps {
+            broadcastOp("batch_stickers_notes", payload: .batch(stickers: stickers, notes: notes))
+        } else {
+            broadcastOp("batch_delete", payload: .batchDelete(noteIds: removedIDs))
+        }
     }
 
     private func clearDoodleStickers() {
@@ -4038,18 +4228,23 @@ struct MealCanvasView: View {
             self.selectedNoteID = nil
         }
         saveDocument()
-        broadcastOp("batch_delete", payload: .batchDelete(noteIds: removedIDs))
+        if realtime.usesLegacyCanvasOps {
+            broadcastOp("batch_stickers_notes", payload: .batch(stickers: stickers, notes: notes))
+        } else {
+            broadcastOp("batch_delete", payload: .batchDelete(noteIds: removedIDs))
+        }
     }
 
     private func insertDoodle(_ kind: CanvasDoodleKind) {
         let undoBefore = currentCanvasSnapshot()
         defer { recordUndoAction(from: undoBefore) }
+        let toss = nextTossPlacement(for: .doodle, doodleKind: kind)
         let note = CanvasNote(
             text: kind.title,
             isEmoji: false,
-            position: insertionPosition(isEmoji: true),
+            position: toss.position,
             scale: 1.0,
-            rotationDegrees: kind == .washiTape ? -12 : 0,
+            rotationDegrees: toss.rotation,
             layer: nextLayerIndex,
             textEffect: .float,
             font: .rounded,
@@ -4059,54 +4254,64 @@ struct MealCanvasView: View {
         )
         notes.append(note)
         markFreshNoteArrival(note.id)
+        registerTossArrival(toss.arrival, for: note.id, heavyLanding: true)
         selectedStickerID = nil
         selectedNoteID = note.id
         saveDocument()
         broadcastNoteUpsert(id: note.id)
-        fx.emitDoodleStamp(at: note.position, in: canvasFrame.size, color: doodleColor.color)
+        fx.emitDoodleStamp(at: note.position, in: canvasFrame.size, color: doodleColor.color, toss: toss.arrival)
         CanvasSoundEngine.shared.playDoodleStamp()
-        Haptics.rigid()
+        Haptics.light()
     }
 
     private func insertEmoji(_ item: CanvasCustomEmoji) {
         let undoBefore = currentCanvasSnapshot()
         defer { recordUndoAction(from: undoBefore) }
+        let toss = nextTossPlacement(for: .emoji)
         let note = CanvasNote(
             text: item.title,
             isEmoji: true,
-            position: insertionPosition(isEmoji: true),
+            position: toss.position,
+            rotationDegrees: toss.rotation,
             layer: nextLayerIndex,
             emojiAsset: item.assetName
         )
         notes.append(note)
         markFreshNoteArrival(note.id)
+        registerTossArrival(toss.arrival, for: note.id)
         selectedStickerID = nil
         selectedNoteID = note.id
         saveDocument()
         broadcastNoteUpsert(id: note.id)
-        fx.emitEmojiPop(at: note.position, in: canvasFrame.size, assetID: item.id)
+        fx.emitEmojiPop(at: note.position, in: canvasFrame.size, assetID: item.id, toss: toss.arrival)
         CanvasSoundEngine.shared.playEmojiPop()
-        Haptics.medium()
+        Haptics.light()
     }
 
     private func insertPhotoSticker(_ path: String, name: String = "拍照贴图") {
         let undoBefore = currentCanvasSnapshot()
         defer { recordUndoAction(from: undoBefore) }
         let isPNG = path.lowercased().hasSuffix(".png")
+        let toss = nextTossPlacement(for: .photoSticker)
         let sticker = CanvasSticker(
-            name: name, image: path, isCutout: isPNG,
-            position: insertionPosition(isEmoji: true), layer: nextLayerIndex
+            name: name,
+            image: path,
+            isCutout: isPNG,
+            position: toss.position,
+            rotationDegrees: toss.rotation,
+            layer: nextLayerIndex
         )
         stickers.append(sticker)
         markFreshStickerArrival(sticker.id)
+        registerTossArrival(toss.arrival, for: sticker.id, heavyLanding: true)
         finishSelecting()
         selectedStickerID = sticker.id
         selectedNoteID = nil
         saveDocument()
         broadcastStickerUpsert(id: sticker.id)
-        fx.emitCutoutMagic(at: sticker.position, in: canvasFrame.size)
+        fx.emitCutoutMagic(at: sticker.position, in: canvasFrame.size, toss: toss.arrival)
         CanvasSoundEngine.shared.playCutoutMagic()
-        Haptics.popSequence()
+        Haptics.light()
     }
 
     @MainActor
@@ -4198,16 +4403,22 @@ struct MealCanvasView: View {
         let width = max(canvasFrame.width, 320)
         let height = max(canvasFrame.height, 480)
         let baseSize = max(110, min(width, height) * 0.37)
-        let candidates: [CanvasPoint] = [
-            CanvasPoint(x: 0.30, y: 0.32),
-            CanvasPoint(x: 0.74, y: 0.42),
-            CanvasPoint(x: 0.26, y: 0.59),
-            CanvasPoint(x: 0.74, y: 0.63),
-            CanvasPoint(x: 0.50, y: 0.47),
-            CanvasPoint(x: 0.28, y: 0.28),
-            CanvasPoint(x: 0.74, y: 0.29),
-            CanvasPoint(x: 0.50, y: 0.65)
+        let anchors: [CanvasPoint] = [
+            CanvasPoint(x: 0.31, y: 0.32),
+            CanvasPoint(x: 0.72, y: 0.42),
+            CanvasPoint(x: 0.27, y: 0.56),
+            CanvasPoint(x: 0.71, y: 0.58),
+            CanvasPoint(x: 0.50, y: 0.45),
+            CanvasPoint(x: 0.29, y: 0.26),
+            CanvasPoint(x: 0.72, y: 0.28),
+            CanvasPoint(x: 0.49, y: 0.60)
         ]
+        let candidates: [CanvasPoint] = anchors.map { pt in
+            CanvasPoint(
+                x: min(max(pt.x + CGFloat.random(in: -0.025...0.025), 0.22), 0.78),
+                y: min(max(pt.y + CGFloat.random(in: -0.025...0.025), 0.22), 0.63)
+            )
+        }
         let preferred = candidates[index % candidates.count]
         let occupied = occupiedStickers.map {
             (point: $0.position, radius: baseSize * 0.52 * min(max($0.scale, 0.3), 3))
@@ -4216,11 +4427,12 @@ struct MealCanvasView: View {
         }
         guard !occupied.isEmpty else { return preferred }
         func score(_ point: CanvasPoint) -> CGFloat {
-            let clearance = occupied.map {
+            let rawClearance = occupied.map {
                 hypot((point.x - $0.point.x) * width, (point.y - $0.point.y) * height) - $0.radius
-            }.min() ?? 0
+            }.min() ?? 85
+            let clearance = rawClearance < 0 ? rawClearance * 2.0 : min(rawClearance, 85)
             let distance = hypot((point.x - preferred.x) * width, (point.y - preferred.y) * height)
-            return clearance - distance * 0.12
+            return clearance - distance * 0.22
         }
         return candidates.max { score($0) < score($1) } ?? preferred
     }
@@ -4409,24 +4621,40 @@ struct MealCanvasView: View {
     private func triggerDishArrivalFX(for ids: [UUID]) {
         guard !ids.isEmpty else { return }
         if ids.count == 1, let id = ids.first, let sticker = stickers.first(where: { $0.id == id }) {
+            tossSequence &+= 1
+            let arrival = CanvasTossArrival.make(
+                target: sticker.position,
+                in: canvasFrame.size,
+                sequence: tossSequence,
+                flightDuration: 0.20
+            )
             markFreshStickerArrival(id)
-            fx.emitDishPlated(at: sticker.position, in: canvasFrame.size)
+            registerTossArrival(arrival, for: id, heavyLanding: true)
+            fx.emitDishPlated(at: sticker.position, in: canvasFrame.size, toss: arrival)
             CanvasSoundEngine.shared.playDishPlated(comboIndex: dishComboCount)
             dishComboCount &+= 1
-            Haptics.popSequence()
+            Haptics.light()
             return
         }
         Task { @MainActor in
             for (idx, id) in ids.enumerated() {
                 if idx > 0 {
-                    try? await Task.sleep(for: .milliseconds(110))
+                    try? await Task.sleep(for: .milliseconds(120))
                 }
                 guard let sticker = stickers.first(where: { $0.id == id }) else { continue }
+                tossSequence &+= 1
+                let arrival = CanvasTossArrival.make(
+                    target: sticker.position,
+                    in: canvasFrame.size,
+                    sequence: tossSequence,
+                    flightDuration: 0.20
+                )
                 markFreshStickerArrival(id)
-                fx.emitDishPlated(at: sticker.position, in: canvasFrame.size)
+                registerTossArrival(arrival, for: id, heavyLanding: true)
+                fx.emitDishPlated(at: sticker.position, in: canvasFrame.size, toss: arrival)
                 CanvasSoundEngine.shared.playDishPlated(comboIndex: dishComboCount)
                 dishComboCount &+= 1
-                Haptics.popSequence()
+                Haptics.light()
             }
         }
     }
@@ -4440,19 +4668,28 @@ struct MealCanvasView: View {
             guard !Task.isCancelled else { return }
             for (idx, id) in queue.enumerated() {
                 if idx > 0 {
-                    try? await Task.sleep(for: .milliseconds(110))
+                    try? await Task.sleep(for: .milliseconds(120))
                 }
                 guard !Task.isCancelled else { return }
                 pendingDishRevealIDs.removeAll { $0 == id }
-                withAnimation(reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.68)) {
+                guard let sticker = stickers.first(where: { $0.id == id }) else {
                     _ = waitingRevealStickerIDs.remove(id)
+                    continue
                 }
-                guard let sticker = stickers.first(where: { $0.id == id }) else { continue }
+                tossSequence &+= 1
+                let arrival = CanvasTossArrival.make(
+                    target: sticker.position,
+                    in: canvasFrame.size,
+                    sequence: tossSequence,
+                    flightDuration: 0.20
+                )
+                registerTossArrival(arrival, for: id, heavyLanding: true)
+                _ = waitingRevealStickerIDs.remove(id)
                 markFreshStickerArrival(id)
-                fx.emitDishPlated(at: sticker.position, in: canvasFrame.size)
+                fx.emitDishPlated(at: sticker.position, in: canvasFrame.size, toss: arrival)
                 CanvasSoundEngine.shared.playDishPlated(comboIndex: dishComboCount)
                 dishComboCount &+= 1
-                Haptics.popSequence()
+                Haptics.light()
             }
         }
     }
@@ -5016,6 +5253,16 @@ struct MealCanvasView: View {
             } else if !strokes.isEmpty {
                 strokes.removeLast()
             }
+        case "clear_strokes":
+            strokes.removeAll()
+            strokeRedoStack.removeAll()
+            activeStroke.removeAll()
+        case "clear_additions":
+            notes.removeAll()
+            strokes.removeAll()
+            strokeRedoStack.removeAll()
+            activeStroke.removeAll()
+            selectedNoteID = nil
         case "update_background":
             if let bgRaw = payload.background, let bg = CanvasBackground(rawValue: bgRaw) {
                 background = bg
@@ -5228,6 +5475,20 @@ struct MealCanvasView: View {
             onRemoteMealSync?("canvas_disconnected")
         }
 
+        realtime.onLegacyOpFallback = {
+            guard !isLaunchStudio, let mealID = vm.meal?.id else { return }
+            realtime.sendOp(kind: "batch_stickers_notes", payload: .batch(stickers: stickers, notes: notes))
+            let docSnapshot = currentDocumentSnapshot()
+            let clientID = realtime.clientID
+            Task {
+                _ = try? await MealService.shared.saveCanvas(
+                    mealId: mealID,
+                    document: docSnapshot,
+                    clientId: clientID
+                )
+            }
+        }
+
         realtime.onError = { message in
             showCanvasTip(message)
         }
@@ -5307,6 +5568,20 @@ struct MealCanvasView: View {
             )
         }
         guard !stickerPatches.isEmpty || !notePatches.isEmpty else { return }
+        if realtime.usesLegacyCanvasOps {
+            if stickerPatches.count == 1 && notePatches.isEmpty,
+               let id = stickerPatches.first?.id,
+               let sticker = stickers.first(where: { $0.id == id }) {
+                broadcastOp("upsert_sticker", payload: .upsertSticker(sticker))
+            } else if notePatches.count == 1 && stickerPatches.isEmpty,
+                      let id = notePatches.first?.id,
+                      let note = notes.first(where: { $0.id == id }) {
+                broadcastOp("upsert_note", payload: .upsertNote(note))
+            } else {
+                broadcastOp("batch_stickers_notes", payload: .batch(stickers: stickers, notes: notes))
+            }
+            return
+        }
         broadcastOp("patch_elements", payload: CanvasOpPayload(
             stickerPatches: stickerPatches.isEmpty ? nil : stickerPatches,
             notePatches: notePatches.isEmpty ? nil : notePatches
@@ -8138,6 +8413,7 @@ private struct CanvasStickerView: View {
     var isLightSurface: Bool = false
     var isFreshArrival: Bool = false
     var isPendingReveal: Bool = false
+    var tossArrival: CanvasTossArrival? = nil
     var canMoveForward: Bool = true
     var canMoveBackward: Bool = true
     var alignmentTargets: [CanvasPoint] = []
@@ -8166,7 +8442,7 @@ private struct CanvasStickerView: View {
 
     private var entranceScaleFactor: CGFloat {
         if isPendingReveal { return 0.35 }
-        if hasAppeared || reduceMotion { return 1.0 }
+        if tossArrival != nil || hasAppeared || reduceMotion { return 1.0 }
         return isFreshArrival ? 0.46 : 0.86
     }
 
@@ -8232,6 +8508,7 @@ private struct CanvasStickerView: View {
         .contentShape(Rectangle())
         .scaleEffect(min(max(displayScale, 0.3), 3) * entranceScaleFactor)
         .rotationEffect(.degrees(displayRotation))
+        .canvasTossArrival(tossArrival, reduceMotion: reduceMotion)
         .overlay(alignment: .top) {
             if let activePreview {
                 HStack(spacing: 4) {
@@ -8254,7 +8531,7 @@ private struct CanvasStickerView: View {
                 .allowsHitTesting(false)
             }
         }
-        .opacity(isPendingReveal ? 0 : (hasAppeared || reduceMotion ? 1 : 0))
+        .opacity(isPendingReveal ? 0 : ((tossArrival != nil || hasAppeared || reduceMotion) ? 1 : 0))
         .animation(reduceMotion ? nil : .spring(response: 0.44, dampingFraction: 0.62), value: isPendingReveal)
         .animation(reduceMotion || isManipulating ? nil : .easeOut(duration: 0.08), value: activePreview)
         .onTapGesture(perform: onSelect)
@@ -8274,7 +8551,7 @@ private struct CanvasStickerView: View {
             }
         }
         .overlay {
-            if isSelected {
+            if isSelected && tossArrival == nil {
                 GeometryReader { proxy in
                     Color.clear
                         .allowsHitTesting(false)
@@ -9322,6 +9599,7 @@ private struct CanvasNoteView: View {
     var reportsBounds = false
     var isLightSurface: Bool = false
     var isFreshArrival: Bool = false
+    var tossArrival: CanvasTossArrival? = nil
     var canMoveForward: Bool = true
     var canMoveBackward: Bool = true
     var alignmentTargets: [CanvasPoint] = []
@@ -9354,7 +9632,7 @@ private struct CanvasNoteView: View {
     }
 
     private var entranceScaleFactor: CGFloat {
-        if hasAppeared || reduceMotion { return 1.0 }
+        if tossArrival != nil || hasAppeared || reduceMotion { return 1.0 }
         if isFreshArrival {
             return note.isDoodle ? 1.24 : 0.48
         }
@@ -9440,6 +9718,7 @@ private struct CanvasNoteView: View {
         .contentShape(Rectangle())
         .scaleEffect(min(max(displayScale, 0.3), 3) * entranceScaleFactor)
         .rotationEffect(.degrees(displayRotation))
+        .canvasTossArrival(tossArrival, reduceMotion: reduceMotion)
         .overlay(alignment: .top) {
             if let activePreview {
                 HStack(spacing: 4) {
@@ -9462,7 +9741,7 @@ private struct CanvasNoteView: View {
                 .allowsHitTesting(false)
             }
         }
-        .opacity(hasAppeared || reduceMotion ? 1 : 0)
+        .opacity((tossArrival != nil || hasAppeared || reduceMotion) ? 1 : 0)
         .animation(reduceMotion || isManipulating ? nil : .easeOut(duration: 0.08), value: activePreview)
         .onTapGesture {
             if isSelected && note.isPlainText {
@@ -9489,7 +9768,7 @@ private struct CanvasNoteView: View {
             }
         }
         .overlay {
-            if isSelected {
+            if isSelected && tossArrival == nil {
                 GeometryReader { proxy in
                     Color.clear
                         .allowsHitTesting(false)

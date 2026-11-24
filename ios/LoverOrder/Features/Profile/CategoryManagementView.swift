@@ -1,7 +1,9 @@
 import SwiftUI
 
-// 菜谱分类管理 列表 + 增删改
+// 菜谱分类管理 列表 + 增删改（菜谱页与「我的」共用）
 struct CategoryManagementView: View {
+    var initialEditingCategory: RecipeCategory? = nil
+
     @Environment(\.dismiss) private var dismiss
 
     @State private var categories: [RecipeCategory] = []
@@ -15,6 +17,7 @@ struct CategoryManagementView: View {
     @State private var editingId: UInt?
     @State private var editingName: String = ""
     @State private var editingIcon: String = ""
+    @State private var pendingDeleteCategory: RecipeCategory?
 
     var body: some View {
         NavigationStack {
@@ -45,12 +48,52 @@ struct CategoryManagementView: View {
                 }
             }
             .task {
+                if let target = initialEditingCategory {
+                    startEdit(target)
+                }
                 await load()
             }
             .onReceive(NotificationCenter.default.publisher(for: .categoriesChanged)) { _ in
                 Task { await load() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
+                Task { await load() }
+            }
+            .confirmationDialog(
+                deleteDialogTitle,
+                isPresented: Binding(
+                    get: { pendingDeleteCategory != nil },
+                    set: { if !$0 { pendingDeleteCategory = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("删除分类", role: .destructive) {
+                    if let target = pendingDeleteCategory {
+                        pendingDeleteCategory = nil
+                        Task { await deleteCategory(target) }
+                    }
+                }
+                Button("取消", role: .cancel) {
+                    pendingDeleteCategory = nil
+                }
+            } message: {
+                Text(deleteDialogMessage)
+            }
         }
+    }
+
+    private var deleteDialogTitle: String {
+        guard let c = pendingDeleteCategory else { return "删除分类？" }
+        return "删除分类「\(c.name)」？"
+    }
+
+    private var deleteDialogMessage: String {
+        guard let c = pendingDeleteCategory else { return "" }
+        let count = c.recipeCount ?? 0
+        if count > 0 {
+            return "该分类下的 \(count) 道菜谱不会被删除，将自动归为「未分类」。"
+        }
+        return "删除后该分类将从菜谱筛选栏移除，不会影响已有菜谱。"
     }
 
     private var addCard: some View {
@@ -113,6 +156,7 @@ struct CategoryManagementView: View {
         HStack(spacing: AppSpacing.md) {
             if isEditing {
                 TextField("图标", text: $editingIcon)
+                    .multilineTextAlignment(.center)
                     .frame(width: 50)
                     .padding(AppSpacing.sm)
                     .background(Color.appBackground)
@@ -126,15 +170,17 @@ struct CategoryManagementView: View {
                 } label: {
                     Image(systemName: "checkmark")
                         .foregroundStyle(Color.brandGreen)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 40, height: 40)
                 }
+                .accessibilityLabel("保存修改")
                 Button {
                     cancelEdit()
                 } label: {
                     Image(systemName: "xmark")
                         .foregroundStyle(Color.inkMuted)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 40, height: 40)
                 }
+                .accessibilityLabel("取消编辑")
             } else {
                 Text(c.icon?.isEmpty == false ? c.icon! : "🍽")
                     .font(.system(size: 20))
@@ -143,24 +189,32 @@ struct CategoryManagementView: View {
                     .overlay {
                         Circle().strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
                     }
-                Text(c.name)
-                    .font(AppFont.body(15))
-                    .foregroundStyle(Color.inkPrimary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(c.name)
+                        .font(AppFont.body(15))
+                        .foregroundStyle(Color.inkPrimary)
+                    Text("\(c.recipeCount ?? 0) 道菜")
+                        .font(AppFont.caption(11))
+                        .foregroundStyle(Color.inkMuted)
+                }
                 Spacer()
                 Button {
                     startEdit(c)
                 } label: {
                     Image(systemName: "pencil")
                         .foregroundStyle(Color.inkSecondary)
-                        .frame(width: 44, height: 44)
+                        .frame(width: 40, height: 40)
                 }
+                .accessibilityLabel("编辑分类\(c.name)")
                 Button {
-                    Task { await deleteCategory(c) }
+                    Haptics.light()
+                    pendingDeleteCategory = c
                 } label: {
                     Image(systemName: "trash")
-                        .foregroundStyle(Color.inkMuted)
-                        .frame(width: 44, height: 44)
+                        .foregroundStyle(Color.errorInk.opacity(0.85))
+                        .frame(width: 40, height: 40)
                 }
+                .accessibilityLabel("删除分类\(c.name)")
             }
         }
         .padding(AppSpacing.md)
@@ -225,6 +279,7 @@ struct CategoryManagementView: View {
                 req: CategoryInput(name: trimmed, icon: editingIcon.isEmpty ? nil : editingIcon, color: c.color, sortOrder: c.sortOrder)
             )
             AppNotifications.categoriesChanged()
+            AppNotifications.recipesChanged()
             cancelEdit()
         } catch {
             errorMessage = error.localizedDescription
@@ -235,6 +290,7 @@ struct CategoryManagementView: View {
         do {
             try await CategoryService.shared.delete(id: c.id)
             AppNotifications.categoriesChanged()
+            AppNotifications.recipesChanged()
         } catch {
             errorMessage = error.localizedDescription
         }

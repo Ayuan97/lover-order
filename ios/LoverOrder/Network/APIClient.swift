@@ -19,17 +19,38 @@ enum APIConfig {
         #endif
     }()
 
-    // 图片字段可能是 /static/... 相对路径 渲染前按当前后端地址补全
-    // 这样换 LAN IP 或模拟器/真机混用时 老图都不挂;历史数据里的绝对 URL 原样放行
+    private static let fallbackMediaBaseURL = "http://lover-order-media-ayuan.oss-cn-hangzhou.aliyuncs.com"
+
+    static let mediaBaseURL: String = {
+        let configured = (Bundle.main.object(forInfoDictionaryKey: "MEDIA_BASE_URL") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let host = (configured?.isEmpty == false ? configured! : fallbackMediaBaseURL)
+        return host.hasSuffix("/") ? String(host.dropLast()) : host
+    }()
+
+    // 解析远程媒体地址（优先 OSS / CDN 完整 URL，同时兼容本地缓存或旧数据残留的 /static/uploads/... 相对路径）
     static func imageURL(_ s: String?) -> URL? {
-        guard let s, !s.isEmpty else { return nil }
+        guard let s = s?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !s.isEmpty else {
+            return nil
+        }
         if s.hasPrefix("http://") || s.hasPrefix("https://") {
             return URL(string: s)
         }
-        var comp = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
-        comp?.path = s
-        comp?.query = nil
-        return comp?.url
+        if s.hasPrefix("/static/uploads/") {
+            let suffix = s.dropFirst("/static/uploads/".count)
+            return URL(string: "\(mediaBaseURL)/uploads/\(suffix)")
+        }
+        if s.hasPrefix("/uploads/") {
+            return URL(string: "\(mediaBaseURL)\(s)")
+        }
+        if s.hasPrefix("/") {
+            var comp = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+            comp?.path = s
+            comp?.query = nil
+            return comp?.url
+        }
+        return nil
     }
 
     // 构造 WebSocket 连接地址（http->ws / https->wss）
@@ -218,6 +239,9 @@ final class APIClient {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
+            if error.isCancellationError {
+                throw CancellationError()
+            }
             throw APIError.requestFailed(underlying: error)
         }
 

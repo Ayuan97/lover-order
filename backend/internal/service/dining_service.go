@@ -204,7 +204,7 @@ func (s *DiningService) AddDish(userID, mealID uint, in DishInput) (*model.MealS
 			now := time.Now()
 			if err := tx.Model(&model.Recipe{}).
 				Where("id = ? AND household_id = ?", *dish.RecipeID, m.HouseholdID).
-				Updates(map[string]any{
+				UpdateColumns(map[string]any{
 					"use_count":    gorm.Expr("use_count + ?", 1),
 					"last_used_at": now,
 				}).Error; err != nil {
@@ -278,7 +278,7 @@ func (s *DiningService) RemoveDish(userID, mealID, dishID uint) error {
 		if target.Counted && target.RecipeID != nil {
 			if err := tx.Model(&model.Recipe{}).
 				Where("id = ? AND household_id = ?", *target.RecipeID, householdID).
-				Update("use_count", gorm.Expr("CASE WHEN use_count > 0 THEN use_count - 1 ELSE 0 END")).Error; err != nil {
+				UpdateColumn("use_count", gorm.Expr("CASE WHEN use_count > 0 THEN use_count - 1 ELSE 0 END")).Error; err != nil {
 				return err
 			}
 			decremented = true

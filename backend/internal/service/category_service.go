@@ -24,12 +24,32 @@ type CategoryInput struct {
 	SortOrder int    `json:"sort_order"`
 }
 
-// List 列出一个家的分类
+// List 列出一个家的分类（附带各分类下菜谱数量）
 func (s *CategoryService) List(householdID uint) ([]model.RecipeCategory, error) {
 	var items []model.RecipeCategory
 	if err := model.DB.Where("household_id = ? AND is_active = ?", householdID, true).
 		Order("sort_order ASC, id ASC").Find(&items).Error; err != nil {
 		return nil, err
+	}
+	if len(items) > 0 {
+		type countRow struct {
+			CategoryID uint  `gorm:"column:category_id"`
+			Count      int64 `gorm:"column:cnt"`
+		}
+		var rows []countRow
+		if err := model.DB.Model(&model.Recipe{}).
+			Select("category_id, COUNT(*) AS cnt").
+			Where("household_id = ? AND is_archived = ? AND category_id IS NOT NULL", householdID, false).
+			Group("category_id").
+			Scan(&rows).Error; err == nil {
+			countMap := make(map[uint]int64, len(rows))
+			for _, r := range rows {
+				countMap[r.CategoryID] = r.Count
+			}
+			for i := range items {
+				items[i].RecipeCount = countMap[items[i].ID]
+			}
+		}
 	}
 	return items, nil
 }
@@ -73,15 +93,32 @@ func (s *CategoryService) Update(householdID, id uint, in CategoryInput) (*model
 	return &c, nil
 }
 
-// Delete 软删
+// Delete 软删分类，并将该分类下已有菜谱自动归为「未分类」
 func (s *CategoryService) Delete(householdID, id uint) error {
-	res := model.DB.Where("id = ? AND household_id = ?", id, householdID).Delete(&model.RecipeCategory{})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return errors.New("分类不存在")
+	var movedCount int64
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		var c model.RecipeCategory
+		if err := tx.Where("id = ? AND household_id = ?", id, householdID).First(&c).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("分类不存在")
+			}
+			return err
+		}
+		moveRes := tx.Model(&model.Recipe{}).
+			Where("household_id = ? AND category_id = ?", householdID, id).
+			Update("category_id", nil)
+		if moveRes.Error != nil {
+			return moveRes.Error
+		}
+		movedCount = moveRes.RowsAffected
+		return tx.Delete(&c).Error
+	})
+	if err != nil {
+		return err
 	}
 	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "categories_changed", 0)
+	if movedCount > 0 {
+		GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", 0)
+	}
 	return nil
 }

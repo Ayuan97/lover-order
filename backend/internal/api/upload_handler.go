@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -12,21 +11,24 @@ import (
 	"github.com/gin-gonic/gin"
 	"lover-order-backend/internal/config"
 	"lover-order-backend/internal/middleware"
+	"lover-order-backend/pkg/oss"
 )
 
-// UploadHandler 文件上传相关入口
-type UploadHandler struct{}
+// UploadHandler 媒体上传入口（统一存储至阿里云 OSS）
+type UploadHandler struct {
+	ossClient *oss.Client
+}
 
 // NewUploadHandler 构造
-func NewUploadHandler() *UploadHandler {
-	return &UploadHandler{}
+func NewUploadHandler(ossClient *oss.Client) *UploadHandler {
+	return &UploadHandler{ossClient: ossClient}
 }
 
 // Image 上传图片 multipart/form-data 字段 file
 func (h *UploadHandler) Image(c *gin.Context) {
 	cfg := config.AppConfig
-	if cfg == nil {
-		Fail(c, CodeInternalError, "配置未初始化")
+	if cfg == nil || h.ossClient == nil {
+		Fail(c, CodeInternalError, "存储服务未初始化")
 		return
 	}
 
@@ -51,15 +53,9 @@ func (h *UploadHandler) Image(c *gin.Context) {
 
 	uid, _ := middleware.CurrentUserID(c)
 	hid, _ := middleware.CurrentHouseholdID(c)
-	subDir := "u" + fmt.Sprintf("%d", uid)
+	subDir := fmt.Sprintf("u%d", uid)
 	if hid > 0 {
-		subDir = "h" + fmt.Sprintf("%d", hid)
-	}
-
-	saveDir := filepath.Join(cfg.Upload.Path, subDir)
-	if err := os.MkdirAll(saveDir, 0o755); err != nil {
-		Fail(c, CodeInternalError, "目录创建失败")
-		return
+		subDir = fmt.Sprintf("h%d", hid)
 	}
 
 	rnd, err := randomToken(8)
@@ -68,21 +64,24 @@ func (h *UploadHandler) Image(c *gin.Context) {
 		return
 	}
 	filename := fmt.Sprintf("%d_%s.%s", time.Now().UnixNano(), rnd, ext)
-	savePath := filepath.Join(saveDir, filename)
 
-	if err := c.SaveUploadedFile(file, savePath); err != nil {
-		Fail(c, CodeInternalError, "保存失败")
+	src, err := file.Open()
+	if err != nil {
+		Fail(c, CodeInternalError, "读取上传文件失败")
+		return
+	}
+	defer src.Close()
+
+	objectKey := h.ossClient.ObjectKey(fmt.Sprintf("%s/%s", subDir, filename))
+	publicURL, err := h.ossClient.PutObject(c.Request.Context(), objectKey, src, file.Size, oss.ContentTypeByExt(ext))
+	if err != nil {
+		Fail(c, CodeInternalError, "上传 OSS 失败")
 		return
 	}
 
-	scheme := "http"
-	if c.Request.TLS != nil {
-		scheme = "https"
-	}
-	url := fmt.Sprintf("%s://%s/static/uploads/%s/%s", scheme, c.Request.Host, subDir, filename)
 	OK(c, gin.H{
-		"url":  url,
-		"path": fmt.Sprintf("/static/uploads/%s/%s", subDir, filename),
+		"url":  publicURL,
+		"path": publicURL,
 	})
 }
 

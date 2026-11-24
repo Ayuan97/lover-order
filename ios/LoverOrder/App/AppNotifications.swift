@@ -12,6 +12,7 @@ extension Notification.Name {
     static let stickerFavoritesChanged = Notification.Name("lover-order.stickerFavorites.changed")
     static let shoppingChanged = Notification.Name("lover-order.shopping.changed")
     static let launchCanvasChanged = Notification.Name("lover-order.launchCanvas.changed")
+    static let reconcileCanvasDishes = Notification.Name("lover-order.canvas.reconcileDishes")
     static let sessionExpired = Notification.Name("lover-order.session.expired")
 }
 
@@ -42,6 +43,9 @@ enum AppNotifications {
     }
     static func launchCanvasChanged() {
         NotificationCenter.default.post(name: .launchCanvasChanged, object: nil)
+    }
+    static func reconcileCanvasDishes() {
+        NotificationCenter.default.post(name: .reconcileCanvasDishes, object: nil)
     }
 }
 
@@ -329,6 +333,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     private static let lastDeliveredPrefix = "loverorder.notification.lastDelivered."
 
     private var activeUserId: UInt?
+    private var activeViewedMealId: UInt?
     private var pollTask: Task<Void, Never>?
     private var pendingTappedLink: AppDeepLink?
     private var presentedBannerIds: Set<UInt> = []
@@ -375,6 +380,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         pollTask?.cancel()
         pollTask = nil
         activeUserId = nil
+        activeViewedMealId = nil
         await registrationTask?.value
         if let token = apnsToken, !token.isEmpty {
             try? await NotificationService.shared.unregisterDevice(token: token)
@@ -450,6 +456,9 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
             guard activeUserId == userId else { return }
             events = result.items
             updateUnreadCount(result.unreadCount)
+            if UIApplication.shared.applicationState == .active, let viewedMeal = activeViewedMealId {
+                await markMealEventsRead(mealId: viewedMeal)
+            }
             guard allowLocalBanner else { return }
 
             let baselineKey = Self.lastDeliveredPrefix + "\(userId)"
@@ -467,7 +476,12 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
                 guard activeUserId == userId, !page.items.isEmpty else { break }
                 for event in page.items {
                     guard activeUserId == userId else { return }
-                    if event.kind != "test", !event.isRead, prefs.shouldNotify(kind: event.kind),
+                    let alreadyViewingLiveMeal = UIApplication.shared.applicationState == .active
+                        && activeViewedMealId != nil
+                        && event.mealId == activeViewedMealId
+                        && Self.activeMealEventKinds.contains(event.kind)
+                    if event.kind != "test", !event.isRead, !alreadyViewingLiveMeal,
+                       prefs.shouldNotify(kind: event.kind),
                        !existingBannerIds.contains(event.id), !presentedBannerIds.contains(event.id) {
                         switch page.apnsDeliveries[String(event.id)] {
                         case .pending:
@@ -486,6 +500,64 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         }
     }
 
+    private static let activeMealEventKinds: Set<String> = [
+        "meal_dish_added", "meal_confirmed", "dining_joined", "dining_dish_added"
+    ]
+
+    /// 记录用户当前正在前台浏览的画布餐次：已在画布亲眼看到的加菜/定下动态自动消掉未读红点
+    func setActiveViewedMeal(_ mealId: UInt?) {
+        activeViewedMealId = mealId
+        if let mealId, mealId > 0 {
+            Task { await markMealEventsRead(mealId: mealId) }
+        }
+    }
+
+    func markMealEventsRead(mealId: UInt) async {
+        guard mealId > 0 else { return }
+        await markMatchingRead { ev in
+            !ev.isRead && ev.mealId == mealId && Self.activeMealEventKinds.contains(ev.kind)
+        }
+    }
+
+    func markHistoryEventsRead(mealId: UInt? = nil) async {
+        await markMatchingRead { ev in
+            guard !ev.isRead, (ev.kind == "meal_completed" || ev.kind == "meal_reviewed") else { return false }
+            if let mealId, mealId > 0 {
+                return ev.mealId == mealId
+            }
+            return true
+        }
+    }
+
+    func markHouseholdEventsRead() async {
+        await markMatchingRead { ev in
+            !ev.isRead && ev.kind == "household_joined"
+        }
+    }
+
+    private func markMatchingRead(_ predicate: (AppNotificationEvent) -> Bool) async {
+        let matched = events.filter(predicate)
+        guard !matched.isEmpty else { return }
+        let matchedIds = Set(matched.map(\.id))
+        let now = Date()
+        events = events.map { old in
+            guard matchedIds.contains(old.id) else { return old }
+            return AppNotificationEvent(
+                id: old.id, userId: old.userId, actorId: old.actorId, householdId: old.householdId,
+                kind: old.kind, title: old.title, body: old.body, mealId: old.mealId,
+                roomCode: old.roomCode, deepLink: old.deepLink, isRead: true, readAt: old.readAt ?? now,
+                createdAt: old.createdAt, actor: old.actor
+            )
+        }
+        updateUnreadCount(max(0, unreadCount - matchedIds.count))
+        UNUserNotificationCenter.current().removeDeliveredNotifications(
+            withIdentifiers: matchedIds.map { "loverorder.event.\($0)" }
+        )
+        for id in matchedIds {
+            try? await NotificationService.shared.markRead(eventId: id)
+        }
+    }
+
     func markRead(event: AppNotificationEvent) async {
         if let idx = events.firstIndex(where: { $0.id == event.id && !$0.isRead }) {
             let old = events[idx]
@@ -497,10 +569,14 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
             )
             updateUnreadCount(max(0, unreadCount - 1))
         }
+        UNUserNotificationCenter.current().removeDeliveredNotifications(
+            withIdentifiers: ["loverorder.event.\(event.id)"]
+        )
         try? await NotificationService.shared.markRead(eventId: event.id)
     }
 
     func markAllRead() async {
+        let unreadIds = events.filter { !$0.isRead }.map { "loverorder.event.\($0.id)" }
         events = events.map { old in
             AppNotificationEvent(
                 id: old.id, userId: old.userId, actorId: old.actorId, householdId: old.householdId,
@@ -510,6 +586,11 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
             )
         }
         updateUnreadCount(0)
+        if !unreadIds.isEmpty {
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: unreadIds)
+        } else {
+            UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        }
         try? await NotificationService.shared.markRead(eventId: 0)
     }
 

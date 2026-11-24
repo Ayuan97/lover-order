@@ -172,9 +172,11 @@ func (h *CanvasHub) GetSnapshot(mealID uint) (*CanvasSnapshotResponse, error) {
 		return nil, err
 	}
 	if snapshot.Document != nil {
-		if err := syncCanvasDishPhotos(mealID, snapshot.Document.Stickers); err != nil {
+		reconciled, _, err := reconcileCanvasDishStickers(mealID, snapshot.Document.Stickers)
+		if err != nil {
 			return nil, err
 		}
+		snapshot.Document.Stickers = reconciled
 	}
 	return snapshot, nil
 }
@@ -217,10 +219,14 @@ func (h *CanvasHub) loadSnapshot(mealID uint) (*CanvasSnapshotResponse, error) {
 			return nil, err
 		}
 	}
+	normalized := normalizeCanvasDoc(&doc)
+	if reconciled, _, err := reconcileCanvasDishStickers(mealID, normalized.Stickers); err == nil {
+		normalized.Stickers = reconciled
+	}
 	return &CanvasSnapshotResponse{
 		MealID:    mealID,
 		Revision:  rec.Revision,
-		Document:  normalizeCanvasDoc(&doc),
+		Document:  normalized,
 		UpdatedAt: &rec.UpdatedAt,
 	}, nil
 }
@@ -235,10 +241,12 @@ func (h *CanvasHub) SaveDocument(mealID uint, doc *CanvasDocPayload, actor Canva
 		r.mu.Unlock()
 		return nil, err
 	}
-	if err := syncCanvasDishPhotos(mealID, normalized.Stickers); err != nil {
+	reconciled, _, err := reconcileCanvasDishStickers(mealID, normalized.Stickers)
+	if err != nil {
 		r.mu.Unlock()
 		return nil, err
 	}
+	normalized.Stickers = reconciled
 	rev, updatedAt, err := r.persistLocked(normalized, actor.ID)
 	if err != nil {
 		r.mu.Unlock()
@@ -683,6 +691,12 @@ func (r *canvasRoom) ensureLoadedLocked() error {
 	r.revision = rec.Revision
 	t := rec.UpdatedAt
 	r.updatedAt = &t
+	if r.doc != nil {
+		if reconciled, changed, err := reconcileCanvasDishStickers(r.mealID, r.doc.Stickers); err == nil && changed {
+			r.doc.Stickers = reconciled
+			_, _, _ = r.persistLocked(r.doc, 0)
+		}
+	}
 	r.loaded = true
 	return nil
 }

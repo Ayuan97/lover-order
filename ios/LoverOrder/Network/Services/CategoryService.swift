@@ -32,5 +32,6 @@ final class CategoryService {
 
     func delete(id: UInt) async throws {
         let _: EmptyResponse = try await api.post("categories/\(id)/delete")
+        MenuLocalCache.detachDeletedCategory(id: id)
     }
 }

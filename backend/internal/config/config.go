@@ -2,6 +2,8 @@ package config
 
 import (
 	"log"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/viper"
@@ -65,9 +67,18 @@ type APNsConfig struct {
 }
 
 type UploadConfig struct {
-	Path         string   `mapstructure:"path"`
-	MaxSize      int64    `mapstructure:"max_size"`
-	AllowedTypes []string `mapstructure:"allowed_types"`
+	MaxSize      int64     `mapstructure:"max_size"`
+	AllowedTypes []string  `mapstructure:"allowed_types"`
+	OSS          OSSConfig `mapstructure:"oss"`
+}
+
+type OSSConfig struct {
+	Endpoint        string `mapstructure:"endpoint"`
+	Bucket          string `mapstructure:"bucket"`
+	AccessKeyID     string `mapstructure:"access_key_id"`
+	AccessKeySecret string `mapstructure:"access_key_secret"`
+	Prefix          string `mapstructure:"prefix"`
+	PublicBaseURL   string `mapstructure:"public_base_url"`
 }
 
 type LogConfig struct {
@@ -87,15 +98,24 @@ type CORSConfig struct {
 // AppConfig 全局配置实例
 var AppConfig *Config
 
-// LoadConfig 加载配置文件
+// LoadConfig 加载配置文件（自动合并同目录 config.local.yaml 与 OSS 环境变量覆盖）
 func LoadConfig(configPath string) *Config {
 	viper.SetConfigFile(configPath)
 	viper.SetConfigType("yaml")
 
 	setDefaults()
+	bindEnvOverrides()
 
 	if err := viper.ReadInConfig(); err != nil {
 		log.Fatalf("读取配置文件失败：%v", err)
+	}
+
+	localPath := filepath.Join(filepath.Dir(configPath), "config.local.yaml")
+	if f, err := os.Open(localPath); err == nil {
+		defer f.Close()
+		if err := viper.MergeConfig(f); err != nil {
+			log.Fatalf("合并本地配置文件失败：%v", err)
+		}
 	}
 
 	var cfg Config
@@ -105,6 +125,15 @@ func LoadConfig(configPath string) *Config {
 
 	AppConfig = &cfg
 	return &cfg
+}
+
+func bindEnvOverrides() {
+	_ = viper.BindEnv("upload.oss.endpoint", "OSS_ENDPOINT")
+	_ = viper.BindEnv("upload.oss.bucket", "OSS_BUCKET")
+	_ = viper.BindEnv("upload.oss.access_key_id", "OSS_ACCESS_KEY_ID")
+	_ = viper.BindEnv("upload.oss.access_key_secret", "OSS_ACCESS_KEY_SECRET")
+	_ = viper.BindEnv("upload.oss.prefix", "OSS_PREFIX")
+	_ = viper.BindEnv("upload.oss.public_base_url", "OSS_PUBLIC_BASE_URL")
 }
 
 // setDefaults 设置默认值
@@ -131,8 +160,9 @@ func setDefaults() {
 	viper.SetDefault("apns.bundle_id", "com.loverorder.app")
 	viper.SetDefault("apns.production", false)
 
-	viper.SetDefault("upload.path", "./uploads")
 	viper.SetDefault("upload.max_size", 10485760)
+	viper.SetDefault("upload.oss.endpoint", "oss-cn-hangzhou.aliyuncs.com")
+	viper.SetDefault("upload.oss.prefix", "uploads")
 
 	viper.SetDefault("log.level", "info")
 }

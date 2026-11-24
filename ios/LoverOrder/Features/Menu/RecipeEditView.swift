@@ -9,6 +9,7 @@ struct RecipeEditView: View {
 
     let mode: Mode
     var onSaved: (Recipe) -> Void = { _ in }
+    var onDeleted: (() -> Void)? = nil
 
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
@@ -17,6 +18,9 @@ struct RecipeEditView: View {
     @State private var description: String = ""
     @State private var coverImage: String = ""
     @State private var cutoutImage: String = ""
+    @State private var existingPhotoChoices: [RecipePhotoChoice] = []
+    @State private var expectedUpdatedAt: String = ""
+    @State private var hasPrimed = false
     @State private var isProcessingPhoto = false
     @State private var cookingTime: String = ""
     @State private var servings: Int = 2
@@ -33,11 +37,14 @@ struct RecipeEditView: View {
     @State private var categoriesLoadID = 0
     @State private var categoryId: UInt?
     @State private var showNewCategory: Bool = false
+    @State private var showCategoryManagement: Bool = false
     @State private var newCategoryName: String = ""
     @State private var newCategoryIcon: String = ""
     @State private var isCreatingCategory: Bool = false
 
     @State private var isSaving: Bool = false
+    @State private var hasEditConflict: Bool = false
+    @State private var confirmDelete: Bool = false
     @State private var errorMessage: String?
 
     private var allowedSceneTags: Set<String> {
@@ -62,11 +69,29 @@ struct RecipeEditView: View {
                     ingredientsSection
                     stepsSection
                     tipsSection
+                    if isEdit {
+                        deleteSection
+                    }
                     if let errorMessage {
-                        Text(errorMessage)
-                            .font(AppFont.caption())
-                            .foregroundStyle(Color.errorInk)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(errorMessage)
+                                .font(AppFont.caption())
+                                .foregroundStyle(Color.errorInk)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if hasEditConflict {
+                                Button {
+                                    Task { await save(force: true) }
+                                } label: {
+                                    Text("仍按当前表单覆盖保存")
+                                        .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 12)
+                                        .frame(height: 32)
+                                        .background(Color.actionInk, in: Capsule())
+                                }
+                                .buttonStyle(SoftPressStyle())
+                            }
+                        }
                     }
                     Color.clear.frame(height: 80)
                 }
@@ -78,7 +103,11 @@ struct RecipeEditView: View {
                 bottomBar
             }
             .task {
-                primeFromMode()
+                if !hasPrimed {
+                    primeFromMode()
+                    hasPrimed = true
+                    await refreshEditableRecipeIfNeeded()
+                }
                 await loadCategories()
             }
             .onReceive(NotificationCenter.default.publisher(for: .categoriesChanged)) { _ in
@@ -95,6 +124,18 @@ struct RecipeEditView: View {
                     }
                     .disabled(isSaving || isProcessingPhoto)
                 }
+            }
+            .sheet(isPresented: $showCategoryManagement) {
+                CategoryManagementView()
+                    .preferredColorScheme(.light)
+            }
+            .confirmationDialog("删除这道菜谱？", isPresented: $confirmDelete, titleVisibility: .visible) {
+                Button("删除菜谱", role: .destructive) {
+                    Task { await performDelete() }
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("删除后这道菜不会再出现在菜谱列表里，但已经记下的历史不受影响。")
             }
         }
         .interactiveDismissDisabled(isSaving || isProcessingPhoto)
@@ -124,13 +165,16 @@ struct RecipeEditView: View {
 
     private var coverSection: some View {
         SectionCard {
-            FieldLabel("菜品主图", required: false)
-            Text("保留实拍照片，同时自动生成画布用的透明贴图。")
+            FieldLabel("菜品主图与画布贴图", required: false)
+            Text("主图支持裁剪旋转；抠图贴图支持涂抹擦除/恢复、重抠或单独上传替换。")
                 .font(AppFont.caption())
                 .foregroundStyle(Color.inkMuted)
             PhotoPickerField(
-                imageURL: $coverImage, label: "选张这道菜的成品照",
-                cutoutImageURL: $cutoutImage, isProcessing: $isProcessingPhoto
+                imageURL: $coverImage,
+                label: "选张这道菜的成品照",
+                cutoutImageURL: $cutoutImage,
+                isProcessing: $isProcessingPhoto,
+                galleryChoices: existingPhotoChoices
             )
             .disabled(isSaving)
         }
@@ -180,9 +224,16 @@ struct RecipeEditView: View {
 
     private var categorySection: some View {
         SectionCard {
-            HStack {
+            HStack(spacing: 14) {
                 FieldLabel("分类", required: false)
                 Spacer()
+                Button {
+                    showCategoryManagement = true
+                } label: {
+                    Label("管理", systemImage: "slider.horizontal.3")
+                        .font(AppFont.caption(13))
+                        .foregroundStyle(Color.inkSecondary)
+                }
                 Button {
                     showNewCategory = true
                 } label: {
@@ -477,12 +528,42 @@ struct RecipeEditView: View {
         }
     }
 
+    private var deleteSection: some View {
+        Button {
+            Haptics.light()
+            confirmDelete = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "trash")
+                    .font(.system(size: 13.5, weight: .semibold))
+                Text("删除这道菜谱")
+                    .font(AppFont.body(14))
+            }
+            .foregroundStyle(Color.errorInk)
+            .frame(maxWidth: .infinity)
+            .frame(height: 46)
+            .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .strokeBorder(Color.errorInk.opacity(0.22), lineWidth: 0.8)
+            }
+        }
+        .buttonStyle(SoftPressStyle())
+        .disabled(isSaving || isProcessingPhoto)
+    }
+
     private func primeFromMode() {
         guard case let .edit(r) = mode else { return }
+        applyRecipeToState(r)
+    }
+
+    private func applyRecipeToState(_ r: Recipe) {
         name = r.name
         description = r.description ?? ""
         coverImage = r.coverImage ?? ""
         cutoutImage = r.cutoutImage ?? ""
+        existingPhotoChoices = r.photoChoices
+        expectedUpdatedAt = r.updatedAt
         cookingTime = r.cookingTime.map { String($0) } ?? ""
         servings = r.servings ?? 2
         difficulty = r.difficulty ?? .easy
@@ -495,7 +576,44 @@ struct RecipeEditView: View {
         categoryId = r.categoryId
     }
 
-    private func save() async {
+    private func refreshEditableRecipeIfNeeded() async {
+        guard case let .edit(r) = mode else { return }
+        if let latest = try? await RecipeService.shared.detail(id: r.id) {
+            if latest.updatedAt != r.updatedAt {
+                if !isFormModified(from: r) {
+                    applyRecipeToState(latest)
+                }
+            } else {
+                expectedUpdatedAt = latest.updatedAt
+                existingPhotoChoices = latest.photoChoices
+            }
+        }
+    }
+
+    private func isFormModified(from r: Recipe) -> Bool {
+        name != r.name
+            || description != (r.description ?? "")
+            || coverImage != (r.coverImage ?? "")
+            || cutoutImage != (r.cutoutImage ?? "")
+            || categoryId != r.categoryId
+    }
+
+    private func performDelete() async {
+        guard case let .edit(original) = mode, !isSaving else { return }
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            try await RecipeService.shared.delete(id: original.id)
+            AppNotifications.recipesChanged()
+            AppNotifications.categoriesChanged()
+            onDeleted?()
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func save(force: Bool = false) async {
         guard !isSaving, !isProcessingPhoto else { return }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedName.isEmpty {
@@ -503,6 +621,7 @@ struct RecipeEditView: View {
             return
         }
         isSaving = true
+        hasEditConflict = false
         defer { isSaving = false }
 
         var input = RecipeInput(name: trimmedName)
@@ -527,13 +646,23 @@ struct RecipeEditView: View {
             case .create:
                 saved = try await RecipeService.shared.create(input)
             case .edit(let original):
-                input.expectedUpdatedAt = original.updatedAt
+                if !expectedUpdatedAt.isEmpty {
+                    input.expectedUpdatedAt = expectedUpdatedAt
+                }
+                if force {
+                    input.force = true
+                }
                 saved = try await RecipeService.shared.update(id: original.id, req: input)
             }
             AppNotifications.recipesChanged()
+            AppNotifications.categoriesChanged()
+            AppNotifications.mealChanged()
             onSaved(saved)
             dismiss()
         } catch {
+            if let apiErr = error as? APIError, case .server(409, _) = apiErr {
+                hasEditConflict = true
+            }
             errorMessage = error.localizedDescription
         }
     }

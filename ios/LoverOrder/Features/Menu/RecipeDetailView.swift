@@ -8,12 +8,15 @@ struct RecipeDetailView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var recipe: Recipe?
+    @State private var categories: [RecipeCategory] = []
     @State private var meal: MealSession?
     @State private var isFavored: Bool = false
     @State private var reviewMeals: [MealSession] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
+    @State private var tipMessage: String?
     @State private var editingRecipe: Recipe?
+    @State private var photoStudioRecipe: Recipe?
     @State private var confirmDelete: Bool = false
     @State private var tabBarToken = UUID()
     @State private var currentPhotoIndex: Int = 0
@@ -68,50 +71,90 @@ struct RecipeDetailView: View {
         }
         .task {
             async let recipeLoad: Void = loadRecipe()
+            async let categoriesLoad: Void = loadCategories()
             await loadMeal()
             await recipeLoad
+            await categoriesLoad
         }
         .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
             Task { await loadRecipe() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .categoriesChanged)) { _ in
+            Task {
+                await loadCategories()
+                await loadRecipe()
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
             Task { await loadMeal() }
         }
+        .toolbar(.visible, for: .navigationBar)
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle("")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: AppSpacing.md) {
+                HStack(spacing: AppSpacing.sm) {
                     Button {
                         Task { await toggleFavor() }
                     } label: {
                         Image(systemName: isFavored ? "heart.fill" : "heart")
-                            .foregroundStyle(isFavored ? Color.accentWarm : Color.inkSecondary)
+                            .foregroundStyle(isFavored ? Color.accentWarm : Color.inkPrimary)
                     }
+                    .accessibilityLabel(isFavored ? "取消收藏" : "收藏菜谱")
+
+                    Button {
+                        editingRecipe = recipe
+                    } label: {
+                        Image(systemName: "square.and.pencil")
+                            .foregroundStyle(Color.inkPrimary)
+                    }
+                    .accessibilityLabel("编辑菜谱")
+
                     Menu {
+                        Button {
+                            photoStudioRecipe = recipe
+                        } label: {
+                            Label("自定义主图与抠图", systemImage: "sparkles.rectangle.stack")
+                        }
                         Button {
                             editingRecipe = recipe
                         } label: {
-                            Label("编辑菜谱", systemImage: "square.and.pencil")
+                            Label("编辑菜谱内容", systemImage: "square.and.pencil")
                         }
+                        categorySubmenu
+                        Divider()
                         Button(role: .destructive) {
                             confirmDelete = true
                         } label: {
-                            Label("删除", systemImage: "trash")
+                            Label("删除菜谱", systemImage: "trash")
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle")
-                            .foregroundStyle(Color.inkSecondary)
+                            .foregroundStyle(Color.inkPrimary)
                     }
+                    .accessibilityLabel("更多操作")
                 }
                 .disabled(recipe == nil)
             }
         }
         .sheet(item: $editingRecipe) { openedRecipe in
-            RecipeEditView(mode: .edit(openedRecipe)) { updated in
-                self.recipe = updated
-            }
+            RecipeEditView(
+                mode: .edit(openedRecipe),
+                onSaved: { updated in
+                    self.recipe = updated
+                },
+                onDeleted: {
+                    dismiss()
+                }
+            )
             .environmentObject(appState)
+        }
+        .sheet(item: $photoStudioRecipe) { openedRecipe in
+            RecipePhotoStudioSheet(recipe: openedRecipe) { updated in
+                self.recipe = updated
+                self.currentPhotoIndex = 0
+                self.tipMessage = "主图与抠图已更新"
+            }
         }
         .fullScreenCover(item: $previewGallery) { presentation in
             PhotoGalleryViewer(slides: presentation.slides, initialIndex: presentation.initialIndex) { newIndex in
@@ -129,6 +172,7 @@ struct RecipeDetailView: View {
             Text("删除后这道菜不会再出现在菜单里 但已经记下的历史不受影响")
         }
         .toast($errorMessage)
+        .tipToast($tipMessage)
     }
 
     private var heroGallery: some View {
@@ -164,6 +208,32 @@ struct RecipeDetailView: View {
                 .frame(height: 80)
                 .allowsHitTesting(false)
         }
+        .overlay(alignment: .bottomLeading) {
+            if let recipe {
+                Button {
+                    Haptics.light()
+                    photoStudioRecipe = recipe
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: (recipe.cutoutImage?.isEmpty == false) ? "sparkles.rectangle.stack.fill" : "photo.badge.plus")
+                            .font(.system(size: 11.5, weight: .semibold))
+                        Text((recipe.cutoutImage?.isEmpty == false) ? "主图与抠图" : "编辑主图/抠图")
+                            .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5.5)
+                    .background(Color.actionInk.opacity(0.72), in: Capsule())
+                    .overlay {
+                        Capsule().strokeBorder(Color.white.opacity(0.24), lineWidth: 0.6)
+                    }
+                }
+                .buttonStyle(SoftPressStyle())
+                .padding(.leading, 16)
+                .padding(.bottom, 32)
+                .accessibilityLabel("自定义主图与抠图")
+            }
+        }
         .overlay(alignment: .bottomTrailing) {
             if images.count > 1 {
                 Text("\(min(currentPhotoIndex + 1, images.count)) / \(images.count)")
@@ -186,10 +256,13 @@ struct RecipeDetailView: View {
     private var galleryImages: [String?] {
         guard let recipe else { return [nil] }
         let choices = recipe.photoChoices
-        if choices.isEmpty {
-            return [nil]
+        if !choices.isEmpty {
+            return choices.map(\.image)
         }
-        return choices.map(\.image)
+        if let cutout = recipe.cutoutImage?.trimmingCharacters(in: .whitespacesAndNewlines), !cutout.isEmpty {
+            return [cutout]
+        }
+        return [nil]
     }
 
     private func openHeroPhoto(_ image: String) {
@@ -235,35 +308,49 @@ struct RecipeDetailView: View {
                     .font(AppFont.body())
                     .foregroundStyle(Color.inkSecondary)
             }
-            if (r.cookingTime ?? 0) > 0 || (r.useCount ?? 0) > 0 || !(r.tags ?? []).isEmpty {
-                HStack(spacing: 6) {
-                    if let time = r.cookingTime, time > 0 {
-                        Label("\(time) 分钟", systemImage: "clock")
+            FlowLayout(spacing: 6) {
+                Menu {
+                    categoryMenuItems
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "tag")
+                            .font(.system(size: 10.5, weight: .semibold))
+                        Text(currentCategoryLabel(for: r))
                             .font(AppFont.caption(11.5))
-                            .foregroundStyle(Color.inkSecondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color.cardBackground, in: Capsule())
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
                     }
-                    if let used = r.useCount, used > 0 {
-                        Text("做过 \(used) 次")
-                            .font(AppFont.caption(11.5))
-                            .foregroundStyle(Color.inkSecondary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color.cardBackground, in: Capsule())
-                    }
-                    ForEach((r.tags ?? []).prefix(2), id: \.self) { tag in
-                        Text(tag)
-                            .font(AppFont.caption(11.5))
-                            .foregroundStyle(Color.inkMuted)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(Color.cardBackground, in: Capsule())
-                    }
+                    .foregroundStyle(Color.inkSecondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.cardBackground, in: Capsule())
                 }
-                .padding(.top, 2)
+                if let time = r.cookingTime, time > 0 {
+                    Label("\(time) 分钟", systemImage: "clock")
+                        .font(AppFont.caption(11.5))
+                        .foregroundStyle(Color.inkSecondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.cardBackground, in: Capsule())
+                }
+                if let used = r.useCount, used > 0 {
+                    Text("做过 \(used) 次")
+                        .font(AppFont.caption(11.5))
+                        .foregroundStyle(Color.inkSecondary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.cardBackground, in: Capsule())
+                }
+                ForEach((r.tags ?? []).prefix(2), id: \.self) { tag in
+                    Text(tag)
+                        .font(AppFont.caption(11.5))
+                        .foregroundStyle(Color.inkMuted)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.cardBackground, in: Capsule())
+                }
             }
+            .padding(.top, 2)
         }
     }
 
@@ -569,11 +656,72 @@ struct RecipeDetailView: View {
         }
     }
 
+    @ViewBuilder
+    private var categorySubmenu: some View {
+        Menu {
+            categoryMenuItems
+        } label: {
+            Label("移动到分类", systemImage: "tag")
+        }
+    }
+
+    @ViewBuilder
+    private var categoryMenuItems: some View {
+        Button {
+            Task { await changeCategory(to: nil) }
+        } label: {
+            if recipe?.categoryId == nil {
+                Label("未分类", systemImage: "checkmark")
+            } else {
+                Text("未分类")
+            }
+        }
+        ForEach(categories) { cat in
+            let title = (cat.icon?.isEmpty == false ? "\(cat.icon!) " : "") + cat.name
+            Button {
+                Task { await changeCategory(to: cat.id) }
+            } label: {
+                if recipe?.categoryId == cat.id {
+                    Label(title, systemImage: "checkmark")
+                } else {
+                    Text(title)
+                }
+            }
+        }
+    }
+
+    private func currentCategoryLabel(for r: Recipe) -> String {
+        if let cid = r.categoryId, let cat = categories.first(where: { $0.id == cid }) {
+            return (cat.icon?.isEmpty == false ? "\(cat.icon!) " : "") + cat.name
+        }
+        if let cat = r.category, r.categoryId != nil {
+            return (cat.icon?.isEmpty == false ? "\(cat.icon!) " : "") + cat.name
+        }
+        return "未分类"
+    }
+
+    private func loadCategories() async {
+        categories = (try? await CategoryService.shared.list()) ?? categories
+    }
+
+    private func changeCategory(to targetCategoryId: UInt?) async {
+        guard let recipe else { return }
+        do {
+            _ = try await RecipeService.shared.batchUpdateCategory(recipeIds: [recipe.id], categoryId: targetCategoryId)
+            await loadRecipe()
+            let targetName = targetCategoryId.flatMap { id in categories.first(where: { $0.id == id })?.name } ?? "未分类"
+            tipMessage = "已归入「\(targetName)」"
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func deleteRecipe() async {
         guard let recipe else { return }
         do {
             try await RecipeService.shared.delete(id: recipe.id)
             AppNotifications.recipesChanged()
+            AppNotifications.categoriesChanged()
             dismiss()
         } catch {
             errorMessage = error.localizedDescription

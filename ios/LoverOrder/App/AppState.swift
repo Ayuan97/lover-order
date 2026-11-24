@@ -1,11 +1,56 @@
 import Foundation
 import SwiftUI
 
+private enum AppSessionProfileCache {
+    private static let userKey = "loverorder.cache.currentUser.v1"
+    private static let householdKey = "loverorder.cache.household.v1"
+
+    static func loadUser() -> AppUser? {
+        guard let data = UserDefaults.standard.data(forKey: userKey) else { return nil }
+        return try? APIClient.makeDecoder().decode(AppUser.self, from: data)
+    }
+
+    static func saveUser(_ user: AppUser?) {
+        if let user, let data = try? APIClient.makeEncoder().encode(user) {
+            UserDefaults.standard.set(data, forKey: userKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: userKey)
+        }
+    }
+
+    static func loadHousehold() -> Household? {
+        guard let data = UserDefaults.standard.data(forKey: householdKey) else { return nil }
+        return try? APIClient.makeDecoder().decode(Household.self, from: data)
+    }
+
+    static func saveHousehold(_ household: Household?) {
+        if let household, let data = try? APIClient.makeEncoder().encode(household) {
+            UserDefaults.standard.set(data, forKey: householdKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: householdKey)
+        }
+    }
+}
+
 // 全局应用状态 持有当前用户和家信息 跨 tab 共享
 @MainActor
 final class AppState: ObservableObject {
-    @Published var currentUser: AppUser?
-    @Published var household: Household?
+    @Published var currentUser: AppUser? {
+        didSet {
+            AppSessionProfileCache.saveUser(currentUser)
+            if let avatar = currentUser?.avatar {
+                RemoteImageCache.shared.prefetch(paths: [avatar])
+            }
+        }
+    }
+    @Published var household: Household? {
+        didSet {
+            AppSessionProfileCache.saveHousehold(household)
+            if let members = household?.members {
+                RemoteImageCache.shared.prefetch(paths: members.map(\.avatar))
+            }
+        }
+    }
     @Published var currentScene: MealScene = .household
     @Published var currentMood: Mood = .easy
     @Published var isBootstrapping: Bool = true
@@ -180,6 +225,19 @@ final class AppState: ObservableObject {
 
     // 401 时 token 已被 APIClient 清掉 这里把人送回登录页 不然会留在主界面无限报错
     init() {
+        if TokenStorage.shared.isLoggedIn {
+            let cachedUser = AppSessionProfileCache.loadUser()
+            let cachedHousehold = AppSessionProfileCache.loadHousehold()
+            self.currentUser = cachedUser
+            if let hid = cachedUser?.householdId, cachedHousehold?.id == hid {
+                self.household = cachedHousehold
+            }
+            var initialAvatars: [String?] = [cachedUser?.avatar]
+            if let members = self.household?.members {
+                initialAvatars.append(contentsOf: members.map(\.avatar))
+            }
+            RemoteImageCache.shared.prefetch(paths: initialAvatars)
+        }
         NotificationCenter.default.addObserver(forName: .sessionExpired, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 self?.currentUser = nil

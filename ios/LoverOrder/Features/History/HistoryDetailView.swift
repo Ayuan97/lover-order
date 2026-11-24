@@ -59,6 +59,7 @@ struct HistoryDetailView: View {
             appState.setTabBarHidden(false, token: tabBarToken)
         }
         .task {
+            await NotificationManager.shared.markHistoryEventsRead(mealId: mealId)
             await load()
         }
         .onReceive(NotificationCenter.default.publisher(for: .historyChanged)) { _ in

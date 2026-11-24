@@ -34,3 +34,17 @@ struct APIResponse<T: Decodable>: Decodable {
     let message: String
     let data: T?
 }
+
+extension Error {
+    /// 判断是否为 Swift 并发取消或 URLSession 取消，避免页面切换/下拉刷新取消时误报网络故障
+    var isCancellationError: Bool {
+        if self is CancellationError { return true }
+        if let urlErr = self as? URLError, urlErr.code == .cancelled { return true }
+        let nsErr = self as NSError
+        if nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled { return true }
+        if let apiErr = self as? APIError, case let .requestFailed(underlying) = apiErr {
+            return underlying.isCancellationError
+        }
+        return false
+    }
+}

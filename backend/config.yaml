@@ -40,7 +40,6 @@ apns:
   production: false
 
 upload:
-  path: ./uploads
   max_size: 10485760
   allowed_types:
     - jpg
@@ -48,6 +47,15 @@ upload:
     - png
     - webp
     - heic
+  # 敏感密钥写在同目录 config.local.yaml（已加入 .gitignore）或环境变量 OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET
+  # 后续接入阿里云 CDN 时，只需将 public_base_url 改为 CDN 域名即可无缝切换
+  oss:
+    endpoint: oss-cn-hangzhou.aliyuncs.com
+    bucket: lover-order-media-ayuan
+    access_key_id: ""
+    access_key_secret: ""
+    prefix: uploads
+    public_base_url: http://lover-order-media-ayuan.oss-cn-hangzhou.aliyuncs.com
 
 log:
   level: info

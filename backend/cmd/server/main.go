@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	"lover-order-backend/internal/config"
 	"lover-order-backend/internal/middleware"
 	"lover-order-backend/internal/model"
+	"lover-order-backend/pkg/oss"
 )
 
 func main() {
@@ -30,6 +33,18 @@ func main() {
 		log.Fatalf("数据库迁移失败：%v", err)
 	}
 
+	ossClient, err := oss.NewClient(oss.Config{
+		Endpoint:        cfg.Upload.OSS.Endpoint,
+		Bucket:          cfg.Upload.OSS.Bucket,
+		AccessKeyID:     cfg.Upload.OSS.AccessKeyID,
+		AccessKeySecret: cfg.Upload.OSS.AccessKeySecret,
+		Prefix:          cfg.Upload.OSS.Prefix,
+		PublicBaseURL:   cfg.Upload.OSS.PublicBaseURL,
+	})
+	if err != nil {
+		log.Fatalf("OSS 初始化失败：%v", err)
+	}
+
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery(), corsMiddleware(cfg))
 
@@ -37,9 +52,18 @@ func main() {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
 	})
 
-	r.Static("/static/uploads", cfg.Upload.Path)
+	redirectOSS := func(c *gin.Context) {
+		rel := strings.TrimPrefix(path.Clean("/"+c.Param("filepath")), "/")
+		if rel == "" || rel == "." {
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+		c.Redirect(http.StatusFound, ossClient.PublicURL(ossClient.ObjectKey(rel)))
+	}
+	r.GET("/static/uploads/*filepath", redirectOSS)
+	r.HEAD("/static/uploads/*filepath", redirectOSS)
 
-	registerRoutes(r)
+	registerRoutes(r, ossClient)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	srv := &http.Server{Addr: addr, Handler: r}
@@ -62,13 +86,13 @@ func main() {
 	}
 }
 
-func registerRoutes(r *gin.Engine) {
+func registerRoutes(r *gin.Engine, ossClient *oss.Client) {
 	authH := api.NewAuthHandler()
 	householdH := api.NewHouseholdHandler()
 	categoryH := api.NewCategoryHandler()
 	recipeH := api.NewRecipeHandler()
 	mealH := api.NewMealHandler()
-	uploadH := api.NewUploadHandler()
+	uploadH := api.NewUploadHandler(ossClient)
 	diningH := api.NewDiningHandler()
 	stickerFavoriteH := api.NewStickerFavoriteHandler()
 	notificationH := api.NewNotificationHandler()
@@ -168,6 +192,8 @@ func registerRoutes(r *gin.Engine) {
 					recipes.GET("/list", recipeH.List)
 					recipes.GET("/:id", recipeH.Detail)
 					recipes.POST("/create", recipeH.Create)
+					recipes.POST("/batch-category", recipeH.BatchUpdateCategory)
+					recipes.POST("/batch-delete", recipeH.BatchDelete)
 					recipes.POST("/:id/update", recipeH.Update)
 					recipes.POST("/:id/delete", recipeH.Delete)
 					recipes.POST("/:id/favorite", recipeH.ToggleFavorite)

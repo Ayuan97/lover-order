@@ -4,6 +4,8 @@
 # Go
 backend/uploads/
 backend/logs/
+backend/config.local.yaml
+.env
 *.exe
 
 # Node (legacy guard)

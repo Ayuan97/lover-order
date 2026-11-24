@@ -55,12 +55,55 @@ final class CanvasFXController: ObservableObject {
     private var cleanupTask: Task<Void, Never>?
     private var lastBrushEmitAt: TimeInterval = 0
     private var rainbowHueIndex: Int = 0
-    private static let maxParticles = 120
+    private static let maxParticles = 160
 
-    // MARK: - 各类创作瞬时粒子特效
+    // MARK: - 抛投弧线拖尾与落地瞬时特效
 
-    /// 加菜上桌落地：双金环波纹 + 四角星芒 + 柔和升腾热气丝
-    func emitDishPlated(at normalized: CanvasPoint, in size: CGSize) {
+    /// 沿抛物线轨迹发射空中流光微粒，并返回触桌冲击时刻与惯性偏置向量
+    private func emitTossArcTrail(
+        center: CGPoint,
+        toss: CanvasTossArrival?,
+        primaryTint: Color,
+        now: TimeInterval
+    ) -> (impactAt: TimeInterval, momentumBias: CGVector) {
+        guard let toss else {
+            return (now, .zero)
+        }
+        let flight = toss.flightDuration
+        let dx = -toss.startOffset.width
+        let dy = -toss.startOffset.height
+        let dist = max(1, hypot(dx, dy))
+        let bias = CGVector(dx: (dx / dist) * 34, dy: (dy / dist) * 28)
+
+        let steps = 7
+        for step in 0..<steps {
+            let u = Double(step + 1) / Double(steps + 1)
+            let p = CGFloat(1 - pow(1 - u, 2.5))
+            let arc = -toss.arcLift * CGFloat(4 * u * (1 - u))
+            let px = center.x + toss.startOffset.width * (1 - p) + CGFloat.random(in: -5...5)
+            let py = center.y + toss.startOffset.height * (1 - p) + arc + CGFloat.random(in: -5...5)
+            appendParticle(FXParticle(
+                bornAt: now + u * flight * 0.88,
+                life: Double.random(in: 0.22...0.34),
+                origin: CGPoint(x: px, y: py),
+                velocity: CGVector(
+                    dx: -bias.dx * 0.45 + CGFloat.random(in: -18...18),
+                    dy: -bias.dy * 0.35 + CGFloat.random(in: -14...20)
+                ),
+                gravity: 28,
+                drag: 2.8,
+                size: CGFloat.random(in: 4.5...8.5),
+                rotation: Double.random(in: 0...180),
+                spin: Double.random(in: -120...120),
+                color: step.isMultiple(of: 2) ? primaryTint : Color.white.opacity(0.9),
+                shape: step % 3 == 0 ? .star : .dot
+            ))
+        }
+        return (now + flight, bias)
+    }
+
+    /// 加菜抛落上桌：抛弧拖尾 + 双金环波纹 + 四角星芒 + 柔和升腾热气丝
+    func emitDishPlated(at normalized: CanvasPoint, in size: CGSize, toss: CanvasTossArrival? = nil) {
         guard !UIAccessibility.isReduceMotionEnabled else { return }
         let now = Date.timeIntervalSinceReferenceDate
         let center = resolve(normalized, in: size)
@@ -70,14 +113,15 @@ final class CanvasFXController: ObservableObject {
             Color(red: 0.98, green: 0.66, blue: 0.44),
             .white
         ]
+        let (impactAt, bias) = emitTossArcTrail(center: center, toss: toss, primaryTint: palette[0], now: now)
 
         appendRing(FXRing(
-            bornAt: now, life: 0.62, origin: center,
+            bornAt: impactAt, life: 0.62, origin: center,
             startRadius: 16, endRadius: 96, lineWidth: 2.2,
             color: Color(red: 1.00, green: 0.84, blue: 0.46), isDashed: false
         ))
         appendRing(FXRing(
-            bornAt: now + 0.06, life: 0.56, origin: center,
+            bornAt: impactAt + 0.06, life: 0.56, origin: center,
             startRadius: 10, endRadius: 68, lineWidth: 1.4,
             color: Color.white.opacity(0.92), isDashed: false
         ))
@@ -86,10 +130,13 @@ final class CanvasFXController: ObservableObject {
             let angle = (Double(idx) / 12.0) * .pi * 2 + Double.random(in: -0.18...0.18)
             let speed = CGFloat.random(in: 75...165)
             appendParticle(FXParticle(
-                bornAt: now,
+                bornAt: impactAt,
                 life: Double.random(in: 0.48...0.74),
                 origin: center,
-                velocity: CGVector(dx: cos(angle) * speed, dy: sin(angle) * speed - 18),
+                velocity: CGVector(
+                    dx: cos(angle) * speed + bias.dx,
+                    dy: sin(angle) * speed - 18 + bias.dy * 0.6
+                ),
                 gravity: 64,
                 drag: 1.9,
                 size: CGFloat.random(in: 7...13),
@@ -104,7 +151,7 @@ final class CanvasFXController: ObservableObject {
         for idx in 0..<4 {
             let offsetX = CGFloat(idx - 1) * 18 - 9
             appendParticle(FXParticle(
-                bornAt: now + Double(idx) * 0.04,
+                bornAt: impactAt + Double(idx) * 0.04,
                 life: 0.78,
                 origin: CGPoint(x: center.x + offsetX, y: center.y - 10),
                 velocity: CGVector(dx: CGFloat.random(in: -10...10), dy: CGFloat.random(in: -68 ... -46)),
@@ -118,11 +165,11 @@ final class CanvasFXController: ObservableObject {
             ))
         }
 
-        scheduleCleanup(until: now + 0.85)
+        scheduleCleanup(until: impactAt + 0.86)
     }
 
-    /// 贴入表情贴纸：按分类自动配色的彩屑爱心星爆
-    func emitEmojiPop(at normalized: CanvasPoint, in size: CGSize, assetID: String) {
+    /// 抛入表情贴纸：弧线拖尾 + 按分类自动配色的落地彩屑爱心星爆
+    func emitEmojiPop(at normalized: CanvasPoint, in size: CGSize, assetID: String, toss: CanvasTossArrival? = nil) {
         guard !UIAccessibility.isReduceMotionEnabled else { return }
         let now = Date.timeIntervalSinceReferenceDate
         let center = resolve(normalized, in: size)
@@ -149,22 +196,26 @@ final class CanvasFXController: ObservableObject {
                 .white
             ]
         }
+        let (impactAt, bias) = emitTossArcTrail(center: center, toss: toss, primaryTint: palette[0], now: now)
 
         appendRing(FXRing(
-            bornAt: now, life: 0.46, origin: center,
-            startRadius: 12, endRadius: 64, lineWidth: 1.8,
+            bornAt: impactAt, life: 0.46, origin: center,
+            startRadius: 12, endRadius: 68, lineWidth: 1.9,
             color: palette[0], isDashed: false
         ))
 
         for idx in 0..<14 {
             let angle = (Double(idx) / 14.0) * .pi * 2 + Double.random(in: -0.22...0.22)
-            let speed = CGFloat.random(in: 68...155)
+            let speed = CGFloat.random(in: 72...162)
             let shape: ParticleShape = idx % 3 == 0 ? .heart : (idx % 2 == 0 ? .star : .dot)
             appendParticle(FXParticle(
-                bornAt: now,
+                bornAt: impactAt,
                 life: Double.random(in: 0.44...0.68),
                 origin: center,
-                velocity: CGVector(dx: cos(angle) * speed, dy: sin(angle) * speed - 22),
+                velocity: CGVector(
+                    dx: cos(angle) * speed + bias.dx,
+                    dy: sin(angle) * speed - 20 + bias.dy * 0.6
+                ),
                 gravity: 110,
                 drag: 2.2,
                 size: CGFloat.random(in: 6...12),
@@ -175,32 +226,36 @@ final class CanvasFXController: ObservableObject {
             ))
         }
 
-        scheduleCleanup(until: now + 0.75)
+        scheduleCleanup(until: impactAt + 0.76)
     }
 
-    /// 贴入手绘涂鸦贴纸：虚线印章圈 + 墨点微星
-    func emitDoodleStamp(at normalized: CanvasPoint, in size: CGSize, color: Color) {
+    /// 抛入手绘涂鸦贴纸：抛弧纸尘 + 虚线印章圈 + 墨点微星
+    func emitDoodleStamp(at normalized: CanvasPoint, in size: CGSize, color: Color, toss: CanvasTossArrival? = nil) {
         guard !UIAccessibility.isReduceMotionEnabled else { return }
         let now = Date.timeIntervalSinceReferenceDate
         let center = resolve(normalized, in: size)
+        let (impactAt, bias) = emitTossArcTrail(center: center, toss: toss, primaryTint: color, now: now)
 
         appendRing(FXRing(
-            bornAt: now, life: 0.42, origin: center,
-            startRadius: 20, endRadius: 62, lineWidth: 1.8,
+            bornAt: impactAt, life: 0.44, origin: center,
+            startRadius: 20, endRadius: 66, lineWidth: 1.9,
             color: color.opacity(0.9), isDashed: true
         ))
 
-        for idx in 0..<10 {
-            let angle = (Double(idx) / 10.0) * .pi * 2 + 0.15
-            let speed = CGFloat.random(in: 55...115)
+        for idx in 0..<11 {
+            let angle = (Double(idx) / 11.0) * .pi * 2 + 0.15
+            let speed = CGFloat.random(in: 60...124)
             appendParticle(FXParticle(
-                bornAt: now,
-                life: Double.random(in: 0.36...0.52),
+                bornAt: impactAt,
+                life: Double.random(in: 0.36...0.54),
                 origin: CGPoint(x: center.x + cos(angle) * 14, y: center.y + sin(angle) * 14),
-                velocity: CGVector(dx: cos(angle) * speed, dy: sin(angle) * speed),
+                velocity: CGVector(
+                    dx: cos(angle) * speed + bias.dx * 0.85,
+                    dy: sin(angle) * speed + bias.dy * 0.65
+                ),
                 gravity: 40,
-                drag: 2.6,
-                size: CGFloat.random(in: 4.5...8.5),
+                drag: 2.5,
+                size: CGFloat.random(in: 4.5...8.8),
                 rotation: Double.random(in: 0...180),
                 spin: Double.random(in: -90...90),
                 color: idx.isMultiple(of: 2) ? color : .white,
@@ -208,11 +263,11 @@ final class CanvasFXController: ObservableObject {
             ))
         }
 
-        scheduleCleanup(until: now + 0.58)
+        scheduleCleanup(until: impactAt + 0.60)
     }
 
-    /// 抠图贴纸贴入：棱镜双环 + 菱形星光魔法爆发
-    func emitCutoutMagic(at normalized: CanvasPoint, in size: CGSize) {
+    /// 抠图/照片贴纸抛入：弧线流光 + 棱镜双环 + 菱形星光魔法爆发
+    func emitCutoutMagic(at normalized: CanvasPoint, in size: CGSize, toss: CanvasTossArrival? = nil) {
         guard !UIAccessibility.isReduceMotionEnabled else { return }
         let now = Date.timeIntervalSinceReferenceDate
         let center = resolve(normalized, in: size)
@@ -222,26 +277,30 @@ final class CanvasFXController: ObservableObject {
             Color(red: 1.00, green: 0.88, blue: 0.66),
             .white
         ]
+        let (impactAt, bias) = emitTossArcTrail(center: center, toss: toss, primaryTint: prism[0], now: now)
 
         appendRing(FXRing(
-            bornAt: now, life: 0.58, origin: center,
-            startRadius: 14, endRadius: 90, lineWidth: 2.0,
+            bornAt: impactAt, life: 0.58, origin: center,
+            startRadius: 14, endRadius: 92, lineWidth: 2.0,
             color: prism[0], isDashed: false
         ))
         appendRing(FXRing(
-            bornAt: now + 0.07, life: 0.52, origin: center,
+            bornAt: impactAt + 0.07, life: 0.52, origin: center,
             startRadius: 10, endRadius: 68, lineWidth: 1.5,
             color: prism[1], isDashed: false
         ))
 
         for idx in 0..<14 {
             let angle = (Double(idx) / 14.0) * .pi * 2
-            let speed = CGFloat.random(in: 75...160)
+            let speed = CGFloat.random(in: 78...166)
             appendParticle(FXParticle(
-                bornAt: now,
+                bornAt: impactAt,
                 life: Double.random(in: 0.50...0.76),
                 origin: center,
-                velocity: CGVector(dx: cos(angle) * speed, dy: sin(angle) * speed),
+                velocity: CGVector(
+                    dx: cos(angle) * speed + bias.dx,
+                    dy: sin(angle) * speed + bias.dy * 0.65
+                ),
                 gravity: 24,
                 drag: 2.0,
                 size: CGFloat.random(in: 6.5...12.5),
@@ -252,28 +311,32 @@ final class CanvasFXController: ObservableObject {
             ))
         }
 
-        scheduleCleanup(until: now + 0.82)
+        scheduleCleanup(until: impactAt + 0.84)
     }
 
-    /// 画布落字：沿文字横线洒落温柔星点
-    func emitTextPlace(at normalized: CanvasPoint, in size: CGSize, color: Color) {
+    /// 画布抛入文字 / 原地改字：支持抛弧拖尾 + 沿文字横线洒落温柔星点
+    func emitTextPlace(at normalized: CanvasPoint, in size: CGSize, color: Color, toss: CanvasTossArrival? = nil) {
         guard !UIAccessibility.isReduceMotionEnabled else { return }
         let now = Date.timeIntervalSinceReferenceDate
         let center = resolve(normalized, in: size)
+        let (impactAt, bias) = emitTossArcTrail(center: center, toss: toss, primaryTint: color, now: now)
 
         appendRing(FXRing(
-            bornAt: now, life: 0.40, origin: center,
-            startRadius: 16, endRadius: 60, lineWidth: 1.4,
-            color: color.opacity(0.75), isDashed: false
+            bornAt: impactAt, life: 0.42, origin: center,
+            startRadius: 16, endRadius: 64, lineWidth: 1.5,
+            color: color.opacity(0.78), isDashed: false
         ))
 
         for idx in 0..<10 {
             let spreadX = CGFloat(idx - 5) * 11 + CGFloat.random(in: -4...4)
             appendParticle(FXParticle(
-                bornAt: now + Double(idx) * 0.015,
+                bornAt: impactAt + Double(idx) * 0.014,
                 life: Double.random(in: 0.40...0.60),
                 origin: CGPoint(x: center.x + spreadX, y: center.y + CGFloat.random(in: -8...8)),
-                velocity: CGVector(dx: spreadX * 0.65, dy: CGFloat.random(in: -62 ... -18)),
+                velocity: CGVector(
+                    dx: spreadX * 0.65 + bias.dx * 0.65,
+                    dy: CGFloat.random(in: -62 ... -18) + bias.dy * 0.45
+                ),
                 gravity: 54,
                 drag: 1.8,
                 size: CGFloat.random(in: 5...9),
@@ -284,7 +347,7 @@ final class CanvasFXController: ObservableObject {
             ))
         }
 
-        scheduleCleanup(until: now + 0.72)
+        scheduleCleanup(until: impactAt + 0.74)
     }
 
     /// 应用贴纸样式/动效特效：聚焦高光圈 + 四散微星
@@ -888,5 +951,131 @@ struct CanvasSparkleOrbitOverlay: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// 画布元素“抛投到桌面上”的物理轨迹参数（仅在入场约 0.42s 内激活，落地后零开销）。
+struct CanvasTossArrival: Equatable {
+    let bornAt: TimeInterval
+    let startOffset: CGSize
+    let arcLift: CGFloat
+    let peakScale: CGFloat
+    let spinDegrees: Double
+    let tiltX: CGFloat
+    let tiltY: CGFloat
+    let flightDuration: TimeInterval
+    let settleDuration: TimeInterval
+
+    var totalDuration: TimeInterval { flightDuration + settleDuration }
+
+    func isAirborne(at now: TimeInterval) -> Bool {
+        now - bornAt < flightDuration
+    }
+
+    static func make(
+        target: CanvasPoint,
+        in canvasSize: CGSize,
+        sequence: Int,
+        flightDuration: TimeInterval = 0.20
+    ) -> CanvasTossArrival {
+        let width = max(canvasSize.width, 320)
+        let height = max(canvasSize.height, 480)
+        // 轮换不同抛手方位（左下甩入 / 正下挑抛 / 右下斜抛 / 侧向飞牌），让每次丢出的手感角度各不相同
+        let handAnchorsX: [CGFloat] = [0.24, 0.76, 0.48, 0.18, 0.82, 0.36, 0.64]
+        let anchorX = handAnchorsX[abs(sequence) % handAnchorsX.count] + CGFloat.random(in: -0.05...0.05)
+        let anchorY = min(max(target.y + CGFloat.random(in: 0.30...0.44), 0.72), 0.98)
+
+        let rawDX = (anchorX - target.x) * width
+        let rawDY = (anchorY - target.y) * height
+        let clampedDX = min(max(rawDX, -width * 0.48), width * 0.48)
+        let clampedDY = min(max(rawDY, 115), height * 0.52)
+
+        let spinDirection: Double = clampedDX >= 0 ? -1.0 : 1.0
+        let spin = spinDirection * Double.random(in: 22...44)
+
+        return CanvasTossArrival(
+            bornAt: Date.timeIntervalSinceReferenceDate,
+            startOffset: CGSize(width: clampedDX, height: clampedDY),
+            arcLift: CGFloat.random(in: 48...82),
+            peakScale: CGFloat.random(in: 1.24...1.36),
+            spinDegrees: spin,
+            tiltX: CGFloat.random(in: 0.55...0.95),
+            tiltY: clampedDX >= 0 ? -0.42 : 0.42,
+            flightDuration: flightDuration,
+            settleDuration: 0.22
+        )
+    }
+}
+
+/// 60fps 抛物线腾空 -> 阴影收拢触桌 -> 微滑回弹修饰器。
+private struct CanvasTossMotionModifier: ViewModifier {
+    let toss: CanvasTossArrival?
+    let reduceMotion: Bool
+
+    func body(content: Content) -> some View {
+        if let toss, !reduceMotion {
+            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                let age = context.date.timeIntervalSinceReferenceDate - toss.bornAt
+                if age < 0 {
+                    content.opacity(0)
+                } else if age < toss.flightDuration {
+                    // 阶段 1：脱手抛飞弧线 + 空中近大透视 + 悬浮投影向桌面收拢
+                    let t = min(max(age / toss.flightDuration, 0), 1)
+                    let progress = CGFloat(1 - pow(1 - t, 2.5))
+                    let arcY = -toss.arcLift * CGFloat(4 * t * (1 - t))
+                    let dx = toss.startOffset.width * (1 - progress)
+                    let dy = toss.startOffset.height * (1 - progress) + arcY
+
+                    let elevation = CGFloat(sin(.pi * pow(t, 0.80)))
+                    let startCompress = CGFloat(min(1.0, t / 0.22))
+                    let scale = (0.76 + 0.24 * startCompress) + (toss.peakScale - 1.0) * elevation - 0.05 * CGFloat(pow(t, 3))
+                    let spin = toss.spinDegrees * pow(1 - t, 1.65)
+                    let tiltAngle = 18.0 * Double(1 - progress)
+                    let fadeIn = min(1.0, age / 0.04)
+
+                    content
+                        .scaleEffect(scale)
+                        .rotationEffect(.degrees(spin))
+                        .rotation3DEffect(
+                            .degrees(tiltAngle),
+                            axis: (x: toss.tiltX, y: toss.tiltY, z: 0),
+                            perspective: 0.55
+                        )
+                        .shadow(
+                            color: Color.black.opacity(Double(0.26 * elevation)),
+                            radius: 4 + 14 * elevation,
+                            x: -dx * 0.06,
+                            y: 5 + 24 * elevation
+                        )
+                        .opacity(fadeIn)
+                        .offset(x: dx, y: dy)
+                } else if age < toss.totalDuration {
+                    // 阶段 2：拍落画布后的桌面微滑阻尼与 Q 弹归位
+                    let s = min(max((age - toss.flightDuration) / toss.settleDuration, 0), 1)
+                    let damp = CGFloat(exp(-s * 7.2))
+                    let dist = max(1, hypot(toss.startOffset.width, toss.startOffset.height))
+                    let dirX = -toss.startOffset.width / dist
+                    let dirY = -toss.startOffset.height / dist
+                    let slide = sin(CGFloat(s) * .pi * 1.4) * 5.0 * damp
+                    let squash = 1.0 - 0.06 * damp * cos(CGFloat(s) * .pi * 2.4)
+                    let settleWobble = Double(damp) * sin(s * .pi * 2.0) * (toss.spinDegrees >= 0 ? 2.4 : -2.4)
+
+                    content
+                        .scaleEffect(squash)
+                        .rotationEffect(.degrees(settleWobble))
+                        .offset(x: dirX * slide, y: dirY * slide)
+                } else {
+                    content
+                }
+            }
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    func canvasTossArrival(_ toss: CanvasTossArrival?, reduceMotion: Bool) -> some View {
+        modifier(CanvasTossMotionModifier(toss: toss, reduceMotion: reduceMotion))
     }
 }

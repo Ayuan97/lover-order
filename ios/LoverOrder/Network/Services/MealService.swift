@@ -520,9 +520,16 @@ private struct OutboundLivePreviewMessage: Encodable {
 
 @MainActor
 final class CanvasRealtimeSession: ObservableObject {
+    private static let extendedOpKinds: Set<String> = [
+        "patch_elements",
+        "batch_upsert",
+        "batch_delete"
+    ]
+
     @Published var isConnected: Bool = false
     @Published var onlineUsers: [CanvasRemoteActor] = []
     @Published var remotePreviews: [String: CanvasRemoteLivePreview] = [:]
+    @Published private(set) var usesLegacyCanvasOps: Bool = false
 
     var currentRevision: Int64 = 0
     let clientID: String = UUID().uuidString
@@ -533,10 +540,11 @@ final class CanvasRealtimeSession: ObservableObject {
     var onMealSync: ((CanvasMealSyncMessage) -> Void)?
     var onNetworkRecovered: (() -> Void)?
     var onConnectionLost: (() -> Void)?
+    var onLegacyOpFallback: (() -> Void)?
     var onError: ((String) -> Void)?
 
     private enum OutboundQueueItem {
-        case op(text: String)
+        case op(kind: String, text: String)
         case livePreview(text: String, isClear: Bool)
     }
 
@@ -625,6 +633,7 @@ final class CanvasRealtimeSession: ObservableObject {
         socketTask?.cancel(with: .normalClosure, reason: nil)
         socketTask = nil
         isConnected = false
+        usesLegacyCanvasOps = false
         onlineUsers = []
         remotePreviews = [:]
         pendingOps.removeAll()
@@ -662,7 +671,7 @@ final class CanvasRealtimeSession: ObservableObject {
         )
         do {
             let data = try encoder.encode(msg)
-            outboundQueue.append(.op(text: String(decoding: data, as: UTF8.self)))
+            outboundQueue.append(.op(kind: op.kind, text: String(decoding: data, as: UTF8.self)))
             ensureSendLoopRunning()
         } catch {
             onError?("准备同步画布改动失败")
@@ -778,7 +787,7 @@ final class CanvasRealtimeSession: ObservableObject {
                 let item = self.outboundQueue.removeFirst()
                 let text: String
                 switch item {
-                case .op(let t):
+                case .op(_, let t):
                     text = t
                 case .livePreview(let t, _):
                     text = t
@@ -822,6 +831,7 @@ final class CanvasRealtimeSession: ObservableObject {
               let url = APIConfig.webSocketURL(path: "meals/\(mealId)/canvas/ws", query: ["client_id": clientID]) else {
             return
         }
+        usesLegacyCanvasOps = false
         var request = URLRequest(url: url)
         if let token = TokenStorage.shared.access, !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -1034,7 +1044,7 @@ final class CanvasRealtimeSession: ObservableObject {
                     currentRevision = msg.revision
                     onSnapshot?(msg)
                 }
-                if msg.clientId == clientID, let seedOpId, msg.opId == seedOpId {
+                if msg.clientId == clientID, let seedOpId, (msg.opId == seedOpId || msg.opId == nil) {
                     self.seedOpId = nil
                     resendPendingOps()
                 }
@@ -1064,10 +1074,33 @@ final class CanvasRealtimeSession: ObservableObject {
             }
         case "error":
             if let message = env.message, !message.isEmpty {
-                onError?(message)
+                if message.contains("不支持的画布操作类型") {
+                    handleLegacyUnsupportedOp()
+                } else {
+                    onError?(message)
+                }
             }
         default:
             break
+        }
+    }
+
+    private func handleLegacyUnsupportedOp() {
+        let wasLegacy = usesLegacyCanvasOps
+        usesLegacyCanvasOps = true
+        let oldCount = pendingOps.count
+        pendingOps.removeAll { Self.extendedOpKinds.contains($0.kind) }
+        if pendingOps.count != oldCount {
+            savePendingOps()
+        }
+        outboundQueue.removeAll { item in
+            if case .op(let kind, _) = item {
+                return Self.extendedOpKinds.contains(kind)
+            }
+            return false
+        }
+        if !wasLegacy {
+            onLegacyOpFallback?()
         }
     }
 }

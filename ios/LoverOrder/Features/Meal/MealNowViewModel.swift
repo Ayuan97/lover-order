@@ -102,6 +102,7 @@ final class MealNowViewModel: ObservableObject {
 
         restorePendingReview()
         if mealSeq == mealReadSeq, case .failure(let err) = currentRes,
+           !err.isCancellationError,
            meal == nil, suggestions.isEmpty, frequents.isEmpty {
             errorMessage = err.localizedDescription
         }
@@ -307,8 +308,27 @@ final class MealNowViewModel: ObservableObject {
                 }
             }
             Haptics.light()
+        } catch let apiErr as APIError {
+            // 如果同伴或上一次请求刚删过这道菜（服务端已不存在），直接对齐移除本地脏状态，不再卡死在画布上
+            if case let .server(code, msg) = apiErr, code == 404 || msg.contains("不存在") {
+                if self.meal?.id == meal.id {
+                    self.meal?.dishes?.removeAll { $0.id == dish.id }
+                }
+                return
+            }
+            if let latest = try? await mealService.detail(id: meal.id) {
+                self.meal = latest
+                if !(latest.dishes ?? []).contains(where: { $0.id == dish.id }) {
+                    return
+                }
+            }
+            if !apiErr.isCancellationError {
+                errorMessage = apiErr.localizedDescription
+            }
         } catch {
-            errorMessage = error.localizedDescription
+            if !error.isCancellationError {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 

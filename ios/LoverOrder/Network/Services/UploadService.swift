@@ -43,6 +43,7 @@ final class UploadService {
                 throw APIError.server(code: wrapped.code, message: wrapped.message)
             }
             guard let value = wrapped.data else { throw APIError.noData }
+            await RemoteImageCache.shared.storeData(data, forPath: value.path)
             return value
         } catch let error as APIError {
             throw error

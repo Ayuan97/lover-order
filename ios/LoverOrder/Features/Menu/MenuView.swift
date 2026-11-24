@@ -1,13 +1,32 @@
 import SwiftUI
 
-// 菜单页 双列网格 + 已加入这一顿 + 底部「就这些」
+// 菜单页 双列网格 + 分类管理 + 单卡编辑删除 + 批量移动分类/删除 + 已加入这一顿
 struct MenuView: View {
     @EnvironmentObject private var appState: AppState
     @StateObject private var vm = MenuViewModel()
     @State private var searchActive: Bool = false
     @State private var showCreateRecipe: Bool = false
+    @State private var editingRecipe: Recipe?
+    @State private var photoStudioRecipe: Recipe?
+    @State private var pendingDeleteRecipe: Recipe?
+
+    // 分类管理与删除确认
+    @State private var categorySheetTarget: CategorySheetPresentation?
+    @State private var pendingDeleteCategory: RecipeCategory?
+
+    // 批量管理状态
+    @State private var isManaging: Bool = false
+    @State private var selectedRecipeIds: Set<UInt> = []
+    @State private var showBatchCategorySheet: Bool = false
+    @State private var confirmBatchDelete: Bool = false
+
     @State private var previewGallery: PhotoGalleryPresentation?
     @Environment(\.scenePhase) private var scenePhase
+
+    private struct CategorySheetPresentation: Identifiable {
+        let id = UUID()
+        let initialEditing: RecipeCategory?
+    }
 
     private let grid = [
         GridItem(.flexible(), spacing: AppSpacing.md),
@@ -22,7 +41,9 @@ struct MenuView: View {
                     searchBar
                     filterPanel
                     grid_section
-                    pinnedSection
+                    if !isManaging {
+                        pinnedSection
+                    }
                     Color.clear.frame(height: 150)
                 }
                 .padding(.horizontal, AppSpacing.lg)
@@ -31,10 +52,15 @@ struct MenuView: View {
             .background {
                 Color.appBackground.ignoresSafeArea()
             }
+            .onAppear {
+                vm.restoreCacheIfNeeded(householdId: appState.currentUser?.householdId ?? appState.household?.id)
+            }
             .refreshable {
-                await vm.loadCurrentMeal(scene: .household, mood: appState.currentMood)
-                await vm.loadCategories()
-                await vm.loadRecipes()
+                await vm.refreshAll(
+                    householdId: appState.currentUser?.householdId ?? appState.household?.id,
+                    scene: .household,
+                    mood: appState.currentMood
+                )
             }
             .safeAreaInset(edge: .bottom) {
                 bottomBar
@@ -42,24 +68,32 @@ struct MenuView: View {
             .onChange(of: appState.activeTab) { _, tab in
                 if tab == 1 {
                     Task {
-                        async let m: () = vm.loadCurrentMeal(scene: .household, mood: appState.currentMood)
-                        async let r: () = vm.loadRecipes()
-                        async let c: () = vm.loadCategories()
-                        _ = await (m, r, c)
+                        await vm.refreshIfBootstrapped(
+                            householdId: appState.currentUser?.householdId ?? appState.household?.id,
+                            scene: .household,
+                            mood: appState.currentMood
+                        )
                     }
+                } else if isManaging {
+                    exitManaging()
                 }
             }
             .onChange(of: scenePhase) { _, phase in
                 guard phase == .active, appState.activeTab == 1 else { return }
                 Task {
-                    async let m: () = vm.loadCurrentMeal(scene: .household, mood: appState.currentMood)
-                    async let r: () = vm.loadRecipes()
-                    async let c: () = vm.loadCategories()
-                    _ = await (m, r, c)
+                    await vm.refreshIfBootstrapped(
+                        householdId: appState.currentUser?.householdId ?? appState.household?.id,
+                        scene: .household,
+                        mood: appState.currentMood
+                    )
                 }
             }
             .task {
-                await vm.bootstrap(scene: .household, mood: appState.currentMood)
+                await vm.bootstrap(
+                    householdId: appState.currentUser?.householdId ?? appState.household?.id,
+                    scene: .household,
+                    mood: appState.currentMood
+                )
             }
             .task {
                 // 与首页同款轮询 另一台手机加的菜自动出现在"已加入这一顿"
@@ -78,43 +112,228 @@ struct MenuView: View {
             .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
                 Task { await vm.loadCurrentMeal(scene: .household, mood: appState.currentMood) }
             }
-            .navigationBarHidden(true)
+            .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $showCreateRecipe) {
                 RecipeEditView(mode: .create) { _ in
-                    Task { await vm.loadRecipes() }
+                    Task {
+                        await vm.loadCategories()
+                        await vm.loadRecipes()
+                    }
                 }
                 .environmentObject(appState)
+            }
+            .sheet(item: $editingRecipe) { target in
+                RecipeEditView(
+                    mode: .edit(target),
+                    onSaved: { _ in
+                        Task {
+                            await vm.loadCategories()
+                            await vm.loadRecipes()
+                        }
+                    },
+                    onDeleted: {
+                        Task {
+                            await vm.loadCategories()
+                            await vm.loadRecipes()
+                        }
+                    }
+                )
+                .environmentObject(appState)
+            }
+            .sheet(item: $photoStudioRecipe) { target in
+                RecipePhotoStudioSheet(recipe: target) { _ in
+                    vm.tipMessage = "主图与抠图已保存"
+                    Task { await vm.loadRecipes() }
+                }
+            }
+            .sheet(item: $categorySheetTarget) { sheet in
+                CategoryManagementView(initialEditingCategory: sheet.initialEditing)
+                    .preferredColorScheme(.light)
+            }
+            .sheet(isPresented: $showBatchCategorySheet) {
+                BatchCategoryPickerSheet(
+                    selectedCount: selectedRecipeIds.count,
+                    categories: vm.categories
+                ) { targetCategoryId, targetCategoryName in
+                    let ids = Array(selectedRecipeIds)
+                    let ok = await vm.moveRecipesToCategory(
+                        ids: ids,
+                        categoryId: targetCategoryId,
+                        categoryName: targetCategoryName
+                    )
+                    if ok {
+                        exitManaging()
+                    }
+                    return ok
+                }
+                .presentationDetents([.medium, .large])
+                .preferredColorScheme(.light)
             }
             .fullScreenCover(item: $previewGallery) { presentation in
                 PhotoGalleryViewer(slides: presentation.slides, initialIndex: presentation.initialIndex)
             }
+            .confirmationDialog(
+                pendingDeleteRecipe.map { "删除「\($0.name)」？" } ?? "删除这道菜谱？",
+                isPresented: Binding(
+                    get: { pendingDeleteRecipe != nil },
+                    set: { if !$0 { pendingDeleteRecipe = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("删除菜谱", role: .destructive) {
+                    if let target = pendingDeleteRecipe {
+                        pendingDeleteRecipe = nil
+                        Task { await vm.deleteSingleRecipe(target) }
+                    }
+                }
+                Button("再想想", role: .cancel) {
+                    pendingDeleteRecipe = nil
+                }
+            } message: {
+                Text("删除后这道菜不会再出现在菜单里，但已经记下的历史不受影响。")
+            }
+            .confirmationDialog(
+                "删除选中的 \(selectedRecipeIds.count) 道菜谱？",
+                isPresented: $confirmBatchDelete,
+                titleVisibility: .visible
+            ) {
+                Button("批量删除", role: .destructive) {
+                    let ids = Array(selectedRecipeIds)
+                    Task {
+                        if await vm.batchDeleteRecipes(ids: ids) {
+                            exitManaging()
+                        }
+                    }
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("删除后这些菜谱将从列表中移除，已经记下的用餐历史不受影响。")
+            }
+            .confirmationDialog(
+                pendingDeleteCategory.map { "删除分类「\($0.name)」？" } ?? "删除分类？",
+                isPresented: Binding(
+                    get: { pendingDeleteCategory != nil },
+                    set: { if !$0 { pendingDeleteCategory = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("删除分类", role: .destructive) {
+                    if let target = pendingDeleteCategory {
+                        pendingDeleteCategory = nil
+                        Task { await vm.deleteCategory(target) }
+                    }
+                }
+                Button("取消", role: .cancel) {
+                    pendingDeleteCategory = nil
+                }
+            } message: {
+                let count = pendingDeleteCategory?.recipeCount ?? 0
+                if count > 0 {
+                    Text("该分类下的 \(count) 道菜谱不会被删除，将自动归为「未分类」。")
+                } else {
+                    Text("删除后该分类将从筛选栏移除，不会影响已有菜谱。")
+                }
+            }
             .toast($vm.errorMessage)
+            .tipToast($vm.tipMessage)
         }
     }
 
     private var header: some View {
-        HStack(alignment: .center) {
+        HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("菜谱")
+                Text(isManaging ? "批量管理" : "菜谱")
                     .font(AppFont.title(27))
                     .foregroundStyle(Color.inkPrimary)
-                if !vm.recipes.isEmpty {
-                    Text("共 \(vm.recipes.count) 道菜")
+                if isManaging {
+                    Text(selectedRecipeIds.isEmpty ? "轻点卡片勾选需要批量整理的菜品" : "已选 \(selectedRecipeIds.count) 道菜")
+                        .font(AppFont.caption(12))
+                        .foregroundStyle(Color.inkMuted)
+                        .monospacedDigit()
+                } else if vm.totalCount > 0 {
+                    Text("共 \(vm.totalCount) 道菜")
                         .font(AppFont.caption(12))
                         .foregroundStyle(Color.inkMuted)
                 }
             }
             Spacer()
-            Button {
-                showCreateRecipe = true
-            } label: {
-                ProductIcon(kind: .add)
-                    .foregroundStyle(Color.inkPrimary)
-                    .frame(width: 44, height: 44)
-                    .background(Color.cardBackground, in: Circle())
+
+            if isManaging {
+                let allVisibleIds = Set(vm.recipes.map(\.id))
+                let isAllSelected = !allVisibleIds.isEmpty && allVisibleIds.isSubset(of: selectedRecipeIds)
+                Button {
+                    Haptics.light()
+                    if isAllSelected {
+                        selectedRecipeIds.subtract(allVisibleIds)
+                    } else {
+                        selectedRecipeIds.formUnion(allVisibleIds)
+                    }
+                } label: {
+                    Text(isAllSelected ? "取消全选" : "全选")
+                        .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.inkPrimary)
+                        .padding(.horizontal, 14)
+                        .frame(height: 38)
+                        .background(Color.cardBackground, in: Capsule())
+                        .overlay {
+                            Capsule().strokeBorder(Color.dividerLine.opacity(0.9), lineWidth: 0.7)
+                        }
+                }
+                .buttonStyle(SoftPressStyle())
+
+                Button {
+                    Haptics.light()
+                    exitManaging()
+                } label: {
+                    Text("完成")
+                        .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 15)
+                        .frame(height: 38)
+                        .background(Color.actionInk, in: Capsule())
+                }
+                .buttonStyle(SoftPressStyle())
+            } else {
+                if !vm.recipes.isEmpty {
+                    Button {
+                        Haptics.light()
+                        selectedRecipeIds.removeAll()
+                        isManaging = true
+                    } label: {
+                        Image(systemName: "checklist")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundStyle(Color.inkPrimary)
+                            .frame(width: 44, height: 44)
+                            .background(Color.cardBackground, in: Circle())
+                    }
+                    .buttonStyle(SoftPressStyle())
+                    .accessibilityLabel("批量管理菜品")
+                }
+
+                Button {
+                    Haptics.light()
+                    categorySheetTarget = CategorySheetPresentation(initialEditing: nil)
+                } label: {
+                    Image(systemName: "tag")
+                        .font(.system(size: 15.5, weight: .medium))
+                        .foregroundStyle(Color.inkPrimary)
+                        .frame(width: 44, height: 44)
+                        .background(Color.cardBackground, in: Circle())
+                }
+                .buttonStyle(SoftPressStyle())
+                .accessibilityLabel("管理菜谱分类")
+
+                Button {
+                    showCreateRecipe = true
+                } label: {
+                    ProductIcon(kind: .add)
+                        .foregroundStyle(Color.inkPrimary)
+                        .frame(width: 44, height: 44)
+                        .background(Color.cardBackground, in: Circle())
+                }
+                .buttonStyle(SoftPressStyle())
+                .accessibilityLabel("添加菜谱")
             }
-            .buttonStyle(SoftPressStyle())
-            .accessibilityLabel("添加菜谱")
         }
         .frame(minHeight: 54)
     }
@@ -122,24 +341,62 @@ struct MenuView: View {
     private var filterPanel: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                CategoryChip(title: "全部", isSelected: vm.selectedCategoryId == nil && vm.quickFilter == .all) {
+                CategoryChip(
+                    title: "全部",
+                    isSelected: !vm.isUncategorizedSelected && vm.selectedCategoryId == nil && vm.quickFilter == .all
+                ) {
                     Task { await vm.clearFilters() }
                 }
                 CategoryChip(title: MenuFilter.recent.label, isSelected: vm.quickFilter == .recent) {
                     Task { await vm.selectFilter(vm.quickFilter == .recent ? .all : .recent) }
                 }
                 ForEach(visibleCategories) { category in
-                    CategoryChip(title: category.name, isSelected: vm.selectedCategoryId == category.id) {
-                        Task { await vm.selectCategory(category.id) }
+                    let chipTitle = (category.icon?.isEmpty == false ? "\(category.icon!) " : "") + category.name
+                    CategoryChip(title: chipTitle, isSelected: vm.selectedCategoryId == category.id) {
+                        Task { await vm.selectCategory(vm.selectedCategoryId == category.id ? nil : category.id) }
+                    }
+                    .contextMenu {
+                        Button {
+                            categorySheetTarget = CategorySheetPresentation(initialEditing: category)
+                        } label: {
+                            Label("编辑分类", systemImage: "pencil")
+                        }
+                        Button(role: .destructive) {
+                            pendingDeleteCategory = category
+                        } label: {
+                            Label("删除分类", systemImage: "trash")
+                        }
                     }
                 }
+                CategoryChip(title: "未分类", isSelected: vm.isUncategorizedSelected) {
+                    Task { await vm.selectUncategorized() }
+                }
+                Button {
+                    Haptics.light()
+                    categorySheetTarget = CategorySheetPresentation(initialEditing: nil)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 11.5, weight: .semibold))
+                        Text("管理分类")
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                    }
+                    .padding(.horizontal, 13)
+                    .frame(height: 36)
+                    .foregroundStyle(Color.inkSecondary)
+                    .background(Color.cardBackground, in: Capsule())
+                    .overlay {
+                        Capsule().stroke(Color.dividerLine.opacity(0.9), lineWidth: 0.7)
+                    }
+                }
+                .buttonStyle(SoftPressStyle())
             }
         }
     }
 
     /// 后端分类允许用户自定义；如果有人把“最近做过”之类的快捷筛选也建成分类，页面只展示一次。
     private var visibleCategories: [RecipeCategory] {
-        let quickLabels = Set(MenuFilter.allCases.map(\.label))
+        let quickLabels = Set(MenuFilter.allCases.map(\.label)).union(["未分类"])
         return vm.categories.filter { !quickLabels.contains($0.name) }
     }
 
@@ -184,17 +441,48 @@ struct MenuView: View {
                 LazyVGrid(columns: grid, spacing: AppSpacing.md) {
                     ForEach(vm.recipes) { recipe in
                         let pinned = pinnedDish(for: recipe)
+                        let isSelected = selectedRecipeIds.contains(recipe.id)
                         MenuRecipeCard(
                             recipe: recipe,
+                            categories: vm.categories,
                             alreadyAdded: pinned != nil,
-                            canToggle: pinned == nil || canRemovePinnedDish
-                        ) {
-                            if let pinned {
-                                Task { await vm.removeDish(pinned) }
-                            } else {
-                                Task { await vm.addDish(recipe) }
+                            canToggle: pinned == nil || canRemovePinnedDish,
+                            isManaging: isManaging,
+                            isSelected: isSelected,
+                            onToggleSelect: {
+                                toggleRecipeSelection(recipe.id)
+                            },
+                            onAdd: {
+                                if let pinned {
+                                    Task { await vm.removeDish(pinned) }
+                                } else {
+                                    Task { await vm.addDish(recipe) }
+                                }
+                            },
+                            onEdit: {
+                                editingRecipe = recipe
+                            },
+                            onEditPhotos: {
+                                photoStudioRecipe = recipe
+                            },
+                            onMoveCategory: { catId, catName in
+                                Task {
+                                    _ = await vm.moveRecipesToCategory(
+                                        ids: [recipe.id],
+                                        categoryId: catId,
+                                        categoryName: catName
+                                    )
+                                }
+                            },
+                            onStartBatch: {
+                                Haptics.light()
+                                isManaging = true
+                                selectedRecipeIds = [recipe.id]
+                            },
+                            onDelete: {
+                                pendingDeleteRecipe = recipe
                             }
-                        }
+                        )
                         .onAppear {
                             if recipe.id == vm.recipes.last?.id {
                                 Task { await vm.loadMore() }
@@ -217,7 +505,7 @@ struct MenuView: View {
             Image(systemName: "tray")
                 .font(.system(size: 32))
                 .foregroundStyle(Color.inkMuted)
-            Text("还没有菜谱 先去添加一道吧")
+            Text(vm.isUncategorizedSelected ? "没有未分类的菜谱" : "还没有菜谱 先去添加一道吧")
                 .font(AppFont.body())
                 .foregroundStyle(Color.inkMuted)
         }
@@ -274,14 +562,15 @@ struct MenuView: View {
                         }
                     }
                 }
-
             }
         }
     }
 
     @ViewBuilder
     private var bottomBar: some View {
-        if !vm.pinnedDishes.isEmpty {
+        if isManaging {
+            batchBottomBar
+        } else if !vm.pinnedDishes.isEmpty {
             HStack(spacing: 12) {
                 HStack(spacing: -8) {
                     ForEach(vm.pinnedDishes.prefix(3)) { dish in
@@ -346,6 +635,87 @@ struct MenuView: View {
         }
     }
 
+    private var batchBottomBar: some View {
+        let hasSelection = !selectedRecipeIds.isEmpty
+        return HStack(spacing: 10) {
+            Text(hasSelection ? "已选 \(selectedRecipeIds.count) 道" : "轻点卡片多选")
+                .font(.system(size: 13.5, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(hasSelection ? Color.inkPrimary : Color.inkMuted)
+                .padding(.leading, 6)
+
+            Spacer(minLength: 4)
+
+            Button {
+                Haptics.light()
+                showBatchCategorySheet = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "tag")
+                        .font(.system(size: 11.5, weight: .semibold))
+                    Text("移到分类")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .frame(height: 38)
+                .background(Color.actionInk.opacity(hasSelection ? 1 : 0.32), in: Capsule())
+            }
+            .buttonStyle(SoftPressStyle())
+            .disabled(!hasSelection)
+
+            Button {
+                Haptics.light()
+                confirmBatchDelete = true
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11.5, weight: .semibold))
+                    Text("删除")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(hasSelection ? Color.errorInk : Color.inkMuted)
+                .padding(.horizontal, 13)
+                .frame(height: 38)
+                .background(
+                    hasSelection ? Color.errorInk.opacity(0.12) : Color.cardBackground,
+                    in: Capsule()
+                )
+            }
+            .buttonStyle(SoftPressStyle())
+            .disabled(!hasSelection)
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 8)
+        .frame(height: 52)
+        .background {
+            ZStack {
+                Capsule().fill(.ultraThinMaterial)
+                Capsule().fill(Color.white.opacity(0.90))
+            }
+        }
+        .overlay {
+            Capsule().strokeBorder(Color.black.opacity(0.09), lineWidth: 0.7)
+        }
+        .shadow(color: Color.black.opacity(0.11), radius: 16, y: 6)
+        .padding(.horizontal, 18)
+        .padding(.bottom, 76)
+    }
+
+    private func toggleRecipeSelection(_ id: UInt) {
+        Haptics.light()
+        if selectedRecipeIds.contains(id) {
+            selectedRecipeIds.remove(id)
+        } else {
+            selectedRecipeIds.insert(id)
+        }
+    }
+
+    private func exitManaging() {
+        isManaging = false
+        selectedRecipeIds.removeAll()
+    }
+
     private func pinnedDish(for recipe: Recipe) -> MealDish? {
         vm.pinnedDishes.first { $0.recipeId == recipe.id }
     }
@@ -363,6 +733,180 @@ struct MenuView: View {
         case .confirmed: return "已确认"
         case .completed: return "已完成"
         case .cancelled: return "已取消"
+        }
+    }
+}
+
+// 批量移动分类选择弹层（支持直接新建分类并移入）
+private struct BatchCategoryPickerSheet: View {
+    let selectedCount: Int
+    let categories: [RecipeCategory]
+    var onSelect: (UInt?, String) async -> Bool
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var localCategories: [RecipeCategory] = []
+    @State private var newIcon: String = ""
+    @State private var newName: String = ""
+    @State private var isWorking: Bool = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: AppSpacing.md) {
+                    Text("把选中的 \(selectedCount) 道菜放到对应分类下")
+                        .font(AppFont.caption(13))
+                        .foregroundStyle(Color.inkMuted)
+
+                    // 快捷新建分类并直接归入
+                    HStack(spacing: 8) {
+                        TextField("🍲", text: $newIcon)
+                            .multilineTextAlignment(.center)
+                            .frame(width: 46, height: 40)
+                            .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        TextField("新建分类并移入，如：下酒菜", text: $newName)
+                            .padding(.horizontal, 12)
+                            .frame(height: 40)
+                            .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        Button {
+                            Task { await createAndMove() }
+                        } label: {
+                            Text("创建并移入")
+                                .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .frame(height: 40)
+                                .background(Color.actionInk, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                        }
+                        .disabled(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isWorking)
+                        .opacity(newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.4 : 1)
+                    }
+
+                    Divider().overlay(Color.dividerLine.opacity(0.6))
+
+                    VStack(spacing: AppSpacing.sm) {
+                        targetRow(title: "未分类", subtitle: "从当前分类中移出", icon: "tray") {
+                            await applySelection(id: nil, name: "未分类")
+                        }
+                        ForEach(localCategories) { cat in
+                            targetRow(
+                                title: cat.name,
+                                subtitle: "\(cat.recipeCount ?? 0) 道菜",
+                                emoji: cat.icon?.isEmpty == false ? cat.icon! : "🍽"
+                            ) {
+                                await applySelection(id: cat.id, name: cat.name)
+                            }
+                        }
+                    }
+
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(AppFont.caption(12))
+                            .foregroundStyle(Color.errorInk)
+                    }
+                }
+                .padding(.horizontal, AppSpacing.lg)
+                .padding(.top, AppSpacing.sm)
+                .padding(.bottom, 28)
+            }
+            .background(Color.appBackground.ignoresSafeArea())
+            .navigationTitle("选择目标分类")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("取消") { dismiss() }
+                        .foregroundStyle(Color.inkSecondary)
+                        .disabled(isWorking)
+                }
+            }
+            .onAppear {
+                localCategories = categories
+            }
+            .task {
+                if let latest = try? await CategoryService.shared.list() {
+                    localCategories = latest
+                }
+            }
+        }
+    }
+
+    private func targetRow(
+        title: String,
+        subtitle: String,
+        icon: String? = nil,
+        emoji: String? = nil,
+        action: @escaping () async -> Void
+    ) -> some View {
+        Button {
+            Task { await action() }
+        } label: {
+            HStack(spacing: AppSpacing.md) {
+                ZStack {
+                    Color.appBackground
+                    if let emoji {
+                        Text(emoji).font(.system(size: 18))
+                    } else if let icon {
+                        Image(systemName: icon)
+                            .font(.system(size: 15, weight: .medium))
+                            .foregroundStyle(Color.inkSecondary)
+                    }
+                }
+                .frame(width: 38, height: 38)
+                .clipShape(Circle())
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(AppFont.body(15))
+                        .foregroundStyle(Color.inkPrimary)
+                    Text(subtitle)
+                        .font(AppFont.caption(11))
+                        .foregroundStyle(Color.inkMuted)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.inkMuted)
+            }
+            .padding(AppSpacing.md)
+            .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .strokeBorder(Color.dividerLine.opacity(0.6), lineWidth: 0.7)
+            }
+        }
+        .buttonStyle(SoftPressStyle())
+        .disabled(isWorking)
+    }
+
+    private func applySelection(id: UInt?, name: String) async {
+        guard !isWorking else { return }
+        isWorking = true
+        defer { isWorking = false }
+        if await onSelect(id, name) {
+            dismiss()
+        }
+    }
+
+    private func createAndMove() async {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !isWorking else { return }
+        isWorking = true
+        defer { isWorking = false }
+        do {
+            let created = try await CategoryService.shared.create(
+                CategoryInput(
+                    name: trimmed,
+                    icon: newIcon.isEmpty ? nil : newIcon,
+                    color: nil,
+                    sortOrder: localCategories.count
+                )
+            )
+            AppNotifications.categoriesChanged()
+            if await onSelect(created.id, created.name) {
+                dismiss()
+            }
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }
@@ -401,53 +945,152 @@ private struct CategoryChip: View {
 // 菜谱网格卡
 private struct MenuRecipeCard: View {
     let recipe: Recipe
+    let categories: [RecipeCategory]
     let alreadyAdded: Bool
     var canToggle: Bool = true
+    var isManaging: Bool = false
+    var isSelected: Bool = false
+    let onToggleSelect: () -> Void
     let onAdd: () -> Void
+    let onEdit: () -> Void
+    let onEditPhotos: () -> Void
+    let onMoveCategory: (UInt?, String) -> Void
+    let onStartBatch: () -> Void
+    let onDelete: () -> Void
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            NavigationLink {
-                RecipeDetailView(recipeId: recipe.id)
-            } label: {
-                VStack(alignment: .leading, spacing: 0) {
-                    cover
-                    information
-                }
-            }
-            .buttonStyle(.plain)
-            Button(action: onAdd) {
-                Image(systemName: alreadyAdded ? "checkmark" : "plus")
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background(
-                        alreadyAdded ? Color(red: 0.067, green: 0.067, blue: 0.075) : Color.black.opacity(0.68),
-                        in: Circle()
-                    )
-                    .overlay {
-                        Circle().strokeBorder(Color.white.opacity(0.32), lineWidth: 0.7)
+            if isManaging {
+                Button(action: onToggleSelect) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        cover
+                        information
                     }
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(isSelected ? Color.actionInk : .white)
+                    .background(
+                        Circle()
+                            .fill(isSelected ? Color.white : Color.black.opacity(0.32))
+                            .padding(2)
+                    )
+                    .padding(10)
+                    .allowsHitTesting(false)
+            } else {
+                NavigationLink {
+                    RecipeDetailView(recipeId: recipe.id)
+                } label: {
+                    VStack(alignment: .leading, spacing: 0) {
+                        cover
+                        information
+                    }
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    cardMenuItems
+                }
+
+                // 右上角单卡操作菜单（编辑 / 主图抠图 / 移到分类 / 删除）
+                Menu {
+                    cardMenuItems
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(Color.black.opacity(0.46), in: Circle())
+                        .overlay {
+                            Circle().strokeBorder(Color.white.opacity(0.28), lineWidth: 0.6)
+                        }
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .padding(.top, 2)
+                .padding(.trailing, 2)
+                .accessibilityLabel("管理\(recipe.name)")
+
+                Button(action: onAdd) {
+                    Image(systemName: alreadyAdded ? "checkmark" : "plus")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 32, height: 32)
+                        .background(
+                            alreadyAdded ? Color(red: 0.067, green: 0.067, blue: 0.075) : Color.black.opacity(0.68),
+                            in: Circle()
+                        )
+                        .overlay {
+                            Circle().strokeBorder(Color.white.opacity(0.32), lineWidth: 0.7)
+                        }
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(SoftPressStyle())
+                .padding(.top, 95)
+                .padding(.trailing, 3)
+                .disabled(!canToggle)
+                .accessibilityLabel(alreadyAdded ? "移出这一顿：" + recipe.name : "加入" + recipe.name)
             }
-            .buttonStyle(SoftPressStyle())
-            .padding(.top, 95)
-            .padding(.trailing, 3)
-            .disabled(!canToggle)
-            .accessibilityLabel(alreadyAdded ? "移出这一顿：" + recipe.name : "加入" + recipe.name)
         }
         .background(Color.cardBackground)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.dividerLine.opacity(0.6), lineWidth: 0.7)
+                .strokeBorder(
+                    isManaging && isSelected ? Color.actionInk : Color.dividerLine.opacity(0.6),
+                    lineWidth: isManaging && isSelected ? 2.0 : 0.7
+                )
+        }
+    }
+
+    @ViewBuilder
+    private var cardMenuItems: some View {
+        Button(action: onEdit) {
+            Label("编辑菜谱", systemImage: "square.and.pencil")
+        }
+        Button(action: onEditPhotos) {
+            Label("自定义主图与抠图", systemImage: "sparkles.rectangle.stack")
+        }
+        Menu {
+            Button {
+                onMoveCategory(nil, "未分类")
+            } label: {
+                if recipe.categoryId == nil {
+                    Label("未分类", systemImage: "checkmark")
+                } else {
+                    Text("未分类")
+                }
+            }
+            ForEach(categories) { cat in
+                let label = (cat.icon?.isEmpty == false ? "\(cat.icon!) " : "") + cat.name
+                Button {
+                    onMoveCategory(cat.id, cat.name)
+                } label: {
+                    if recipe.categoryId == cat.id {
+                        Label(label, systemImage: "checkmark")
+                    } else {
+                        Text(label)
+                    }
+                }
+            }
+        } label: {
+            Label("移动到分类", systemImage: "tag")
+        }
+        Button(action: onStartBatch) {
+            Label("多选批量管理", systemImage: "checklist")
+        }
+        Divider()
+        Button(role: .destructive, action: onDelete) {
+            Label("删除菜谱", systemImage: "trash")
         }
     }
 
     private var cover: some View {
-        GeometryReader { proxy in
-            AsyncImageView(url: recipe.coverImage, name: recipe.name)
+        let displayURL = (recipe.coverImage?.isEmpty == false) ? recipe.coverImage : recipe.cutoutImage
+        return GeometryReader { proxy in
+            AsyncImageView(url: displayURL, name: recipe.name)
                 .frame(width: proxy.size.width, height: 142)
                 .clipped()
                 .overlay(alignment: .bottom) {
@@ -473,6 +1116,17 @@ private struct MenuRecipeCard: View {
         .frame(height: 142)
     }
 
+    private var resolvedCategoryName: String? {
+        if let cid = recipe.categoryId,
+           let matched = categories.first(where: { $0.id == cid }) {
+            return matched.name
+        }
+        if let name = recipe.category?.name, !name.isEmpty, recipe.categoryId != nil {
+            return name
+        }
+        return nil
+    }
+
     private var information: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(recipe.name)
@@ -486,7 +1140,15 @@ private struct MenuRecipeCard: View {
                     .lineLimit(1)
             }
             HStack(spacing: 4) {
-                if let creator = recipe.creator {
+                if let catName = resolvedCategoryName {
+                    Text(catName)
+                        .font(AppFont.caption(10.5))
+                        .foregroundStyle(Color.inkSecondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.appBackground, in: Capsule())
+                        .lineLimit(1)
+                } else if let creator = recipe.creator {
                     AvatarView(user: creator, size: 16)
                     Text(creator.displayName)
                         .font(AppFont.caption(11))

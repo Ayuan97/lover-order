@@ -36,6 +36,9 @@ func (h *RecipeHandler) List(c *gin.Context) {
 			q.CategoryID = &cid
 		}
 	}
+	if c.Query("uncategorized") == "1" || c.Query("uncategorized") == "true" {
+		q.Uncategorized = true
+	}
 	if c.Query("favorite") == "1" || c.Query("favorite") == "true" {
 		q.Favorite = true
 	}
@@ -161,4 +164,38 @@ func (h *RecipeHandler) SetCover(c *gin.Context) {
 		return
 	}
 	OK(c, r)
+}
+
+// BatchUpdateCategory 批量将菜谱移到指定分类或设为未分类
+func (h *RecipeHandler) BatchUpdateCategory(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
+	var in service.BatchCategoryInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		Fail(c, CodeBadRequest, "参数有误")
+		return
+	}
+	affected, err := h.svc.BatchUpdateCategory(hid, uid, in)
+	if err != nil {
+		Fail(c, CodeBadRequest, err.Error())
+		return
+	}
+	OK(c, gin.H{"updated": affected})
+}
+
+// BatchDelete 批量软删菜谱
+func (h *RecipeHandler) BatchDelete(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
+	var in service.BatchDeleteInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		Fail(c, CodeBadRequest, "参数有误")
+		return
+	}
+	affected, err := h.svc.BatchDelete(hid, uid, in)
+	if err != nil {
+		Fail(c, CodeBadRequest, err.Error())
+		return
+	}
+	OK(c, gin.H{"deleted": affected})
 }
