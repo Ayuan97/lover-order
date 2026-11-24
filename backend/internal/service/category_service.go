@@ -47,6 +47,7 @@ func (s *CategoryService) Create(householdID uint, in CategoryInput) (*model.Rec
 	if err := model.DB.Create(c).Error; err != nil {
 		return nil, fmt.Errorf("创建分类失败：%w", err)
 	}
+	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "categories_changed", 0)
 	return c, nil
 }
 
@@ -68,6 +69,7 @@ func (s *CategoryService) Update(householdID, id uint, in CategoryInput) (*model
 	if err := model.DB.Model(&c).Updates(updates).Error; err != nil {
 		return nil, err
 	}
+	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "categories_changed", 0)
 	return &c, nil
 }
 
@@ -80,5 +82,6 @@ func (s *CategoryService) Delete(householdID, id uint) error {
 	if res.RowsAffected == 0 {
 		return errors.New("分类不存在")
 	}
+	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "categories_changed", 0)
 	return nil
 }

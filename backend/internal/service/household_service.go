@@ -1,8 +1,10 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -97,6 +99,7 @@ func (s *HouseholdService) Join(userID uint, in JoinInput) (*model.Household, er
 			return nil, err
 		}
 		NewNotificationService().NotifyHouseholdJoined(household.ID, userID, household.Name)
+		GlobalCanvasHub().BroadcastHouseholdSync(household.ID, "household_changed", userID)
 		return &household, nil
 	}
 
@@ -133,6 +136,7 @@ func (s *HouseholdService) Join(userID uint, in JoinInput) (*model.Household, er
 		return nil, err
 	}
 	NewNotificationService().NotifyHouseholdJoined(household.ID, userID, household.Name)
+	GlobalCanvasHub().BroadcastHouseholdSync(household.ID, "household_changed", userID)
 	return &household, nil
 }
 
@@ -152,7 +156,7 @@ func (s *HouseholdService) Leave(userID uint) error {
 		return err
 	}
 
-	return model.DB.Transaction(func(tx *gorm.DB) error {
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&model.User{}).Where("id = ?", userID).Update("household_id", nil).Error; err != nil {
 			return err
 		}
@@ -172,6 +176,12 @@ func (s *HouseholdService) Leave(userID uint) error {
 		return tx.Model(&model.Household{}).Where("id = ?", householdID).
 			Update("created_by", others[0].ID).Error
 	})
+	if err != nil {
+		return err
+	}
+	GlobalCanvasHub().EvictHouseholdMember(householdID, userID)
+	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "household_changed", userID)
+	return nil
 }
 
 // InviteInput 生成邀请入参
@@ -211,6 +221,136 @@ func (s *HouseholdService) ListInvites(householdID uint) ([]model.HouseholdInvit
 		return nil, err
 	}
 	return items, nil
+}
+
+// LaunchCanvasInput 家庭创建者发布/更新共享开屏画布入参
+type LaunchCanvasInput struct {
+	Document  *CanvasDocPayload `json:"document" binding:"required"`
+	Motion    string            `json:"motion"`
+	HoldSpeed string            `json:"hold_speed"`
+}
+
+// LaunchCanvasResponse 家庭共享开屏动画响应
+type LaunchCanvasResponse struct {
+	HasCustom       bool              `json:"has_custom"`
+	HouseholdID     uint              `json:"household_id"`
+	CreatorID       uint              `json:"creator_id"`
+	CreatorNickname string            `json:"creator_nickname"`
+	CanEdit         bool              `json:"can_edit"`
+	Document        *CanvasDocPayload `json:"document,omitempty"`
+	Motion          string            `json:"motion"`
+	HoldSpeed       string            `json:"hold_speed"`
+	UpdatedAt       *time.Time        `json:"updated_at,omitempty"`
+}
+
+func normalizeLaunchMotion(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "fadeZoom", "curtainUp", "softReveal", "bloom":
+		return strings.TrimSpace(raw)
+	case "polaroidDrop":
+		return "softReveal"
+	default:
+		return "fadeZoom"
+	}
+}
+
+func normalizeLaunchHoldSpeed(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "brisk", "standard", "leisurely":
+		return strings.TrimSpace(raw)
+	default:
+		return "standard"
+	}
+}
+
+// GetLaunchCanvas 读取当前家庭的共享开屏画布与创建者信息
+func (s *HouseholdService) GetLaunchCanvas(householdID, userID uint) (*LaunchCanvasResponse, error) {
+	var h model.Household
+	if err := model.DB.First(&h, householdID).Error; err != nil {
+		return nil, errors.New("家不存在")
+	}
+
+	creatorName := "创建者"
+	var creator model.User
+	if err := model.DB.Select("id, nickname").First(&creator, h.CreatedBy).Error; err == nil {
+		if n := strings.TrimSpace(creator.Nickname); n != "" {
+			creatorName = n
+		}
+	}
+
+	resp := &LaunchCanvasResponse{
+		HasCustom:       false,
+		HouseholdID:     h.ID,
+		CreatorID:       h.CreatedBy,
+		CreatorNickname: creatorName,
+		CanEdit:         h.CreatedBy == userID,
+		Motion:          "fadeZoom",
+		HoldSpeed:       "standard",
+	}
+
+	var rec model.HouseholdLaunchCanvas
+	err := model.DB.Where("household_id = ?", householdID).First(&rec).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return resp, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var doc CanvasDocPayload
+	if len(rec.Document) > 0 {
+		if err := json.Unmarshal(rec.Document, &doc); err != nil {
+			return nil, err
+		}
+		resp.Document = normalizeCanvasDoc(&doc)
+		resp.HasCustom = true
+	}
+	resp.Motion = normalizeLaunchMotion(rec.Motion)
+	resp.HoldSpeed = normalizeLaunchHoldSpeed(rec.HoldSpeed)
+	t := rec.UpdatedAt
+	resp.UpdatedAt = &t
+	return resp, nil
+}
+
+// SaveLaunchCanvas 仅允许家庭创建者发布/更新共享开屏动画
+func (s *HouseholdService) SaveLaunchCanvas(householdID, userID uint, in LaunchCanvasInput) (*LaunchCanvasResponse, error) {
+	var h model.Household
+	if err := model.DB.First(&h, householdID).Error; err != nil {
+		return nil, errors.New("家不存在")
+	}
+	if h.CreatedBy != userID {
+		return nil, errors.New("只有家庭创建者可以设置共享开屏动画")
+	}
+	if in.Document == nil {
+		return nil, errors.New("画布内容不能为空")
+	}
+
+	normalized := normalizeCanvasDoc(in.Document)
+	rawBytes, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, err
+	}
+	motion := normalizeLaunchMotion(in.Motion)
+	holdSpeed := normalizeLaunchHoldSpeed(in.HoldSpeed)
+	now := time.Now()
+
+	rec := model.HouseholdLaunchCanvas{
+		HouseholdID: householdID,
+		Document:    model.JSON(rawBytes),
+		Motion:      motion,
+		HoldSpeed:   holdSpeed,
+		UpdatedBy:   userID,
+		UpdatedAt:   now,
+	}
+	if err := model.DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "household_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"document", "motion", "hold_speed", "updated_by", "updated_at"}),
+	}).Create(&rec).Error; err != nil {
+		return nil, err
+	}
+
+	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "launch_canvas_changed", userID)
+	return s.GetLaunchCanvas(householdID, userID)
 }
 
 func uniqueInviteCode() (string, error) {

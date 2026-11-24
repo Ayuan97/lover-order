@@ -6,6 +6,7 @@ struct MenuView: View {
     @StateObject private var vm = MenuViewModel()
     @State private var searchActive: Bool = false
     @State private var showCreateRecipe: Bool = false
+    @State private var previewGallery: PhotoGalleryPresentation?
     @Environment(\.scenePhase) private var scenePhase
 
     private let grid = [
@@ -32,6 +33,7 @@ struct MenuView: View {
             }
             .refreshable {
                 await vm.loadCurrentMeal(scene: .household, mood: appState.currentMood)
+                await vm.loadCategories()
                 await vm.loadRecipes()
             }
             .safeAreaInset(edge: .bottom) {
@@ -39,7 +41,21 @@ struct MenuView: View {
             }
             .onChange(of: appState.activeTab) { _, tab in
                 if tab == 1 {
-                    Task { await vm.loadCurrentMeal(scene: .household, mood: appState.currentMood) }
+                    Task {
+                        async let m: () = vm.loadCurrentMeal(scene: .household, mood: appState.currentMood)
+                        async let r: () = vm.loadRecipes()
+                        async let c: () = vm.loadCategories()
+                        _ = await (m, r, c)
+                    }
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active, appState.activeTab == 1 else { return }
+                Task {
+                    async let m: () = vm.loadCurrentMeal(scene: .household, mood: appState.currentMood)
+                    async let r: () = vm.loadRecipes()
+                    async let c: () = vm.loadCategories()
+                    _ = await (m, r, c)
                 }
             }
             .task {
@@ -68,6 +84,9 @@ struct MenuView: View {
                     Task { await vm.loadRecipes() }
                 }
                 .environmentObject(appState)
+            }
+            .fullScreenCover(item: $previewGallery) { presentation in
+                PhotoGalleryViewer(slides: presentation.slides, initialIndex: presentation.initialIndex)
             }
             .toast($vm.errorMessage)
         }
@@ -222,7 +241,19 @@ struct MenuView: View {
                     VStack(spacing: AppSpacing.sm) {
                         ForEach(Array(vm.pinnedDishes.enumerated()), id: \.element.id) { idx, dish in
                             HStack(spacing: AppSpacing.md) {
-                                DishThumb(name: dish.recipeName, image: dish.recipeImage)
+                                if let image = dish.recipeImage?.trimmingCharacters(in: .whitespacesAndNewlines),
+                                   !image.isEmpty {
+                                    Button {
+                                        Haptics.light()
+                                        previewGallery = PhotoGalleryPresentation(urls: [image], caption: dish.recipeName)
+                                    } label: {
+                                        DishThumb(name: dish.recipeName, image: dish.recipeImage)
+                                    }
+                                    .buttonStyle(SoftPressStyle())
+                                    .accessibilityLabel("查看\(dish.recipeName)大图")
+                                } else {
+                                    DishThumb(name: dish.recipeName, image: dish.recipeImage)
+                                }
                                 Text(dish.recipeName)
                                     .font(AppFont.body(15))
                                     .foregroundStyle(Color.inkPrimary)

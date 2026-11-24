@@ -3,7 +3,10 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
+	"maps"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,16 +46,29 @@ func GlobalCanvasHub() *CanvasHub {
 	return sharedCanvasHub
 }
 
+type cachedLivePreview struct {
+	data      []byte
+	updatedAt time.Time
+}
+
+type storedCanvasDocument struct {
+	*CanvasDocPayload
+	AppliedOpIDs map[string]bool `json:"appliedOpIDs,omitempty"`
+}
+
 type canvasRoom struct {
-	hub       *CanvasHub
-	mealID    uint
-	mu        sync.Mutex
-	clients   map[*canvasClient]struct{}
-	loaded    bool
-	evicted   bool
-	revision  int64
-	doc       *CanvasDocPayload
-	updatedAt *time.Time
+	hub            *CanvasHub
+	mealID         uint
+	householdID    uint
+	mu             sync.Mutex
+	clients        map[*canvasClient]struct{}
+	activePreviews map[string]cachedLivePreview
+	appliedOpIDs   map[string]bool
+	loaded         bool
+	evicted        bool
+	revision       int64
+	doc            *CanvasDocPayload
+	updatedAt      *time.Time
 }
 
 type canvasClient struct {
@@ -60,6 +76,7 @@ type canvasClient struct {
 	conn     *websocket.Conn
 	userID   uint
 	clientID string
+	actorMu  sync.RWMutex
 	actor    CanvasActor
 	canEdit  bool
 
@@ -72,12 +89,29 @@ type canvasClient struct {
 	closed bool
 }
 
+func (c *canvasClient) snapshotActor() CanvasActor {
+	c.actorMu.RLock()
+	a := c.actor
+	c.actorMu.RUnlock()
+	return a
+}
+
+func (c *canvasClient) updateActorProfile(nickname, avatar string) bool {
+	c.actorMu.Lock()
+	defer c.actorMu.Unlock()
+	changed := c.actor.Nickname != nickname || c.actor.Avatar != avatar
+	c.actor.Nickname = nickname
+	c.actor.Avatar = avatar
+	return changed
+}
+
 type inboundWSMessage struct {
 	Type            string          `json:"type"`
 	ClientID        string          `json:"client_id"`
 	OpID            string          `json:"op_id"`
 	Kind            string          `json:"kind"`
 	Payload         CanvasOpPayload `json:"payload"`
+	Revision        *int64          `json:"revision,omitempty"`
 	TargetKind      string          `json:"target_kind"`
 	TargetID        string          `json:"target_id"`
 	Position        json.RawMessage `json:"position,omitempty"`
@@ -237,6 +271,224 @@ func (h *CanvasHub) BroadcastMealSync(mealID uint, reason string, actorID uint) 
 	sendToClients(targets, msg)
 }
 
+// BroadcastHouseholdSync 同一个家的共享资料变化时（菜谱、分类、成员资料、收藏贴图、历史、共享开屏、购物清单）推送给在线家庭房间
+func (h *CanvasHub) BroadcastHouseholdSync(householdID uint, reason string, actorID uint) {
+	if householdID == 0 {
+		return
+	}
+	h.mu.Lock()
+	rooms := make([]*canvasRoom, 0, len(h.rooms))
+	for _, r := range h.rooms {
+		rooms = append(rooms, r)
+	}
+	h.mu.Unlock()
+
+	for _, r := range rooms {
+		r.mu.Lock()
+		if r.evicted {
+			r.mu.Unlock()
+			continue
+		}
+		r.ensureHouseholdLocked()
+		if r.householdID != householdID {
+			r.mu.Unlock()
+			continue
+		}
+		var targets []*canvasClient
+		if reason == "recipes_changed" {
+			targets = r.snapshotClientsLocked(nil)
+		} else {
+			targets = make([]*canvasClient, 0, len(r.clients))
+			for c := range r.clients {
+				if c.snapshotActor().Role == "host" {
+					targets = append(targets, c)
+				}
+			}
+		}
+		mealID := r.mealID
+		r.mu.Unlock()
+		if len(targets) == 0 {
+			continue
+		}
+		msg, _ := json.Marshal(map[string]any{
+			"type":     "meal_sync",
+			"meal_id":  mealID,
+			"reason":   reason,
+			"actor_id": actorID,
+		})
+		sendToClients(targets, msg)
+	}
+}
+
+// DeleteDishSticker 服务端删菜后同步从画布文档移除对应菜品贴图并广播，避免脏贴图残留或双端互删竞态
+func (h *CanvasHub) DeleteDishSticker(mealID, dishID, actorID uint) {
+	if mealID == 0 || dishID == 0 {
+		return
+	}
+	r := h.acquireLiveRoomLocked(mealID)
+	defer h.evictIfEmpty(r)
+
+	if err := r.ensureLoadedLocked(); err != nil || r.doc == nil {
+		r.mu.Unlock()
+		return
+	}
+	dishIDCopy := dishID
+	payload := CanvasOpPayload{MealDishID: &dishIDCopy}
+	nextDoc, changed, _, err := applyCanvasOp(r.doc, r.revision, mealID, "delete_sticker", payload)
+	if err != nil || !changed {
+		r.mu.Unlock()
+		return
+	}
+	rev, _, err := r.persistLocked(nextDoc, actorID)
+	if err != nil {
+		r.mu.Unlock()
+		return
+	}
+	targets := r.snapshotClientsLocked(nil)
+	r.mu.Unlock()
+
+	if len(targets) > 0 {
+		actor := CanvasActor{ID: actorID, Nickname: "系统", Role: "system"}
+		if actorID > 0 {
+			actor = loadCanvasActor(actorID, "host")
+		}
+		outbound, _ := json.Marshal(map[string]any{
+			"type":      "op_applied",
+			"meal_id":   mealID,
+			"revision":  rev,
+			"actor":     actor,
+			"client_id": "server",
+			"op_id":     fmt.Sprintf("srv-del-%d-%d-%d", mealID, dishID, rev),
+			"kind":      "delete_sticker",
+			"payload":   payload,
+		})
+		sendToClients(targets, outbound)
+	}
+}
+
+// UpdateDishStickerImage 当一顿里的某道菜换了本顿实拍/往期图时，原位同步画布文档中对应贴图的图片并广播。
+func (h *CanvasHub) UpdateDishStickerImage(mealID, dishID uint, image string, isCutout bool, actorID uint) {
+	if mealID == 0 || dishID == 0 {
+		return
+	}
+	r := h.acquireLiveRoomLocked(mealID)
+	defer h.evictIfEmpty(r)
+
+	if err := r.ensureLoadedLocked(); err != nil || r.doc == nil {
+		r.mu.Unlock()
+		return
+	}
+
+	nextDoc := cloneCanvasDoc(r.doc)
+	updatedStickers := make([]json.RawMessage, 0, 1)
+	for i, raw := range nextDoc.Stickers {
+		var meta canvasStickerMeta
+		if json.Unmarshal(raw, &meta) != nil || meta.MealDishID == nil || *meta.MealDishID != dishID {
+			continue
+		}
+		var stickerMap map[string]any
+		if json.Unmarshal(raw, &stickerMap) != nil {
+			continue
+		}
+		stickerMap["image"] = image
+		stickerMap["isCutout"] = isCutout
+		encoded, err := json.Marshal(stickerMap)
+		if err != nil {
+			continue
+		}
+		nextDoc.Stickers[i] = encoded
+		updatedStickers = append(updatedStickers, encoded)
+	}
+
+	if len(updatedStickers) == 0 {
+		r.mu.Unlock()
+		return
+	}
+
+	rev, _, err := r.persistLocked(nextDoc, actorID)
+	if err != nil {
+		r.mu.Unlock()
+		return
+	}
+	targets := r.snapshotClientsLocked(nil)
+	r.mu.Unlock()
+
+	if len(targets) > 0 {
+		actor := CanvasActor{ID: actorID, Nickname: "系统", Role: "system"}
+		if actorID > 0 {
+			actor = loadCanvasActor(actorID, "host")
+		}
+		for idx, stickerRaw := range updatedStickers {
+			payload := CanvasOpPayload{Sticker: stickerRaw}
+			outbound, _ := json.Marshal(map[string]any{
+				"type":      "op_applied",
+				"meal_id":   mealID,
+				"revision":  rev,
+				"actor":     actor,
+				"client_id": "server",
+				"op_id":     fmt.Sprintf("srv-dishimg-%d-%d-%d-%d", mealID, dishID, rev, idx),
+				"kind":      "upsert_sticker",
+				"payload":   payload,
+			})
+			sendToClients(targets, outbound)
+		}
+	}
+}
+
+// RefreshUserActor 用户更新头像或昵称后，刷新在线房间里的节点头像/昵称并广播最新 presence
+func (h *CanvasHub) RefreshUserActor(userID uint) {
+	if userID == 0 {
+		return
+	}
+	var u model.User
+	nickname := "好友"
+	avatar := ""
+	if err := model.DB.Select("id, nickname, avatar").First(&u, userID).Error; err == nil {
+		if n := strings.TrimSpace(u.Nickname); n != "" {
+			nickname = n
+		}
+		avatar = u.Avatar
+	}
+
+	h.mu.Lock()
+	rooms := make([]*canvasRoom, 0, len(h.rooms))
+	for _, r := range h.rooms {
+		rooms = append(rooms, r)
+	}
+	h.mu.Unlock()
+
+	for _, r := range rooms {
+		r.mu.Lock()
+		if r.evicted {
+			r.mu.Unlock()
+			continue
+		}
+		updated := false
+		for c := range r.clients {
+			if c.userID == userID && c.updateActorProfile(nickname, avatar) {
+				updated = true
+			}
+		}
+		if !updated {
+			r.mu.Unlock()
+			continue
+		}
+		users := r.onlineUsersLocked()
+		targets := r.snapshotClientsLocked(nil)
+		mealID := r.mealID
+		r.mu.Unlock()
+
+		if len(targets) > 0 {
+			presenceBytes, _ := json.Marshal(map[string]any{
+				"type":         "presence",
+				"meal_id":      mealID,
+				"online_users": users,
+			})
+			sendToClients(targets, presenceBytes)
+		}
+	}
+}
+
 // EvictGuests 关房或餐次结束后踢出房内来客连接
 func (h *CanvasHub) EvictGuests(mealID uint) {
 	r := h.getActiveRoom(mealID)
@@ -250,7 +502,7 @@ func (h *CanvasHub) EvictGuests(mealID uint) {
 	}
 	var targets []*canvasClient
 	for c := range r.clients {
-		if c.actor.Role == "guest" {
+		if c.snapshotActor().Role == "guest" {
 			targets = append(targets, c)
 		}
 	}
@@ -273,13 +525,36 @@ func (h *CanvasHub) EvictUser(mealID, userID uint) {
 	}
 	var targets []*canvasClient
 	for c := range r.clients {
-		if c.userID == userID && c.actor.Role == "guest" {
+		if c.userID == userID && c.snapshotActor().Role == "guest" {
 			targets = append(targets, c)
 		}
 	}
 	r.mu.Unlock()
 	for _, c := range targets {
 		c.revokeAndDrain()
+	}
+}
+
+// EvictHouseholdMember immediately closes every connection the user opened as a household member.
+func (h *CanvasHub) EvictHouseholdMember(householdID, userID uint) {
+	h.mu.Lock()
+	rooms := make([]*canvasRoom, 0, len(h.rooms))
+	for _, r := range h.rooms {
+		rooms = append(rooms, r)
+	}
+	h.mu.Unlock()
+
+	for _, r := range rooms {
+		r.mu.Lock()
+		if r.householdID == householdID {
+			for c := range r.clients {
+				if c.userID == userID && c.snapshotActor().Role == "host" {
+					c.revoked.Store(true)
+					_ = c.conn.Close()
+				}
+			}
+		}
+		r.mu.Unlock()
 	}
 }
 
@@ -307,6 +582,18 @@ func (h *CanvasHub) ServeClient(conn *websocket.Conn, mealID, userID uint, role 
 		h.evictIfEmpty(r)
 		return
 	}
+	if role == "host" {
+		var memberCount int64
+		err := model.DB.Model(&model.User{}).
+			Where("id = ? AND household_id = ? AND is_active = ?", userID, r.householdID, true).
+			Count(&memberCount).Error
+		if err != nil || memberCount == 0 {
+			r.mu.Unlock()
+			_ = conn.Close()
+			h.evictIfEmpty(r)
+			return
+		}
+	}
 	r.clients[c] = struct{}{}
 	users := r.onlineUsersLocked()
 	welcomeBytes, _ := json.Marshal(map[string]any{
@@ -322,17 +609,41 @@ func (h *CanvasHub) ServeClient(conn *websocket.Conn, mealID, userID uint, role 
 		"meal_id":      mealID,
 		"online_users": users,
 	})
+	now := time.Now()
+	var activePreviewPayloads [][]byte
+	for cid, entry := range r.activePreviews {
+		if now.Sub(entry.updatedAt) >= 2*time.Second {
+			delete(r.activePreviews, cid)
+			continue
+		}
+		if cid != clientID && len(entry.data) > 0 {
+			activePreviewPayloads = append(activePreviewPayloads, entry.data)
+		}
+	}
 	otherTargets := r.snapshotClientsLocked(c)
-	r.mu.Unlock()
-
 	c.enqueue(welcomeBytes)
+	for _, previewBytes := range activePreviewPayloads {
+		c.enqueueDropIfFull(previewBytes)
+	}
+	r.mu.Unlock()
 	sendToClients(otherTargets, presenceBytes)
 
 	go c.writePump()
 	c.readPump()
 }
 
+func (r *canvasRoom) ensureHouseholdLocked() {
+	if r.householdID > 0 {
+		return
+	}
+	var hid uint
+	if err := model.DB.Model(&model.MealSession{}).Select("household_id").Where("id = ?", r.mealID).Scan(&hid).Error; err == nil && hid > 0 {
+		r.householdID = hid
+	}
+}
+
 func (r *canvasRoom) ensureLoadedLocked() error {
+	r.ensureHouseholdLocked()
 	if r.loaded {
 		return nil
 	}
@@ -347,12 +658,13 @@ func (r *canvasRoom) ensureLoadedLocked() error {
 	if err != nil {
 		return err
 	}
-	var doc CanvasDocPayload
+	doc := storedCanvasDocument{CanvasDocPayload: &CanvasDocPayload{}}
 	if len(rec.Document) > 0 {
 		if err := json.Unmarshal(rec.Document, &doc); err != nil {
 			return err
 		}
-		r.doc = normalizeCanvasDoc(&doc)
+		r.doc = normalizeCanvasDoc(doc.CanvasDocPayload)
+		r.appliedOpIDs = doc.AppliedOpIDs
 	}
 	r.revision = rec.Revision
 	t := rec.UpdatedAt
@@ -361,8 +673,20 @@ func (r *canvasRoom) ensureLoadedLocked() error {
 	return nil
 }
 
-func (r *canvasRoom) persistLocked(next *CanvasDocPayload, updatedBy uint) (int64, *time.Time, error) {
-	rawBytes, err := json.Marshal(next)
+func (r *canvasRoom) persistLocked(next *CanvasDocPayload, updatedBy uint, opIDs ...string) (int64, *time.Time, error) {
+	appliedOpIDs := r.appliedOpIDs
+	if len(opIDs) > 0 {
+		appliedOpIDs = maps.Clone(appliedOpIDs)
+		if appliedOpIDs == nil {
+			appliedOpIDs = make(map[string]bool, len(opIDs))
+		}
+		for _, opID := range opIDs {
+			if opID != "" {
+				appliedOpIDs[opID] = true
+			}
+		}
+	}
+	rawBytes, err := json.Marshal(storedCanvasDocument{CanvasDocPayload: next, AppliedOpIDs: appliedOpIDs})
 	if err != nil {
 		return 0, nil, err
 	}
@@ -384,6 +708,7 @@ func (r *canvasRoom) persistLocked(next *CanvasDocPayload, updatedBy uint) (int6
 	r.doc = cloneCanvasDoc(next)
 	r.revision = nextRev
 	r.updatedAt = &now
+	r.appliedOpIDs = appliedOpIDs
 	return nextRev, &now, nil
 }
 
@@ -406,7 +731,7 @@ func (r *canvasRoom) onlineUsersLocked() []CanvasActor {
 			continue
 		}
 		seen[c.userID] = true
-		out = append(out, c.actor)
+		out = append(out, c.snapshotActor())
 	}
 	return out
 }
@@ -415,6 +740,7 @@ func (r *canvasRoom) handleOp(c *canvasClient, msg inboundWSMessage) {
 	if c.revoked.Load() {
 		return
 	}
+	actor := c.snapshotActor()
 	_, canEdit, _, err := NewCanvasService().CheckAccess(c.userID, r.mealID)
 	if err != nil || !canEdit {
 		errText := "当前不可编辑画布"
@@ -422,7 +748,7 @@ func (r *canvasRoom) handleOp(c *canvasClient, msg inboundWSMessage) {
 			errText = err.Error()
 		}
 		c.sendError(errText)
-		if c.actor.Role == "guest" {
+		if actor.Role == "guest" {
 			c.revokeAndDrain()
 		}
 		return
@@ -434,73 +760,78 @@ func (r *canvasRoom) handleOp(c *canvasClient, msg inboundWSMessage) {
 	}
 
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	if c.revoked.Load() {
+		return
+	}
+	delete(r.activePreviews, clientID)
 	if err := r.ensureLoadedLocked(); err != nil {
-		r.mu.Unlock()
 		c.sendError("加载画布失败")
 		return
 	}
-	nextDoc, changed, replacedByRemote, err := applyCanvasOp(r.doc, r.revision, msg.Kind, msg.Payload)
+	if r.appliedOpIDs[msg.OpID] {
+		c.enqueue(r.operationSnapshotLocked(actor, clientID, msg.OpID, nil))
+		return
+	}
+	nextDoc, changed, replacedByRemote, err := applyCanvasOp(r.doc, r.revision, r.mealID, msg.Kind, msg.Payload)
 	if err != nil {
-		r.mu.Unlock()
 		c.sendError(err.Error())
 		return
 	}
 	if replacedByRemote {
-		snapBytes, _ := json.Marshal(map[string]any{
-			"type":      "snapshot",
-			"meal_id":   r.mealID,
-			"revision":  r.revision,
-			"actor":     c.actor,
-			"client_id": "server",
-			"document":  cloneCanvasDoc(r.doc),
-		})
-		r.mu.Unlock()
-		c.enqueue(snapBytes)
+		c.enqueue(r.operationSnapshotLocked(actor, clientID, msg.OpID, nil))
 		return
 	}
-	if !changed {
-		r.mu.Unlock()
-		return
+	var seedOpIDs []string
+	if msg.Kind == "replace_document" && msg.Payload.OnlyIfEmpty {
+		seedOpIDs = msg.Payload.SeedOpIDs
 	}
-	rev, _, err := r.persistLocked(nextDoc, c.userID)
+	opIDs := append([]string{msg.OpID}, seedOpIDs...)
+	rev, _, err := r.persistLocked(nextDoc, c.userID, opIDs...)
 	if err != nil {
-		r.mu.Unlock()
 		c.sendError("保存画布失败")
+		c.revokeAndDrain()
 		return
 	}
 	targets := r.snapshotClientsLocked(nil)
 	var outbound []byte
-	if msg.Kind == "replace_document" {
-		outbound, _ = json.Marshal(map[string]any{
-			"type":      "snapshot",
-			"meal_id":   r.mealID,
-			"revision":  rev,
-			"actor":     c.actor,
-			"client_id": clientID,
-			"document":  cloneCanvasDoc(nextDoc),
-		})
+	if msg.Kind == "replace_document" || !changed {
+		outbound = r.operationSnapshotLocked(actor, clientID, msg.OpID, seedOpIDs)
 	} else {
 		outbound, _ = json.Marshal(map[string]any{
 			"type":      "op_applied",
 			"meal_id":   r.mealID,
 			"revision":  rev,
-			"actor":     c.actor,
+			"actor":     actor,
 			"client_id": clientID,
 			"op_id":     msg.OpID,
 			"kind":      msg.Kind,
 			"payload":   msg.Payload,
 		})
 	}
-	r.mu.Unlock()
-
 	sendToClients(targets, outbound)
+}
+
+func (r *canvasRoom) operationSnapshotLocked(actor CanvasActor, clientID, opID string, seedOpIDs []string) []byte {
+	data, _ := json.Marshal(map[string]any{
+		"type":        "snapshot",
+		"meal_id":     r.mealID,
+		"revision":    r.revision,
+		"actor":       actor,
+		"client_id":   clientID,
+		"op_id":       opID,
+		"seed_op_ids": seedOpIDs,
+		"document":    r.doc,
+	})
+	return data
 }
 
 func (r *canvasRoom) handleLivePreview(c *canvasClient, msg inboundWSMessage) {
 	if !c.canEdit || c.revoked.Load() {
 		return
 	}
-	if c.actor.Role == "guest" {
+	actor := c.snapshotActor()
+	if actor.Role == "guest" {
 		needCheck := false
 		c.accessCheckMu.Lock()
 		if time.Since(c.lastAccessCheck) > 10*time.Second {
@@ -522,7 +853,7 @@ func (r *canvasRoom) handleLivePreview(c *canvasClient, msg inboundWSMessage) {
 	outbound, err := json.Marshal(map[string]any{
 		"type":             "live_preview",
 		"meal_id":          r.mealID,
-		"actor":            c.actor,
+		"actor":            actor,
 		"client_id":        clientID,
 		"target_kind":      msg.TargetKind,
 		"target_id":        msg.TargetID,
@@ -536,9 +867,88 @@ func (r *canvasRoom) handleLivePreview(c *canvasClient, msg inboundWSMessage) {
 	}
 
 	r.mu.Lock()
+	if msg.TargetKind == "clear" {
+		delete(r.activePreviews, clientID)
+	} else {
+		if r.activePreviews == nil {
+			r.activePreviews = make(map[string]cachedLivePreview)
+		}
+		r.activePreviews[clientID] = cachedLivePreview{
+			data:      outbound,
+			updatedAt: time.Now(),
+		}
+	}
 	targets := r.snapshotClientsLocked(c)
 	r.mu.Unlock()
-	sendToClients(targets, outbound)
+	sendToClientsBestEffort(targets, outbound)
+}
+
+func (r *canvasRoom) handlePing(c *canvasClient, clientRev *int64) {
+	if c.revoked.Load() {
+		return
+	}
+	r.mu.Lock()
+	rev := r.revision
+	var catchUpDoc *CanvasDocPayload
+	if clientRev != nil && rev > *clientRev && r.doc != nil {
+		catchUpDoc = cloneCanvasDoc(r.doc)
+	}
+	r.mu.Unlock()
+
+	pong, _ := json.Marshal(map[string]any{
+		"type":     "pong",
+		"meal_id":  r.mealID,
+		"revision": rev,
+	})
+	c.enqueue(pong)
+
+	if catchUpDoc != nil {
+		snapBytes, _ := json.Marshal(map[string]any{
+			"type":      "snapshot",
+			"meal_id":   r.mealID,
+			"revision":  rev,
+			"client_id": "server",
+			"document":  catchUpDoc,
+		})
+		c.enqueue(snapBytes)
+	}
+}
+
+func (r *canvasRoom) handleResync(c *canvasClient) {
+	if c.revoked.Load() {
+		return
+	}
+	r.mu.Lock()
+	if err := r.ensureLoadedLocked(); err != nil {
+		r.mu.Unlock()
+		c.sendError("同步画布失败")
+		return
+	}
+	rev := r.revision
+	var docCopy *CanvasDocPayload
+	if rev > 0 && r.doc != nil {
+		docCopy = cloneCanvasDoc(r.doc)
+	}
+	users := r.onlineUsersLocked()
+	r.mu.Unlock()
+
+	presenceBytes, _ := json.Marshal(map[string]any{
+		"type":         "presence",
+		"meal_id":      r.mealID,
+		"online_users": users,
+	})
+	c.enqueue(presenceBytes)
+
+	if docCopy != nil {
+		snapBytes, _ := json.Marshal(map[string]any{
+			"type":      "snapshot",
+			"meal_id":   r.mealID,
+			"revision":  rev,
+			"client_id": "server",
+			"document":  docCopy,
+		})
+		c.enqueue(snapBytes)
+	}
 }
 
 func (r *canvasRoom) disconnect(c *canvasClient) {
@@ -548,6 +958,7 @@ func (r *canvasRoom) disconnect(c *canvasClient) {
 		return
 	}
 	delete(r.clients, c)
+	delete(r.activePreviews, c.clientID)
 	users := r.onlineUsersLocked()
 	targets := r.snapshotClientsLocked(nil)
 	r.mu.Unlock()
@@ -563,7 +974,7 @@ func (r *canvasRoom) disconnect(c *canvasClient) {
 		clearBytes, _ := json.Marshal(map[string]any{
 			"type":        "live_preview",
 			"meal_id":     r.mealID,
-			"actor":       c.actor,
+			"actor":       c.snapshotActor(),
 			"client_id":   c.clientID,
 			"target_kind": "clear",
 			"target_id":   "",
@@ -587,6 +998,19 @@ func (c *canvasClient) enqueue(data []byte) {
 		c.closed = true
 		close(c.send)
 		_ = c.conn.Close()
+	}
+}
+
+func (c *canvasClient) enqueueDropIfFull(data []byte) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	if c.closed {
+		return
+	}
+	select {
+	case c.send <- data:
+	default:
+		// 高频预览帧队满直接丢弃，不踢掉正在恢复中的连接
 	}
 }
 
@@ -652,8 +1076,9 @@ func (c *canvasClient) readPump() {
 		}
 		switch msg.Type {
 		case "ping":
-			pong, _ := json.Marshal(map[string]any{"type": "pong"})
-			c.enqueue(pong)
+			c.room.handlePing(c, msg.Revision)
+		case "resync":
+			c.room.handleResync(c)
 		case "live_preview":
 			c.room.handleLivePreview(c, msg)
 		case "op":
@@ -694,5 +1119,14 @@ func sendToClients(targets []*canvasClient, data []byte) {
 	}
 	for _, c := range targets {
 		c.enqueue(data)
+	}
+}
+
+func sendToClientsBestEffort(targets []*canvasClient, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	for _, c := range targets {
+		c.enqueueDropIfFull(data)
 	}
 }

@@ -149,6 +149,7 @@ struct ManualHistoryEntryView: View {
                     )
                 )
             }
+            AppNotifications.historyChanged()
             onSaved()
             dismiss()
         } catch {

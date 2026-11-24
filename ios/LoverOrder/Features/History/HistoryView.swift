@@ -2,6 +2,8 @@ import SwiftUI
 
 // 已完成用餐记录列表。
 struct HistoryView: View {
+    @EnvironmentObject private var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var vm = HistoryViewModel()
     @State private var filter: Filter = .all
     @State private var showManualEntry = false
@@ -33,6 +35,17 @@ struct HistoryView: View {
             .refreshable { await vm.load(filter: filter) }
             .task { await vm.load(filter: filter) }
             .onChange(of: filter) { _, value in Task { await vm.load(filter: value) } }
+            .onChange(of: appState.activeTab) { _, tab in
+                guard tab == 2 else { return }
+                Task { await vm.load(filter: filter) }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active, appState.activeTab == 2 else { return }
+                Task { await vm.load(filter: filter) }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .historyChanged)) { _ in
+                Task { await vm.load(filter: filter) }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
                 Task { await vm.load(filter: filter) }
             }
@@ -373,14 +386,18 @@ final class HistoryViewModel: ObservableObject {
             }
             let result = try await MealService.shared.list(q)
             meals = result.items
-            let syncTargets = Array(result.items.prefix(12).filter { !mealCanvasDocumentExists(mealID: $0.id) })
+            let syncTargets = Array(result.items.prefix(12))
             if !syncTargets.isEmpty {
                 Task { @MainActor [weak self] in
                     guard let self else { return }
+                    var updated = false
                     for item in syncTargets {
-                        if await syncRemoteMealCanvasIfNeeded(mealID: item.id) {
-                            self.canvasSyncVersion += 1
+                        if await syncRemoteMealCanvasIfNeeded(mealID: item.id, forceRefresh: true) {
+                            updated = true
                         }
+                    }
+                    if updated {
+                        self.canvasSyncVersion += 1
                     }
                 }
             }

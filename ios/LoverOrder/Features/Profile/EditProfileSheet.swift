@@ -7,8 +7,25 @@ struct EditProfileSheet: View {
 
     @State private var nickname: String = ""
     @State private var avatar: String = ""
+    @State private var isUploadingAvatar: Bool = false
     @State private var isSaving: Bool = false
     @State private var errorMessage: String?
+
+    private var previewUser: AppUser {
+        let base = appState.currentUser
+        return AppUser(
+            id: base?.id ?? 0,
+            nickname: nickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? (base?.displayName ?? "我")
+                : nickname.trimmingCharacters(in: .whitespacesAndNewlines),
+            avatar: avatar.isEmpty ? nil : avatar,
+            email: base?.email,
+            gender: base?.gender,
+            householdId: base?.householdId,
+            deviceId: base?.deviceId,
+            hasPassword: base?.hasPassword
+        )
+    }
 
     var body: some View {
         NavigationStack {
@@ -28,9 +45,13 @@ struct EditProfileSheet: View {
             }
             .background(Color.appBackground.ignoresSafeArea())
             .safeAreaInset(edge: .bottom) {
-                PrimaryButton(title: isSaving ? "保存中" : "保存", isLoading: isSaving) {
+                PrimaryButton(
+                    title: isUploadingAvatar ? "头像上传中" : (isSaving ? "保存中" : "保存"),
+                    isLoading: isSaving
+                ) {
                     Task { await save() }
                 }
+                .disabled(isUploadingAvatar || isSaving)
                 .padding(.horizontal, AppSpacing.lg)
                 .padding(.vertical, AppSpacing.sm)
                 .background(Color.appBackground)
@@ -38,6 +59,7 @@ struct EditProfileSheet: View {
                     Divider().overlay(Color.dividerLine.opacity(0.6))
                 }
             }
+            .interactiveDismissDisabled(isSaving || isUploadingAvatar)
             .navigationTitle("编辑资料")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -47,6 +69,7 @@ struct EditProfileSheet: View {
                     } label: {
                         Text("取消").foregroundStyle(Color.inkSecondary)
                     }
+                    .disabled(isSaving || isUploadingAvatar)
                 }
             }
             .task {
@@ -59,7 +82,20 @@ struct EditProfileSheet: View {
     private var avatarCard: some View {
         SectionCard {
             FieldLabel("头像", required: false)
-            PhotoPickerField(imageURL: $avatar, label: "选张自己喜欢的图", height: 160)
+            HStack {
+                Spacer()
+                AvatarView(user: previewUser, size: 84, ring: true)
+                    .shadow(color: Color.black.opacity(0.10), radius: 8, y: 3)
+                Spacer()
+            }
+            .padding(.bottom, AppSpacing.xs)
+
+            PhotoPickerField(
+                imageURL: $avatar,
+                label: "点这里从相册选一张头像",
+                height: 140,
+                isProcessing: $isUploadingAvatar
+            )
         }
     }
 
@@ -78,11 +114,13 @@ struct EditProfileSheet: View {
     }
 
     private func save() async {
+        guard !isUploadingAvatar else { return }
         let trimmed = nickname.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             errorMessage = "请填一个昵称"
             return
         }
+        errorMessage = nil
         isSaving = true
         defer { isSaving = false }
         do {
@@ -93,6 +131,8 @@ struct EditProfileSheet: View {
             if user.deviceId == DeviceIdentity.shared.deviceID {
                 UserDefaults.standard.set(user.nickname, forKey: "auth.last.nickname")
             }
+            await appState.refreshHousehold()
+            AppNotifications.householdChanged()
             dismiss()
         } catch {
             errorMessage = error.localizedDescription

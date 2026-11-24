@@ -5,9 +5,17 @@ import UIKit
 struct RootView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
-    @State private var launchConfig: LaunchCurtainConfig = LaunchCurtainStore.load()
-    @State private var launchPayload: LaunchCanvasDocumentPayload = LaunchCanvasStore.loadOrDefaultPayload()
-    @State private var showLaunchCurtain: Bool = LaunchCurtainStore.load().enabled
+    @State private var launchConfig: LaunchCurtainConfig
+    @State private var launchPayload: LaunchCanvasDocumentPayload
+    @State private var showLaunchCurtain: Bool
+
+    init() {
+        let saved = LaunchCurtainStore.load()
+        let resolved = LaunchCanvasStore.loadActiveLaunchPlayback(config: saved)
+        _launchConfig = State(initialValue: resolved.effectiveConfig)
+        _launchPayload = State(initialValue: resolved.payload)
+        _showLaunchCurtain = State(initialValue: saved.enabled)
+    }
 
     private var prefersLightTextStatusBar: Bool {
         if showLaunchCurtain {
@@ -71,6 +79,10 @@ struct RootView: View {
                 .environmentObject(appState)
                 .preferredColorScheme(.light)
         }
+        .fullScreenCover(item: $appState.deepLinkedGuestMeal) { meal in
+            DiningGuestView(meal: meal)
+                .environmentObject(appState)
+        }
         .tipToast($appState.deepLinkToast)
         .onAppear {
             NotificationManager.shared.onUnreadCountChange = { count in
@@ -94,14 +106,15 @@ struct RootView: View {
         }
         .task(id: "\(appState.currentUser?.id ?? 0)-\(appState.isBootstrapping)") {
             guard !appState.isBootstrapping, let uid = appState.currentUser?.id else { return }
-            await NotificationManager.shared.onAuthenticated(userId: uid)
             appState.consumePendingDeepLinkIfReady()
+            await NotificationManager.shared.onAuthenticated(userId: uid)
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active, appState.isLoggedIn else { return }
             Task {
                 await NotificationManager.shared.refreshAuthorizationStatus()
                 await NotificationManager.shared.syncServerNotifications(allowLocalBanner: true)
+                await appState.refreshOnForegroundResume()
             }
         }
     }
@@ -168,7 +181,7 @@ struct SplashView: View {
 enum LaunchCurtainMotion: String, CaseIterable, Identifiable, Codable {
     case fadeZoom
     case curtainUp
-    case polaroidDrop
+    case softReveal
     case bloom
 
     var id: String { rawValue }
@@ -177,7 +190,7 @@ enum LaunchCurtainMotion: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .fadeZoom: return "柔焦淡出"
         case .curtainUp: return "拉开帘幕"
-        case .polaroidDrop: return "拍立得飞入"
+        case .softReveal: return "柔光揭幕"
         case .bloom: return "轻盈落星"
         }
     }
@@ -186,8 +199,18 @@ enum LaunchCurtainMotion: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .fadeZoom: return "sparkles"
         case .curtainUp: return "arrow.up.to.line"
-        case .polaroidDrop: return "photo.artframe"
+        case .softReveal: return "wand.and.rays"
         case .bloom: return "sun.max"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = (try? container.decode(String.self)) ?? ""
+        if raw == "polaroidDrop" || raw == "softReveal" {
+            self = .softReveal
+        } else {
+            self = LaunchCurtainMotion(rawValue: raw) ?? .fadeZoom
         }
     }
 }
@@ -224,23 +247,54 @@ enum LaunchHoldSpeed: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+enum LaunchCurtainSource: String, CaseIterable, Identifiable, Codable {
+    case householdCreator
+    case personal
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .householdCreator: return "使用家庭创建者的"
+        case .personal: return "使用自己 DIY 的"
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .householdCreator: return "家庭共享"
+        case .personal: return "个人 DIY"
+        }
+    }
+
+    var description: String {
+        switch self {
+        case .householdCreator: return "跟随家庭创建者发布的开屏动画"
+        case .personal: return "使用自己亲手创作的开屏动画"
+        }
+    }
+}
+
 struct LaunchCurtainConfig: Codable, Equatable {
     var enabled: Bool = true
+    var source: LaunchCurtainSource = .householdCreator
     var motion: LaunchCurtainMotion = .fadeZoom
     var holdSpeed: LaunchHoldSpeed = .standard
 
     static let defaultConfig = LaunchCurtainConfig()
 
     private enum CodingKeys: String, CodingKey {
-        case enabled, motion, holdSpeed
+        case enabled, source, motion, holdSpeed
     }
 
     init(
         enabled: Bool = true,
+        source: LaunchCurtainSource = .householdCreator,
         motion: LaunchCurtainMotion = .fadeZoom,
         holdSpeed: LaunchHoldSpeed = .standard
     ) {
         self.enabled = enabled
+        self.source = source
         self.motion = motion
         self.holdSpeed = holdSpeed
     }
@@ -248,6 +302,11 @@ struct LaunchCurtainConfig: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+        if let decodedSource = try container.decodeIfPresent(LaunchCurtainSource.self, forKey: .source) {
+            source = decodedSource
+        } else {
+            source = LaunchCanvasStore.hasSavedDocument() ? .personal : .householdCreator
+        }
         motion = try container.decodeIfPresent(LaunchCurtainMotion.self, forKey: .motion) ?? .fadeZoom
         holdSpeed = try container.decodeIfPresent(LaunchHoldSpeed.self, forKey: .holdSpeed) ?? .standard
     }
@@ -290,15 +349,30 @@ struct LaunchCurtainView: View {
     }
 
     private var exitOffsetY: CGFloat {
-        guard exiting, config.motion == .curtainUp else { return 0 }
-        return -UIScreen.main.bounds.height
+        guard exiting else { return 0 }
+        switch config.motion {
+        case .curtainUp: return -UIScreen.main.bounds.height
+        case .softReveal: return -18
+        default: return 0
+        }
     }
 
     private var fullBleedScale: CGFloat {
+        if config.motion == .softReveal {
+            if exiting { return 1.04 }
+            if !entered { return 1.07 }
+            return 1.0
+        }
         let usesZoom = config.motion == .fadeZoom || config.motion == .bloom
         if exiting && usesZoom { return 1.06 }
         if !entered && usesZoom { return 1.05 }
         return 1.0
+    }
+
+    private var softRevealBlur: CGFloat {
+        guard !reduceMotion, config.motion == .softReveal else { return 0 }
+        if exiting { return 7 }
+        return entered ? 0 : 12
     }
 
     var body: some View {
@@ -312,18 +386,24 @@ struct LaunchCurtainView: View {
             LaunchCanvasPlaybackView(
                 payload: payload,
                 isLiveActive: entered,
-                inPolaroidFrame: config.motion == .polaroidDrop,
                 isExiting: exiting,
                 motionScale: fullBleedScale
             )
-            .opacity(entered ? 1 : 0.92)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.72), value: entered)
+            .blur(radius: softRevealBlur)
+            .opacity(entered ? 1 : (config.motion == .softReveal ? 0.78 : 0.92))
+            .animation(reduceMotion ? nil : .easeOut(duration: config.motion == .softReveal ? 0.85 : 0.72), value: entered)
             .ignoresSafeArea()
             .contentShape(Rectangle())
             .onTapGesture {
                 if allowTapToSkip && canDismiss {
                     triggerDismiss(quick: true)
                 }
+            }
+
+            if config.motion == .softReveal && !reduceMotion {
+                softRevealSheen(isLight: isLight)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
             }
 
             if config.motion == .bloom {
@@ -381,6 +461,30 @@ struct LaunchCurtainView: View {
             if ready && minHoldElapsed {
                 triggerDismiss(quick: false)
             }
+        }
+    }
+
+    private func softRevealSheen(isLight: Bool) -> some View {
+        GeometryReader { proxy in
+            let w = max(proxy.size.width, 320)
+            let h = max(proxy.size.height, 640)
+            LinearGradient(
+                colors: [
+                    .clear,
+                    (isLight ? Color(red: 1.0, green: 0.96, blue: 0.88) : Color.white).opacity(isLight ? 0.34 : 0.24),
+                    .clear
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .frame(width: w * 1.4, height: h * 0.42)
+            .rotationEffect(.degrees(-22))
+            .offset(
+                x: entered ? w * 0.72 : -w * 0.85,
+                y: entered ? h * 0.68 : -h * 0.25
+            )
+            .opacity(entered ? 0 : 0.95)
+            .animation(.easeOut(duration: 0.95), value: entered)
         }
     }
 

@@ -155,7 +155,7 @@ private enum CutoutError: LocalizedError {
     }
 }
 
-/// 沿着透明前景实际边缘生成 Crisp 白边模切贴纸效果并缓存。
+/// 沿着透明前景实际边缘生成 Crisp 白边模切或半透晶透贴纸效果并缓存。
 actor StickerBorderRenderer {
     static let shared = StickerBorderRenderer()
 
@@ -168,6 +168,29 @@ actor StickerBorderRenderer {
 
     nonisolated func cached(forKey key: String) -> UIImage? {
         cache.object(forKey: key as NSString)
+    }
+
+    nonisolated func cachedCrystal(forKey key: String) -> UIImage? {
+        cache.object(forKey: "\(key)#crystal" as NSString)
+    }
+
+    private func alphaMask(from ciBase: CIImage, extent: CGRect, radius: CGFloat) -> CIImage {
+        let dilated = ciBase
+            .applyingFilter("CIMorphologyMaximum", parameters: [kCIInputRadiusKey: radius])
+            .cropped(to: extent)
+        let smoothed = dilated
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 1.3])
+            .cropped(to: extent)
+        return smoothed.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 2.4),
+            "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: -0.35)
+        ]).applyingFilter("CIColorClamp", parameters: [
+            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
+        ])
     }
 
     func makeDieCutSticker(from image: UIImage, cacheKey: String) -> UIImage {
@@ -193,22 +216,7 @@ actor StickerBorderRenderer {
         guard let ciBase = CIImage(image: padded) else { return image }
         let extent = ciBase.extent
 
-        let dilated = ciBase
-            .applyingFilter("CIMorphologyMaximum", parameters: [kCIInputRadiusKey: strokePx])
-            .cropped(to: extent)
-        let smoothed = dilated
-            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 1.2])
-            .cropped(to: extent)
-        let crispAlpha = smoothed.applyingFilter("CIColorMatrix", parameters: [
-            "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 2.4),
-            "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: -0.35)
-        ]).applyingFilter("CIColorClamp", parameters: [
-            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
-            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
-        ])
+        let crispAlpha = alphaMask(from: ciBase, extent: extent, radius: strokePx)
         // 将 alpha 映射为合法的 premultiplied white (R=A, G=A, B=A, A=A)，绝不能把 RGB bias 设为 1
         let whiteRim = crispAlpha.applyingFilter("CIColorMatrix", parameters: [
             "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 1),
@@ -221,6 +229,97 @@ actor StickerBorderRenderer {
         guard let cgImage = context.createCGImage(composed, from: extent) else { return image }
         let rendered = UIImage(cgImage: cgImage, scale: 1, orientation: .up)
         cache.setObject(rendered, forKey: cacheKey as NSString)
+        return rendered
+    }
+
+    /// 沿透明前景生成半透磨砂亚克力光边 + 细锐高光轮廓 + 对角晶面高光（完全透明底）。
+    func makeCrystalSticker(from image: UIImage, cacheKey: String) -> UIImage {
+        if let hit = cachedCrystal(forKey: cacheKey) {
+            return hit
+        }
+        guard image.size.width > 0, image.size.height > 0 else { return image }
+
+        let maxSide: CGFloat = 900
+        let ratio = min(1, maxSide / max(image.size.width, image.size.height))
+        let sw = max(1, (image.size.width * ratio).rounded())
+        let sh = max(1, (image.size.height * ratio).rounded())
+        let strokePx = max(14, min(28, (min(sw, sh) * 0.036).rounded()))
+        let pad = strokePx + 8
+        let paddedSize = CGSize(width: sw + pad * 2, height: sh + pad * 2)
+
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let padded = UIGraphicsImageRenderer(size: paddedSize, format: format).image { _ in
+            image.draw(in: CGRect(x: pad, y: pad, width: sw, height: sh))
+        }
+        guard let ciBase = CIImage(image: padded) else { return image }
+        let extent = ciBase.extent
+
+        let outerMask = alphaMask(from: ciBase, extent: extent, radius: strokePx)
+        let innerMask = alphaMask(from: ciBase, extent: extent, radius: max(strokePx - 3, 2))
+        let invertedInner = innerMask.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: -1),
+            "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 1)
+        ]).applyingFilter("CIColorClamp", parameters: [
+            "inputMinComponents": CIVector(x: 0, y: 0, z: 0, w: 0),
+            "inputMaxComponents": CIVector(x: 1, y: 1, z: 1, w: 1)
+        ])
+        let rimMask = outerMask.applyingFilter("CISourceInCompositing", parameters: [
+            kCIInputBackgroundImageKey: invertedInner
+        ]).cropped(to: extent)
+
+        // 严格 premultiplied RGBA：RGB <= A，bias = 0
+        let haloAlpha: CGFloat = 0.34
+        let frostedHalo = outerMask.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0.94 * haloAlpha),
+            "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0.97 * haloAlpha),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 1.00 * haloAlpha),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: haloAlpha),
+            "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
+        ])
+
+        let rimAlpha: CGFloat = 0.84
+        let rimBand = rimMask.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0.96 * rimAlpha),
+            "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0.99 * rimAlpha),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 1.00 * rimAlpha),
+            "inputAVector": CIVector(x: 0, y: 0, z: 0, w: rimAlpha),
+            "inputBiasVector": CIVector(x: 0, y: 0, z: 0, w: 0)
+        ])
+
+        let composed = ciBase.composited(over: rimBand.composited(over: frostedHalo)).cropped(to: extent)
+        guard let composedCG = context.createCGImage(composed, from: extent) else { return image }
+
+        let rendered = UIGraphicsImageRenderer(size: paddedSize, format: format).image { ctx in
+            let baseImage = UIImage(cgImage: composedCG, scale: 1, orientation: .up)
+            baseImage.draw(in: CGRect(origin: .zero, size: paddedSize))
+
+            let cg = ctx.cgContext
+            cg.saveGState()
+            cg.setBlendMode(.sourceAtop)
+            let colors = [
+                UIColor.white.withAlphaComponent(0.0).cgColor,
+                UIColor.white.withAlphaComponent(0.22).cgColor,
+                UIColor.white.withAlphaComponent(0.05).cgColor,
+                UIColor.white.withAlphaComponent(0.0).cgColor
+            ] as CFArray
+            let locations: [CGFloat] = [0.0, 0.36, 0.56, 1.0]
+            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: locations) {
+                cg.drawLinearGradient(
+                    gradient,
+                    start: CGPoint(x: 0, y: 0),
+                    end: CGPoint(x: paddedSize.width, y: paddedSize.height),
+                    options: []
+                )
+            }
+            cg.restoreGState()
+        }
+
+        cache.setObject(rendered, forKey: "\(cacheKey)#crystal" as NSString)
         return rendered
     }
 }

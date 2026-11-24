@@ -60,6 +60,9 @@ struct HistoryDetailView: View {
         .task {
             await load()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .historyChanged)) { _ in
+            Task { await load() }
+        }
         .navigationTitle("这顿饭")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showReview) {

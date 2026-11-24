@@ -106,6 +106,8 @@ func registerRoutes(r *gin.Engine) {
 				household.GET("/info", middleware.HouseholdRequired(), householdH.Info)
 				household.POST("/invite", middleware.HouseholdRequired(), householdH.Invite)
 				household.GET("/invitations", middleware.HouseholdRequired(), householdH.Invitations)
+				household.GET("/launch-canvas", middleware.HouseholdRequired(), householdH.GetLaunchCanvas)
+				household.POST("/launch-canvas", middleware.HouseholdRequired(), householdH.SaveLaunchCanvas)
 			}
 
 			upload := secured.Group("/upload")
@@ -169,6 +171,7 @@ func registerRoutes(r *gin.Engine) {
 					recipes.POST("/:id/update", recipeH.Update)
 					recipes.POST("/:id/delete", recipeH.Delete)
 					recipes.POST("/:id/favorite", recipeH.ToggleFavorite)
+					recipes.POST("/:id/cover", recipeH.SetCover)
 				}
 
 				meals := inHousehold.Group("/meals")
@@ -184,8 +187,10 @@ func registerRoutes(r *gin.Engine) {
 					meals.POST("/:id/cancel", mealH.Cancel)
 					meals.POST("/:id/review", mealH.Review)
 					meals.POST("/:id/dishes/add", mealH.AddDish)
+					meals.POST("/:id/dishes/:dish_id/image", mealH.UpdateDishImage)
 					meals.POST("/:id/dishes/:dish_id/remove", mealH.RemoveDish)
 					meals.GET("/:id/shopping-list", mealH.ShoppingList)
+					meals.POST("/:id/shopping-list/check", mealH.UpdateShoppingChecked)
 					meals.POST("/:id/dining/open", diningH.Open)
 					meals.POST("/:id/dining/close", diningH.Close)
 				}

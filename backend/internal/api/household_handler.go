@@ -90,3 +90,32 @@ func (h *HouseholdHandler) Invitations(c *gin.Context) {
 	}
 	OK(c, items)
 }
+
+// GetLaunchCanvas 获取家庭共享开屏动画（由创建者维护）
+func (h *HouseholdHandler) GetLaunchCanvas(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
+	item, err := h.svc.GetLaunchCanvas(hid, uid)
+	if err != nil {
+		Fail(c, CodeBadRequest, err.Error())
+		return
+	}
+	OK(c, item)
+}
+
+// SaveLaunchCanvas 家庭创建者发布共享开屏动画
+func (h *HouseholdHandler) SaveLaunchCanvas(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
+	var in service.LaunchCanvasInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		Fail(c, CodeBadRequest, "参数有误")
+		return
+	}
+	item, err := h.svc.SaveLaunchCanvas(hid, uid, in)
+	if err != nil {
+		Fail(c, CodeBadRequest, err.Error())
+		return
+	}
+	OK(c, item)
+}

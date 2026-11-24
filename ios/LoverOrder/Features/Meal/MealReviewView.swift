@@ -18,7 +18,12 @@ struct MealReviewView: View {
     @State private var didPrefill: Bool = false
     @State private var isSubmitting: Bool = false
     @State private var errorMessage: String?
+    @State private var tipMessage: String?
     @State private var sharePosterMeal: MealSession?
+    @State private var photoPickerDish: MealDish?
+    @State private var coverPrompt: (recipeId: UInt, dishName: String, image: String, cutoutImage: String?)?
+    @State private var coverPromptTask: Task<Void, Never>?
+    @State private var isSettingCover: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -40,7 +45,15 @@ struct MealReviewView: View {
             }
             .background(Color.appBackground.ignoresSafeArea())
             .safeAreaInset(edge: .bottom) {
-                bottomBar
+                VStack(spacing: 8) {
+                    if let prompt = coverPrompt {
+                        coverPromptBanner(prompt)
+                            .padding(.horizontal, AppSpacing.lg)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    bottomBar
+                }
+                .animation(.spring(response: 0.30, dampingFraction: 0.84), value: coverPrompt?.image)
             }
             .task {
                 await loadMeal()
@@ -49,6 +62,7 @@ struct MealReviewView: View {
             .navigationTitle("记录这一顿")
             .navigationBarTitleDisplayMode(.inline)
             .toast($errorMessage)
+            .tipToast($tipMessage)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
@@ -58,6 +72,15 @@ struct MealReviewView: View {
                     }
                     .disabled(isSubmitting || photosUploading)
                 }
+            }
+            .sheet(item: $photoPickerDish) { dish in
+                DishPhotoPickerSheet(mealId: mealId, dish: dish) { result in
+                    applyReplacedDishPhoto(result)
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
+                .preferredColorScheme(.light)
             }
             .sheet(item: $sharePosterMeal, onDismiss: {
                 dismiss()
@@ -110,10 +133,30 @@ struct MealReviewView: View {
                         VStack(alignment: .leading, spacing: AppSpacing.sm) {
                             HStack(spacing: AppSpacing.md) {
                                 DishThumb(name: dish.recipeName, image: dish.recipeImage)
+                                    .id("\(dish.id)-\(dish.recipeImage ?? "")")
                                 Text(dish.recipeName)
                                     .font(AppFont.body(15))
                                     .foregroundStyle(Color.inkPrimary)
                                 Spacer()
+                                Button {
+                                    Haptics.light()
+                                    photoPickerDish = dish
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "camera")
+                                            .font(.system(size: 11.5, weight: .semibold))
+                                        Text("换图")
+                                            .font(AppFont.caption(12))
+                                    }
+                                    .foregroundStyle(Color.inkSecondary)
+                                    .padding(.horizontal, 10)
+                                    .frame(height: 28)
+                                    .background(Color.appBackground, in: Capsule())
+                                    .overlay {
+                                        Capsule().strokeBorder(Color.dividerLine, lineWidth: 0.7)
+                                    }
+                                }
+                                .buttonStyle(SoftPressStyle())
                             }
                             dishRatingRow(dish.id)
                             TextField("这道怎么样", text: dishCommentBinding(dish.id), axis: .vertical)
@@ -187,6 +230,44 @@ struct MealReviewView: View {
                     .foregroundStyle(Color.inkMuted)
             }
             MultiPhotoPicker(urls: $photoLinks, maxCount: 9) { photosUploading = $0 }
+            if let dishes = meal?.dishes, !dishes.isEmpty {
+                Divider().overlay(Color.dividerLine.opacity(0.6))
+                VStack(alignment: .leading, spacing: AppSpacing.sm) {
+                    Text("顺手替换本顿菜图（可选）")
+                        .font(AppFont.caption(12))
+                        .foregroundStyle(Color.inkMuted)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(dishes) { dish in
+                                Button {
+                                    Haptics.light()
+                                    photoPickerDish = dish
+                                } label: {
+                                    HStack(spacing: 7) {
+                                        DishThumb(name: dish.recipeName, image: dish.recipeImage, size: 28, radius: 7)
+                                            .id("\(dish.id)-\(dish.recipeImage ?? "")")
+                                        Text(dish.recipeName)
+                                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                                            .foregroundStyle(Color.inkPrimary)
+                                            .lineLimit(1)
+                                        Image(systemName: "camera")
+                                            .font(.system(size: 11, weight: .semibold))
+                                            .foregroundStyle(Color.inkMuted)
+                                    }
+                                    .padding(.leading, 5)
+                                    .padding(.trailing, 10)
+                                    .frame(height: 38)
+                                    .background(Color.appBackground, in: Capsule())
+                                    .overlay {
+                                        Capsule().strokeBorder(Color.dividerLine, lineWidth: 0.7)
+                                    }
+                                }
+                                .buttonStyle(SoftPressStyle())
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -272,6 +353,7 @@ struct MealReviewView: View {
                 PendingReviewStore.clear()
             }
             AppNotifications.mealChanged()
+            AppNotifications.historyChanged()
             onSaved()
             if openShareAfterSave {
                 if let latest = try? await MealService.shared.detail(id: mealId) {
@@ -297,6 +379,107 @@ struct MealReviewView: View {
                 rating: dishRatings[dish.id] ?? rating,
                 comment: text?.isEmpty == false ? text : nil
             )
+        }
+    }
+
+    private func coverPromptBanner(_ prompt: (recipeId: UInt, dishName: String, image: String, cutoutImage: String?)) -> some View {
+        HStack(spacing: 8) {
+            Text("已更新「\(prompt.dishName)」")
+                .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.92))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Button {
+                Task { await promoteCover(prompt) }
+            } label: {
+                HStack(spacing: 4) {
+                    if isSettingCover {
+                        ProgressView().tint(Color.actionInk).controlSize(.mini)
+                    }
+                    Text("设为菜谱封面")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(Color.actionInk)
+                .padding(.horizontal, 10)
+                .frame(height: 26)
+                .background(Color.white, in: Capsule())
+            }
+            .buttonStyle(SoftPressStyle())
+            .disabled(isSettingCover)
+
+            Button {
+                coverPromptTask?.cancel()
+                withAnimation(.easeOut(duration: 0.2)) {
+                    coverPrompt = nil
+                }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.72))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭提示")
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
+        .background(Color.actionInk.opacity(0.94), in: Capsule())
+        .shadow(color: Color.black.opacity(0.18), radius: 10, y: 4)
+    }
+
+    private func applyReplacedDishPhoto(_ result: DishPhotoApplyResult) {
+        let updatedDish = result.updatedDish
+        if var list = meal?.dishes,
+           let idx = list.firstIndex(where: { $0.id == updatedDish.id }) {
+            list[idx] = updatedDish
+            meal?.dishes = list
+        }
+        Task {
+            _ = await syncRemoteMealCanvasIfNeeded(mealID: mealId, forceRefresh: true)
+        }
+        onSaved()
+
+        if let rid = updatedDish.recipeId,
+           let img = updatedDish.recipeImage, !img.isEmpty,
+           !result.isAlreadyCover {
+            coverPromptTask?.cancel()
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.84)) {
+                coverPrompt = (rid, updatedDish.recipeName, img, updatedDish.recipeCutoutImage)
+            }
+            coverPromptTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(4.5))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    coverPrompt = nil
+                }
+            }
+        } else {
+            coverPromptTask?.cancel()
+            coverPrompt = nil
+            tipMessage = result.isAlreadyCover ? "已恢复菜谱默认图" : "已换成本顿实拍"
+        }
+    }
+
+    @MainActor
+    private func promoteCover(_ prompt: (recipeId: UInt, dishName: String, image: String, cutoutImage: String?)) async {
+        guard !isSettingCover else { return }
+        isSettingCover = true
+        coverPromptTask?.cancel()
+        defer { isSettingCover = false }
+        do {
+            _ = try await RecipeService.shared.setCover(
+                id: prompt.recipeId,
+                image: prompt.image,
+                cutoutImage: prompt.cutoutImage
+            )
+            withAnimation(.easeOut(duration: 0.2)) {
+                coverPrompt = nil
+            }
+            Haptics.success()
+            tipMessage = "已设为「\(prompt.dishName)」默认封面"
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }

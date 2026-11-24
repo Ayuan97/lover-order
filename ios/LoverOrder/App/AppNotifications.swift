@@ -7,6 +7,11 @@ extension Notification.Name {
     static let recipesChanged = Notification.Name("lover-order.recipes.changed")
     static let mealChanged = Notification.Name("lover-order.meal.changed")
     static let categoriesChanged = Notification.Name("lover-order.categories.changed")
+    static let householdChanged = Notification.Name("lover-order.household.changed")
+    static let historyChanged = Notification.Name("lover-order.history.changed")
+    static let stickerFavoritesChanged = Notification.Name("lover-order.stickerFavorites.changed")
+    static let shoppingChanged = Notification.Name("lover-order.shopping.changed")
+    static let launchCanvasChanged = Notification.Name("lover-order.launchCanvas.changed")
     static let sessionExpired = Notification.Name("lover-order.session.expired")
 }
 
@@ -22,6 +27,21 @@ enum AppNotifications {
     }
     static func categoriesChanged() {
         NotificationCenter.default.post(name: .categoriesChanged, object: nil)
+    }
+    static func householdChanged() {
+        NotificationCenter.default.post(name: .householdChanged, object: nil)
+    }
+    static func historyChanged() {
+        NotificationCenter.default.post(name: .historyChanged, object: nil)
+    }
+    static func stickerFavoritesChanged() {
+        NotificationCenter.default.post(name: .stickerFavoritesChanged, object: nil)
+    }
+    static func shoppingChanged() {
+        NotificationCenter.default.post(name: .shoppingChanged, object: nil)
+    }
+    static func launchCanvasChanged() {
+        NotificationCenter.default.post(name: .launchCanvasChanged, object: nil)
     }
 }
 
@@ -141,11 +161,13 @@ struct NotificationListResult: Decodable {
     let items: [AppNotificationEvent]
     let unreadCount: Int
     let latestId: UInt
+    let apnsConfigured: Bool
 
     enum CodingKeys: String, CodingKey {
         case items
         case unreadCount = "unread_count"
         case latestId = "latest_id"
+        case apnsConfigured = "apns_configured"
     }
 }
 
@@ -161,6 +183,11 @@ struct NotificationPreferences: Codable, Equatable {
     var dinnerMinute: Int = 30
 
     static let `default` = NotificationPreferences()
+
+    var mutedKinds: [String] {
+        ["meal_dish_added", "meal_confirmed", "meal_completed", "meal_reviewed",
+         "dining_joined", "dining_dish_added", "household_joined"].filter { !shouldNotify(kind: $0) }
+    }
 
     func shouldNotify(kind: String) -> Bool {
         switch kind {
@@ -180,6 +207,10 @@ private struct NotificationAck: Decodable {
     let ok: Bool?
 }
 
+private struct NotificationPermissionError: LocalizedError {
+    var errorDescription: String? { "请先在系统设置中开启通知权限" }
+}
+
 final class NotificationService {
     static let shared = NotificationService()
     private let api = APIClient.shared
@@ -189,21 +220,24 @@ final class NotificationService {
         let platform: String
         let environment: String
         let appVersion: String
+        let mutedKinds: [String]
 
         enum CodingKeys: String, CodingKey {
             case token, platform, environment
             case appVersion = "app_version"
+            case mutedKinds = "muted_kinds"
         }
     }
 
-    func registerDevice(token: String, environment: String, appVersion: String) async throws {
+    func registerDevice(token: String, environment: String, appVersion: String, mutedKinds: [String]) async throws {
         let _: NotificationAck = try await api.post(
             "devices/register",
             body: RegisterBody(
                 token: token,
                 platform: "ios",
                 environment: environment,
-                appVersion: appVersion
+                appVersion: appVersion,
+                mutedKinds: mutedKinds
             )
         )
     }
@@ -212,9 +246,9 @@ final class NotificationService {
         let _: NotificationAck = try await api.post("devices/unregister", body: ["token": token])
     }
 
-    func list(afterId: UInt = 0, limit: Int = 30) async throws -> NotificationListResult {
+    func list(afterId: UInt? = nil, limit: Int = 30) async throws -> NotificationListResult {
         var q: [String: String] = ["limit": "\(limit)"]
-        if afterId > 0 {
+        if let afterId {
             q["after_id"] = "\(afterId)"
         }
         return try await api.get("notifications", query: q)
@@ -266,10 +300,17 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     @Published var events: [AppNotificationEvent] = []
     @Published var unreadCount: Int = 0
     @Published var prefs: NotificationPreferences
-    @Published var apnsToken: String?
+    @Published private(set) var isAPNsRegistered = false
     @Published var isSyncing: Bool = false
 
-    var onDeepLink: ((AppDeepLink) -> Void)?
+    var onDeepLink: ((AppDeepLink) -> Void)? {
+        didSet {
+            if let onDeepLink, let link = pendingTappedLink {
+                pendingTappedLink = nil
+                onDeepLink(link)
+            }
+        }
+    }
     var onUnreadCountChange: ((Int) -> Void)?
 
     private static let prefsStorageKey = "loverorder.notification.prefs.v1"
@@ -278,6 +319,21 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
     private var activeUserId: UInt?
     private var pollTask: Task<Void, Never>?
+    private var pendingTappedLink: AppDeepLink?
+    private var presentedBannerIds: Set<UInt> = []
+    private var apnsToken: String?
+    private var registrationTask: Task<Void, Never>?
+    private var registeredDevice: DeviceRegistration?
+
+    private struct DeviceRegistration: Equatable {
+        let userId: UInt
+        let token: String
+        let mutedKinds: [String]
+    }
+
+    private var canPresentNotifications: Bool {
+        authorizationStatus == .authorized || authorizationStatus == .provisional
+    }
 
     private override init() {
         if let data = UserDefaults.standard.data(forKey: Self.prefsStorageKey),
@@ -292,18 +348,14 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
     // 登录成功或冷启动恢复登录态后启动推送注册与通知流同步
     func onAuthenticated(userId: UInt) async {
-        let userChanged = activeUserId != userId
         activeUserId = userId
 
         await refreshAuthorizationStatus()
         await requestPermissionIfNeededOnce()
 
-        if let token = apnsToken, !token.isEmpty {
-            await uploadAPNsToken(token)
-        }
-
+        queueDeviceRegistration()
         syncMealtimeReminders()
-        await syncServerNotifications(allowLocalBanner: !userChanged)
+        await syncServerNotifications()
 
         startPollingLoop(userId: userId)
     }
@@ -311,28 +363,33 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
     func handleLogout() async {
         pollTask?.cancel()
         pollTask = nil
+        activeUserId = nil
+        await registrationTask?.value
         if let token = apnsToken, !token.isEmpty {
             try? await NotificationService.shared.unregisterDevice(token: token)
         }
-        activeUserId = nil
+        registeredDevice = nil
+        isAPNsRegistered = false
+        presentedBannerIds.removeAll()
         events = []
         updateUnreadCount(0)
     }
 
     func didReceiveAPNsToken(_ hex: String) {
         apnsToken = hex
-        guard activeUserId != nil else { return }
-        Task {
-            await uploadAPNsToken(hex)
-        }
+        queueDeviceRegistration()
     }
 
     func updatePreferences(_ mutate: (inout NotificationPreferences) -> Void) {
+        let previousMutedKinds = prefs.mutedKinds
         mutate(&prefs)
         if let data = try? JSONEncoder().encode(prefs) {
             UserDefaults.standard.set(data, forKey: Self.prefsStorageKey)
         }
         syncMealtimeReminders()
+        if prefs.mutedKinds != previousMutedKinds {
+            queueDeviceRegistration()
+        }
     }
 
     func refreshAuthorizationStatus() async {
@@ -340,6 +397,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         authorizationStatus = settings.authorizationStatus
         if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
             UIApplication.shared.registerForRemoteNotifications()
+            queueDeviceRegistration()
         }
     }
 
@@ -349,7 +407,6 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
             let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
             await refreshAuthorizationStatus()
             if granted {
-                UIApplication.shared.registerForRemoteNotifications()
                 syncMealtimeReminders()
             }
             return granted
@@ -379,30 +436,38 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
         do {
             let result = try await NotificationService.shared.list(limit: 40)
+            guard activeUserId == userId else { return }
             events = result.items
             updateUnreadCount(result.unreadCount)
+            guard allowLocalBanner else { return }
 
             let baselineKey = Self.lastDeliveredPrefix + "\(userId)"
-            let hasBaseline = UserDefaults.standard.object(forKey: baselineKey) != nil
-            let storedLastId = UInt(UserDefaults.standard.integer(forKey: baselineKey))
-
-            if !hasBaseline {
+            let storedID = UserDefaults.standard.object(forKey: baselineKey) as? Int
+            // 同一部署的业务横幅只走一个通道，已弹过的锁屏推送可以被系统清除。
+            if result.apnsConfigured {
+                UserDefaults.standard.set(max(storedID ?? 0, Int(result.latestId)), forKey: baselineKey)
+                return
+            }
+            guard let storedID else {
                 UserDefaults.standard.set(Int(result.latestId), forKey: baselineKey)
                 return
             }
 
-            let fresh = result.items
-                .filter { $0.id > storedLastId && !$0.isRead }
-                .sorted { $0.id < $1.id }
-
-            if allowLocalBanner {
-                for ev in fresh where prefs.shouldNotify(kind: ev.kind) {
-                    await scheduleLocalBanner(for: ev)
+            var deliveredThrough = UInt(storedID)
+            guard canPresentNotifications, deliveredThrough < result.latestId else { return }
+            let existingBannerIds = await deliveredBannerIds()
+            defer { UserDefaults.standard.set(Int(deliveredThrough), forKey: baselineKey) }
+            while deliveredThrough < result.latestId {
+                let page = try await NotificationService.shared.list(afterId: deliveredThrough, limit: 40)
+                guard activeUserId == userId, !page.items.isEmpty else { break }
+                for event in page.items {
+                    guard activeUserId == userId else { return }
+                    if event.kind != "test", !event.isRead, prefs.shouldNotify(kind: event.kind),
+                       !existingBannerIds.contains(event.id), !presentedBannerIds.contains(event.id) {
+                        try await scheduleLocalBanner(for: event)
+                    }
+                    deliveredThrough = event.id
                 }
-            }
-
-            if result.latestId > storedLastId {
-                UserDefaults.standard.set(Int(result.latestId), forKey: baselineKey)
             }
         } catch {
             // 后台轮询静默容错，不弹出网络错误打断使用
@@ -442,16 +507,12 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         if authorizationStatus == .notDetermined {
             _ = await requestAuthorization()
         }
+        guard canPresentNotifications else { throw NotificationPermissionError() }
         let ev = try await NotificationService.shared.sendTest()
         await syncServerNotifications(allowLocalBanner: false)
-        if let userId = activeUserId {
-            let key = Self.lastDeliveredPrefix + "\(userId)"
-            let current = UInt(UserDefaults.standard.integer(forKey: key))
-            if ev.id > current {
-                UserDefaults.standard.set(Int(ev.id), forKey: key)
-            }
+        if !(await deliveredBannerIds()).contains(ev.id) {
+            try await scheduleLocalBanner(for: ev)
         }
-        await scheduleLocalBanner(for: ev)
         return ev
     }
 
@@ -488,7 +549,22 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .list, .sound, .badge])
+        let info = notification.request.content.userInfo
+        guard let eventId = (info["event_id"] as? NSNumber)?.uintValue else {
+            completionHandler([.banner, .list, .sound, .badge])
+            return
+        }
+        let kind = info["kind"] as? String ?? ""
+        let isRemote = notification.request.trigger is UNPushNotificationTrigger
+        Task { @MainActor in
+            let manager = NotificationManager.shared
+            if manager.prefs.shouldNotify(kind: kind), manager.presentedBannerIds.insert(eventId).inserted {
+                completionHandler([.banner, .list, .sound, .badge])
+            } else {
+                completionHandler([])
+            }
+            if isRemote { await manager.syncServerNotifications() }
+        }
     }
 
     nonisolated func userNotificationCenter(
@@ -520,6 +596,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         mealId: UInt?
     ) {
         if let eventId, eventId > 0 {
+            presentedBannerIds.insert(eventId)
             if let existing = events.first(where: { $0.id == eventId }) {
                 Task { await markRead(event: existing) }
             } else {
@@ -528,21 +605,29 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         }
 
         if let deepLinkRaw, let link = AppDeepLink.parse(string: deepLinkRaw) {
-            onDeepLink?(link)
+            openTappedLink(link)
             return
         }
 
         switch kindRaw {
         case "meal_completed", "meal_reviewed":
             if let mealId, mealId > 0 {
-                onDeepLink?(.history(mealId: mealId))
+                openTappedLink(.history(mealId: mealId))
             } else {
-                onDeepLink?(.meal(mealId: nil))
+                openTappedLink(.meal(mealId: nil))
             }
         case "household_joined":
-            onDeepLink?(.household)
+            openTappedLink(.household)
         default:
-            onDeepLink?(.meal(mealId: mealId))
+            openTappedLink(.meal(mealId: mealId))
+        }
+    }
+
+    private func openTappedLink(_ link: AppDeepLink) {
+        if let onDeepLink {
+            onDeepLink(link)
+        } else {
+            pendingTappedLink = link
         }
     }
 
@@ -553,22 +638,46 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
                 try? await Task.sleep(for: .seconds(8))
                 guard let self, self.activeUserId == userId else { break }
                 guard UIApplication.shared.applicationState == .active else { continue }
+                self.queueDeviceRegistration()
                 await self.syncServerNotifications(allowLocalBanner: true)
             }
         }
     }
 
-    private func uploadAPNsToken(_ token: String) async {
+    private func queueDeviceRegistration() {
+        guard registrationTask == nil, activeUserId != nil, apnsToken != nil, canPresentNotifications else { return }
         #if DEBUG
         let env = "sandbox"
         #else
         let env = "production"
         #endif
         let version = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "1.0"
-        try? await NotificationService.shared.registerDevice(token: token, environment: env, appVersion: version)
+        registrationTask = Task {
+            defer { registrationTask = nil }
+            while let userId = activeUserId, let token = apnsToken, canPresentNotifications {
+                let device = DeviceRegistration(userId: userId, token: token, mutedKinds: prefs.mutedKinds)
+                guard device != registeredDevice else { return }
+                do {
+                    try await NotificationService.shared.registerDevice(
+                        token: token, environment: env, appVersion: version, mutedKinds: device.mutedKinds
+                    )
+                } catch {
+                    return
+                }
+                registeredDevice = device
+                isAPNsRegistered = true
+            }
+        }
     }
 
-    private func scheduleLocalBanner(for event: AppNotificationEvent) async {
+    private func deliveredBannerIds() async -> Set<UInt> {
+        let notifications = await UNUserNotificationCenter.current().deliveredNotifications()
+        return presentedBannerIds.union(notifications.compactMap {
+            ($0.request.content.userInfo["event_id"] as? NSNumber)?.uintValue
+        })
+    }
+
+    private func scheduleLocalBanner(for event: AppNotificationEvent) async throws {
         let content = UNMutableNotificationContent()
         content.title = event.title
         content.body = event.body
@@ -587,11 +696,11 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
 
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.25, repeats: false)
         let req = UNNotificationRequest(
-            identifier: "loverorder.event.\(event.id).\(UUID().uuidString.prefix(6))",
+            identifier: "loverorder.event.\(event.id)",
             content: content,
             trigger: trigger
         )
-        try? await UNUserNotificationCenter.current().add(req)
+        try await UNUserNotificationCenter.current().add(req)
     }
 
     private func scheduleDailyReminder(identifier: String, hour: Int, minute: Int, title: String, body: String) {

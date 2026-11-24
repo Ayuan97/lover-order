@@ -25,6 +25,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.loverorder.app
         INFOPLIST_FILE: LoverOrder/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: LoverOrder/Resources/LoverOrder.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_PREVIEWS: "YES"
         SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: "NO"
@@ -34,6 +35,10 @@ targets:
       properties:
         CFBundleDevelopmentRegion: zh_CN
         CFBundleDisplayName: 我们这顿
+        CFBundleURLTypes:
+          - CFBundleTypeRole: Editor
+            CFBundleURLName: com.loverorder.app
+            CFBundleURLSchemes: [lo]
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         LSRequiresIPhoneOS: true

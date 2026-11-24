@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -32,17 +33,19 @@ func NewNotificationService() *NotificationService {
 
 // DeviceRegisterInput 设备推送令牌注册入参
 type DeviceRegisterInput struct {
-	Token       string `json:"token" binding:"required"`
-	Platform    string `json:"platform"`
-	Environment string `json:"environment"`
-	AppVersion  string `json:"app_version"`
+	Token       string   `json:"token" binding:"required"`
+	Platform    string   `json:"platform"`
+	Environment string   `json:"environment"`
+	AppVersion  string   `json:"app_version"`
+	MutedKinds  []string `json:"muted_kinds" binding:"max=7,unique,dive,oneof=meal_dish_added meal_confirmed meal_completed meal_reviewed dining_joined dining_dish_added household_joined"`
 }
 
 // NotificationListResult 通知列表响应
 type NotificationListResult struct {
-	Items       []model.NotificationEvent `json:"items"`
-	UnreadCount int64                     `json:"unread_count"`
-	LatestID    uint                      `json:"latest_id"`
+	Items          []model.NotificationEvent `json:"items"`
+	UnreadCount    int64                     `json:"unread_count"`
+	LatestID       uint                      `json:"latest_id"`
+	APNsConfigured bool                      `json:"apns_configured"`
 }
 
 // RegisterDevice 注册或刷新设备 APNs Token
@@ -60,15 +63,17 @@ func (s *NotificationService) RegisterDevice(userID uint, in DeviceRegisterInput
 		env = "sandbox"
 	}
 
+	mutedKinds := strings.Join(in.MutedKinds, ",")
 	var existing model.DeviceToken
 	err := model.DB.Where("token = ?", tok).First(&existing).Error
 	if err == nil {
 		return model.DB.Model(&existing).Updates(map[string]any{
-			"user_id":     userID,
-			"platform":    platform,
-			"environment": env,
-			"app_version": strings.TrimSpace(in.AppVersion),
-			"is_active":   true,
+			"user_id":      userID,
+			"platform":     platform,
+			"environment":  env,
+			"app_version":  strings.TrimSpace(in.AppVersion),
+			"muted_kinds":  mutedKinds,
+			"is_active":    true,
 			"last_seen_at": time.Now(),
 		}).Error
 	}
@@ -82,6 +87,7 @@ func (s *NotificationService) RegisterDevice(userID uint, in DeviceRegisterInput
 		Platform:    platform,
 		Environment: env,
 		AppVersion:  strings.TrimSpace(in.AppVersion),
+		MutedKinds:  mutedKinds,
 		IsActive:    true,
 		LastSeenAt:  time.Now(),
 	}
@@ -99,17 +105,19 @@ func (s *NotificationService) UnregisterDevice(userID uint, token string) error 
 }
 
 // ListEvents 获取当前用户站内通知与未读统计
-func (s *NotificationService) ListEvents(userID uint, afterID uint, limit int) (*NotificationListResult, error) {
+func (s *NotificationService) ListEvents(userID uint, afterID *uint, limit int) (*NotificationListResult, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 30
 	}
 
-	var items []model.NotificationEvent
+	items := []model.NotificationEvent{}
 	q := model.DB.Where("user_id = ?", userID).Preload("Actor")
-	if afterID > 0 {
-		q = q.Where("id > ?", afterID)
+	order := "id DESC"
+	if afterID != nil {
+		q = q.Where("id > ?", *afterID)
+		order = "id ASC"
 	}
-	if err := q.Order("id DESC").Limit(limit).Find(&items).Error; err != nil {
+	if err := q.Order(order).Limit(limit).Find(&items).Error; err != nil {
 		return nil, err
 	}
 
@@ -121,15 +129,15 @@ func (s *NotificationService) ListEvents(userID uint, afterID uint, limit int) (
 	}
 
 	var latestID uint
-	_ = model.DB.Model(&model.NotificationEvent{}).
-		Select("COALESCE(MAX(id), 0)").
-		Where("user_id = ?", userID).
-		Scan(&latestID).Error
+	for _, item := range items {
+		latestID = max(latestID, item.ID)
+	}
 
 	return &NotificationListResult{
-		Items:       items,
-		UnreadCount: unreadCount,
-		LatestID:    latestID,
+		Items:          items,
+		UnreadCount:    unreadCount,
+		LatestID:       latestID,
+		APNsConfigured: apnsConfigured(config.AppConfig.APNs),
 	}, nil
 }
 
@@ -200,7 +208,6 @@ func (s *NotificationService) SendTest(userID uint) (*model.NotificationEvent, e
 	}
 	_ = model.DB.Preload("Actor").First(ev, ev.ID).Error
 
-	go pushEventToUser(ev)
 	return ev, nil
 }
 
@@ -444,6 +451,10 @@ var (
 	}
 )
 
+func apnsConfigured(cfg config.APNsConfig) bool {
+	return cfg.Enabled && cfg.TeamID != "" && cfg.KeyID != "" && cfg.PrivateKeyPath != ""
+}
+
 func pushEventToUser(ev *model.NotificationEvent) {
 	if ev == nil {
 		return
@@ -453,12 +464,15 @@ func pushEventToUser(ev *model.NotificationEvent) {
 		log.Printf("[APNs] 查询设备令牌失败 uid=%d err=%v", ev.UserID, err)
 		return
 	}
+	tokens = slices.DeleteFunc(tokens, func(device model.DeviceToken) bool {
+		return slices.Contains(strings.Split(device.MutedKinds, ","), ev.Kind)
+	})
 	if len(tokens) == 0 {
 		return
 	}
 
 	cfg := config.AppConfig.APNs
-	if !cfg.Enabled || cfg.TeamID == "" || cfg.KeyID == "" || cfg.PrivateKeyPath == "" {
+	if !apnsConfigured(cfg) {
 		log.Printf("[APNs-dryrun] uid=%d devices=%d kind=%s title=%q deep_link=%s",
 			ev.UserID, len(tokens), ev.Kind, ev.Title, ev.DeepLink)
 		return

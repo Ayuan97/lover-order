@@ -13,9 +13,13 @@ struct RecipeDetailView: View {
     @State private var reviewMeals: [MealSession] = []
     @State private var isLoading = false
     @State private var errorMessage: String?
-    @State private var showEdit: Bool = false
+    @State private var editingRecipe: Recipe?
     @State private var confirmDelete: Bool = false
     @State private var tabBarToken = UUID()
+    @State private var currentPhotoIndex: Int = 0
+    @State private var previewGallery: PhotoGalleryPresentation?
+    @State private var recipeLoadID = 0
+    @State private var mealLoadID = 0
 
     var body: some View {
         ScrollView {
@@ -52,7 +56,9 @@ struct RecipeDetailView: View {
             Color.appBackground.ignoresSafeArea()
         }
         .safeAreaInset(edge: .bottom) {
-            bottomBar
+            if recipe != nil, meal != nil {
+                bottomBar
+            }
         }
         .onAppear {
             appState.setTabBarHidden(true, token: tabBarToken)
@@ -61,7 +67,15 @@ struct RecipeDetailView: View {
             appState.setTabBarHidden(false, token: tabBarToken)
         }
         .task {
-            await load()
+            async let recipeLoad: Void = loadRecipe()
+            await loadMeal()
+            await recipeLoad
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
+            Task { await loadRecipe() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
+            Task { await loadMeal() }
         }
         .navigationBarTitleDisplayMode(.inline)
         .navigationTitle("")
@@ -76,7 +90,7 @@ struct RecipeDetailView: View {
                     }
                     Menu {
                         Button {
-                            showEdit = true
+                            editingRecipe = recipe
                         } label: {
                             Label("编辑菜谱", systemImage: "square.and.pencil")
                         }
@@ -90,14 +104,20 @@ struct RecipeDetailView: View {
                             .foregroundStyle(Color.inkSecondary)
                     }
                 }
+                .disabled(recipe == nil)
             }
         }
-        .sheet(isPresented: $showEdit) {
-            if let recipe {
-                RecipeEditView(mode: .edit(recipe)) { updated in
-                    self.recipe = updated
+        .sheet(item: $editingRecipe) { openedRecipe in
+            RecipeEditView(mode: .edit(openedRecipe)) { updated in
+                self.recipe = updated
+            }
+            .environmentObject(appState)
+        }
+        .fullScreenCover(item: $previewGallery) { presentation in
+            PhotoGalleryViewer(slides: presentation.slides, initialIndex: presentation.initialIndex) { newIndex in
+                if newIndex >= 0 && newIndex < galleryImages.count {
+                    currentPhotoIndex = newIndex
                 }
-                .environmentObject(appState)
             }
         }
         .confirmationDialog("删除这道菜谱？", isPresented: $confirmDelete) {
@@ -113,12 +133,19 @@ struct RecipeDetailView: View {
 
     private var heroGallery: some View {
         let images = galleryImages
-        return TabView {
-            ForEach(Array(images.enumerated()), id: \.offset) { _, image in
+        return TabView(selection: $currentPhotoIndex) {
+            ForEach(Array(images.enumerated()), id: \.offset) { idx, image in
                 AsyncImageView(url: image, name: recipe?.name ?? "菜品")
                     .frame(maxWidth: .infinity)
                     .frame(height: 340)
                     .clipped()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        openHeroPhoto(at: idx)
+                    }
+                    .accessibilityAddTraits(image != nil ? .isButton : [])
+                    .accessibilityLabel(image != nil ? "查看大图" : (recipe?.name ?? "菜品"))
+                    .tag(idx)
             }
         }
         .frame(height: 340)
@@ -137,16 +164,65 @@ struct RecipeDetailView: View {
                 .frame(height: 80)
                 .allowsHitTesting(false)
         }
+        .overlay(alignment: .bottomTrailing) {
+            if images.count > 1 {
+                Text("\(min(currentPhotoIndex + 1, images.count)) / \(images.count)")
+                    .font(.system(size: 11.5, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4.5)
+                    .background(Color.actionInk.opacity(0.68), in: Capsule())
+                    .overlay {
+                        Capsule().strokeBorder(Color.white.opacity(0.22), lineWidth: 0.6)
+                    }
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 34)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 
     private var galleryImages: [String?] {
         guard let recipe else { return [nil] }
-        var result: [String?] = []
-        if recipe.coverImage != nil { result.append(recipe.coverImage) }
-        for image in recipe.images ?? [] where !image.isEmpty {
-            if image != recipe.coverImage { result.append(image) }
+        let choices = recipe.photoChoices
+        if choices.isEmpty {
+            return [nil]
         }
-        return result.isEmpty ? [nil] : result
+        return choices.map(\.image)
+    }
+
+    private func openHeroPhoto(at index: Int) {
+        let choices = recipe?.photoChoices ?? []
+        guard !choices.isEmpty else { return }
+        let slides = choices.enumerated().map { offset, choice in
+            PhotoGallerySlide(
+                id: "\(offset)-\(choice.image)",
+                url: choice.image,
+                caption: formattedHeroCaption(for: choice, total: choices.count)
+            )
+        }
+        Haptics.light()
+        previewGallery = PhotoGalleryPresentation(slides: slides, initialIndex: index)
+    }
+
+    private func formattedHeroCaption(for choice: RecipePhotoChoice, total: Int) -> String? {
+        if total <= 1 {
+            return recipe?.name
+        }
+        if choice.isDefaultCover {
+            return "默认封面"
+        }
+        guard let raw = choice.createdAt?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+        let dateOnly = raw.split(separator: "T").first.map(String.init) ?? raw
+        let parts = dateOnly.split(separator: "-")
+        if parts.count == 3 {
+            return "\(parts[1]).\(parts[2])"
+        }
+        return raw
     }
 
     private func titleSection(_ r: Recipe) -> some View {
@@ -427,18 +503,34 @@ struct RecipeDetailView: View {
         return (meal.dishes ?? []).contains { $0.recipeId == recipe.id }
     }
 
-    private func load() async {
-        isLoading = true
-        defer { isLoading = false }
+    private func loadRecipe() async {
+        recipeLoadID += 1
+        let loadID = recipeLoadID
         do {
-            async let detail = RecipeService.shared.detail(id: recipeId)
-            async let current = MealService.shared.current(scene: .household, mood: appState.currentMood)
-            let (r, m) = try await (detail, current)
+            let r = try await RecipeService.shared.detail(id: recipeId)
+            guard loadID == recipeLoadID else { return }
             self.recipe = r
-            self.meal = m
             self.isFavored = r.isFavored ?? false
-            await loadReviews()
         } catch {
+            guard loadID == recipeLoadID else { return }
+            if let apiError = error as? APIError, case .server(404, _) = apiError {
+                recipe = nil
+            }
+            errorMessage = error.localizedDescription
+            return
+        }
+        await loadReviews()
+    }
+
+    private func loadMeal() async {
+        mealLoadID += 1
+        let loadID = mealLoadID
+        do {
+            let current = try await MealService.shared.current(scene: .household, mood: appState.currentMood)
+            guard loadID == mealLoadID else { return }
+            meal = current
+        } catch {
+            guard loadID == mealLoadID else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -465,10 +557,13 @@ struct RecipeDetailView: View {
         isLoading = true
         defer { isLoading = false }
         do {
-            _ = try await MealService.shared.addDish(mealId: meal.id, dish: DishInput(recipeId: recipe.id))
-            self.meal = try await MealService.shared.detail(id: meal.id)
+            let dish = try await MealService.shared.addDish(mealId: meal.id, dish: DishInput(recipeId: recipe.id))
+            if var current = self.meal, current.id == meal.id,
+               !(current.dishes ?? []).contains(where: { $0.id == dish.id }) {
+                current.dishes = (current.dishes ?? []) + [dish]
+                self.meal = current
+            }
             Haptics.light()
-            AppNotifications.mealChanged()
         } catch {
             errorMessage = error.localizedDescription
         }

@@ -5,6 +5,7 @@ import PhotosUI
 // "我的"页：资料、常用工具、家庭设置和退出。
 struct ProfileView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     private let profileHeroHeight: CGFloat = 330
 
     @State private var inviteCode: String?
@@ -22,6 +23,7 @@ struct ProfileView: View {
     @State private var profileBackgroundData: Data?
     @State private var showCoverPhotosPicker: Bool = false
     @State private var showLaunchIntroSettings: Bool = false
+    @State private var launchPrefsTick: Int = 0
     @State private var showNotificationCenter: Bool = false
     @State private var showPasswordSheet: Bool = false
     @StateObject private var notificationManager = NotificationManager.shared
@@ -62,6 +64,11 @@ struct ProfileView: View {
                 .ignoresSafeArea(edges: .top)
                 .background(Color.appBackground.ignoresSafeArea())
                 .scrollIndicators(.hidden)
+                .refreshable {
+                    _ = await appState.refreshProfile()
+                    await appState.refreshHousehold()
+                    await loadStats()
+                }
 
                 if !appState.isProfileHeroVisible {
                     Rectangle()
@@ -84,6 +91,38 @@ struct ProfileView: View {
                 profileBackgroundData = ProfileHeaderImageStore.load()
                 await appState.refreshHousehold()
                 await loadStats()
+            }
+            .onChange(of: appState.activeTab) { _, tab in
+                guard tab == 3 else { return }
+                Task {
+                    _ = await appState.refreshProfile()
+                    await appState.refreshHousehold()
+                    await loadStats()
+                }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active, appState.activeTab == 3 else { return }
+                Task {
+                    _ = await appState.refreshProfile()
+                    await appState.refreshHousehold()
+                    await loadStats()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .householdChanged)) { _ in
+                Task {
+                    _ = await appState.refreshProfile()
+                    await appState.refreshHousehold()
+                    await loadStats()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .historyChanged)) { _ in
+                Task { await loadStats() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
+                Task { await loadStats() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .launchCanvasChanged)) { _ in
+                launchPrefsTick += 1
             }
             .navigationBarHidden(true)
             .sheet(isPresented: $showCategoryManagement) {
@@ -111,7 +150,9 @@ struct ProfileView: View {
                     .environmentObject(appState)
                     .preferredColorScheme(.light)
             }
-            .fullScreenCover(isPresented: $showLaunchIntroSettings) {
+            .fullScreenCover(isPresented: $showLaunchIntroSettings, onDismiss: {
+                launchPrefsTick += 1
+            }) {
                 LaunchCanvasStudioView()
                     .environmentObject(appState)
             }
@@ -188,7 +229,7 @@ struct ProfileView: View {
             Button {
                 showLaunchIntroSettings = true
             } label: {
-                navRow(title: "定制开屏动画", subtitle: "自由画布排版、贴纸、涂鸦、滤镜与动效", icon: "sparkles.rectangle.stack")
+                navRow(title: "定制开屏动画", subtitle: launchIntroToolSubtitle, icon: "sparkles.rectangle.stack")
             }
             .buttonStyle(.plain)
             Divider()
@@ -385,35 +426,54 @@ struct ProfileView: View {
 
                 Spacer(minLength: 0)
 
-                HStack(spacing: 14) {
-                    AvatarView(user: appState.currentUser, size: 70, ring: true)
-                        .shadow(color: Color.black.opacity(0.28), radius: 10, y: 4)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(appState.currentUser?.displayName ?? "我")
-                            .font(.system(size: 26, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
-                            .shadow(color: Color.black.opacity(0.28), radius: 6, y: 2)
-                        HStack(spacing: 8) {
-                            Text(householdSubtitle)
-                                .font(AppFont.body(13.5))
-                                .foregroundStyle(.white.opacity(0.90))
-                                .lineLimit(1)
-                            if memberCount > 0 {
-                                Text("\(memberCount) 位家人")
-                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(Color.white.opacity(0.20), in: Capsule())
-                                    .overlay {
-                                        Capsule()
-                                            .strokeBorder(Color.white.opacity(0.34), lineWidth: 0.8)
-                                    }
+                Button {
+                    Haptics.light()
+                    showEditProfile = true
+                } label: {
+                    HStack(spacing: 14) {
+                        ZStack(alignment: .bottomTrailing) {
+                            AvatarView(user: appState.currentUser, size: 70, ring: true)
+                                .shadow(color: Color.black.opacity(0.28), radius: 10, y: 4)
+                            Image(systemName: "camera.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 22, height: 22)
+                                .background(Color.black.opacity(0.65), in: Circle())
+                                .overlay {
+                                    Circle().strokeBorder(Color.white.opacity(0.85), lineWidth: 1.2)
+                                }
+                                .offset(x: 2, y: 2)
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(appState.currentUser?.displayName ?? "我")
+                                .font(.system(size: 26, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .shadow(color: Color.black.opacity(0.28), radius: 6, y: 2)
+                            HStack(spacing: 8) {
+                                Text(householdSubtitle)
+                                    .font(AppFont.body(13.5))
+                                    .foregroundStyle(.white.opacity(0.90))
+                                    .lineLimit(1)
+                                if memberCount > 0 {
+                                    Text("\(memberCount) 位家人")
+                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Color.white.opacity(0.20), in: Capsule())
+                                        .overlay {
+                                            Capsule()
+                                                .strokeBorder(Color.white.opacity(0.34), lineWidth: 0.8)
+                                        }
+                                }
                             }
                         }
+                        Spacer(minLength: 0)
                     }
-                    Spacer(minLength: 0)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("点击更换头像或编辑昵称")
                 .padding(.horizontal, 22)
                 .padding(.bottom, 44)
             }
@@ -428,6 +488,24 @@ struct ProfileView: View {
         }
     }
 
+    private var launchIntroToolSubtitle: String {
+        _ = launchPrefsTick
+        let cfg = LaunchCurtainStore.load()
+        guard cfg.enabled else {
+            return "已关闭开屏动画 · 可随时开启或切换样式"
+        }
+        switch cfg.source {
+        case .householdCreator:
+            let meta = LaunchCanvasStore.loadCreatorMeta()
+            if meta?.hasCustom == true {
+                return "当前使用「\(meta?.creatorNickname ?? "家庭创建者")」的共享开屏"
+            }
+            return "使用家庭创建者的共享开屏 · 点击编辑或切换"
+        case .personal:
+            return "当前使用自己 DIY 的开屏 · 贴纸与动效已保存"
+        }
+    }
+
     private var notificationToolSubtitle: String {
         let p = notificationManager.prefs
         let reminderCount = (p.lunchReminderEnabled ? 1 : 0) + (p.dinnerReminderEnabled ? 1 : 0)
@@ -435,7 +513,7 @@ struct ProfileView: View {
             return "\(appState.unreadNotificationCount) 条未读动态 · 定点与推送提醒"
         }
         if reminderCount > 0 {
-            return "已开启 \(reminderCount) 项饭点提醒 · 推送通知已就绪"
+            return "已开启 \(reminderCount) 项饭点提醒"
         }
         return "Ta 定菜、新评价提醒与每日饭点铃"
     }
@@ -1194,10 +1272,10 @@ private struct NotificationCenterSheet: View {
     private var permissionSubtitle: String {
         switch manager.authorizationStatus {
         case .authorized, .provisional, .ephemeral:
-            if let tok = manager.apnsToken, !tok.isEmpty {
-                return "已开启系统推送与本地通知（APNs 设备已注册）"
+            if manager.isAPNsRegistered {
+                return "系统通知权限已开启，本机推送令牌已登记"
             }
-            return "已开启系统横幅提醒；后台由本地与动态同步通道送达"
+            return "系统通知权限已开启，饭点提醒由本机定时发送"
         case .denied:
             return "当前已关闭系统通知，开启后能在锁屏/桌面收到提醒"
         default:

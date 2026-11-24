@@ -67,11 +67,16 @@ struct MealSession: Codable, Identifiable, Hashable {
 
 extension MealSession {
     // 轮询同步用的内容指纹 变了才刷 UI 避免每 4 秒无谓重绘
-    // 含房间码/过期 以便开房关房后首页「聚餐中」入口能跟上
+    // 含房间码/过期/参与者/菜品详情/心情/备注 以便开房关房与同桌资料改动能即时同步
     var syncSignature: String {
         let room = "\(roomCode ?? "")|\(Int(roomExpiresAt?.timeIntervalSince1970 ?? 0))"
-        let dishIds = (dishes ?? []).map { String($0.id) }.joined(separator: ",")
-        return "\(id)|\(status.rawValue)|\(room)|\(dishIds)"
+        let participantSig = (participants ?? []).map {
+            "\($0.userId):\($0.user?.nickname ?? ""):\($0.user?.avatar ?? "")"
+        }.joined(separator: ",")
+        let dishSig = (dishes ?? []).map {
+            "\($0.id):\($0.recipeName):\($0.recipeImage ?? ""):\($0.recipeCutoutImage ?? ""):\($0.note ?? ""):\($0.adder?.nickname ?? ""):\($0.adder?.avatar ?? "")"
+        }.joined(separator: ",")
+        return "\(id)|\(status.rawValue)|\(mood.rawValue)|\(title ?? "")|\(note ?? "")|\(room)|\(participantSig)|\(dishSig)"
     }
 }
 
@@ -174,10 +179,12 @@ struct MealListResult: Codable {
 struct ShoppingList: Codable {
     let mealId: UInt
     let items: [ShoppingItem]
+    let checkedItems: [String]?
 
     enum CodingKeys: String, CodingKey {
         case mealId = "meal_id"
         case items
+        case checkedItems = "checked_items"
     }
 }
 

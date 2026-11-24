@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -41,20 +42,26 @@ type CanvasSnapshotResponse struct {
 
 // CanvasOpPayload WebSocket 增量操作载荷
 type CanvasOpPayload struct {
-	Sticker                  json.RawMessage   `json:"sticker,omitempty"`
-	Note                     json.RawMessage   `json:"note,omitempty"`
-	Stroke                   json.RawMessage   `json:"stroke,omitempty"`
-	ID                       string            `json:"id,omitempty"`
-	MealDishID               *uint             `json:"meal_dish_id,omitempty"`
-	Background               *string           `json:"background,omitempty"`
-	Blur                     *float64          `json:"blur,omitempty"`
-	MoodFilter               *string           `json:"mood_filter,omitempty"`
-	CustomBackgroundURL      *string           `json:"custom_background_url,omitempty"`
-	ClearCustomBackgroundURL bool              `json:"clear_custom_background_url,omitempty"`
-	Stickers                 []json.RawMessage `json:"stickers,omitempty"`
-	Notes                    []json.RawMessage `json:"notes,omitempty"`
-	Document                 *CanvasDocPayload `json:"document,omitempty"`
-	OnlyIfEmpty              bool              `json:"only_if_empty,omitempty"`
+	Sticker                  json.RawMessage      `json:"sticker,omitempty"`
+	Note                     json.RawMessage      `json:"note,omitempty"`
+	Stroke                   json.RawMessage      `json:"stroke,omitempty"`
+	ID                       string               `json:"id,omitempty"`
+	MealDishID               *uint                `json:"meal_dish_id,omitempty"`
+	Background               *string              `json:"background,omitempty"`
+	Blur                     *float64             `json:"blur,omitempty"`
+	MoodFilter               *string              `json:"mood_filter,omitempty"`
+	CustomBackgroundURL      *string              `json:"custom_background_url,omitempty"`
+	ClearCustomBackgroundURL bool                 `json:"clear_custom_background_url,omitempty"`
+	Stickers                 []json.RawMessage    `json:"stickers,omitempty"`
+	Notes                    []json.RawMessage    `json:"notes,omitempty"`
+	StickerPatches           []canvasStickerPatch `json:"sticker_patches,omitempty"`
+	NotePatches              []canvasNotePatch    `json:"note_patches,omitempty"`
+	StickerIDs               []string             `json:"sticker_ids,omitempty"`
+	NoteIDs                  []string             `json:"note_ids,omitempty"`
+	StrokeIDs                []string             `json:"stroke_ids,omitempty"`
+	Document                 *CanvasDocPayload    `json:"document,omitempty"`
+	OnlyIfEmpty              bool                 `json:"only_if_empty,omitempty"`
+	SeedOpIDs                []string             `json:"seed_op_ids,omitempty"`
 }
 
 type canvasStickerMeta struct {
@@ -64,6 +71,35 @@ type canvasStickerMeta struct {
 
 type canvasIDMeta struct {
 	ID string `json:"id"`
+}
+
+type canvasPatchPosition struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+type canvasElementPatch struct {
+	ID              string               `json:"id"`
+	Position        *canvasPatchPosition `json:"position,omitempty"`
+	Scale           *float64             `json:"scale,omitempty"`
+	RotationDegrees *float64             `json:"rotationDegrees,omitempty"`
+	Layer           *int                 `json:"layer,omitempty"`
+}
+
+type canvasStickerPatch struct {
+	canvasElementPatch
+	MealDishID *uint   `json:"mealDishID,omitempty"`
+	Effect     *string `json:"effect,omitempty"`
+	Style      *string `json:"style,omitempty"`
+}
+
+type canvasNotePatch struct {
+	canvasElementPatch
+	Text       *string `json:"text,omitempty"`
+	Font       *string `json:"font,omitempty"`
+	Color      *string `json:"color,omitempty"`
+	TextStyle  *string `json:"textStyle,omitempty"`
+	TextEffect *string `json:"textEffect,omitempty"`
 }
 
 // CheckAccess 检查用户对指定餐次画布的读写权限与身份角色（host / guest）
@@ -153,6 +189,12 @@ func defaultCanvasDoc() *CanvasDocPayload {
 	}
 }
 
+func cloneRawSlice(in []json.RawMessage) []json.RawMessage {
+	out := make([]json.RawMessage, len(in))
+	copy(out, in)
+	return out
+}
+
 func normalizeCanvasDoc(doc *CanvasDocPayload) *CanvasDocPayload {
 	if doc == nil {
 		return defaultCanvasDoc()
@@ -167,21 +209,10 @@ func normalizeCanvasDoc(doc *CanvasDocPayload) *CanvasDocPayload {
 	if strings.TrimSpace(cp.MoodFilter) == "" {
 		cp.MoodFilter = "none"
 	}
-	if cp.Stickers == nil {
-		cp.Stickers = []json.RawMessage{}
-	} else {
-		cp.Stickers = append([]json.RawMessage(nil), cp.Stickers...)
-	}
-	if cp.Notes == nil {
-		cp.Notes = []json.RawMessage{}
-	} else {
-		cp.Notes = append([]json.RawMessage(nil), cp.Notes...)
-	}
-	if cp.Strokes == nil {
-		cp.Strokes = []json.RawMessage{}
-	} else {
-		cp.Strokes = append([]json.RawMessage(nil), cp.Strokes...)
-	}
+	// Go 中 append([]T(nil), empty...) 会返回 nil，被编码成 JSON null；用 make 保证空数组始终输出 []
+	cp.Stickers = cloneRawSlice(cp.Stickers)
+	cp.Notes = cloneRawSlice(cp.Notes)
+	cp.Strokes = cloneRawSlice(cp.Strokes)
 	return &cp
 }
 
@@ -193,7 +224,7 @@ func cloneCanvasDoc(doc *CanvasDocPayload) *CanvasDocPayload {
 }
 
 // applyCanvasOp 将单次操作合并到画布副本上；onlyIfEmpty 被跳过时返回 replacedByRemote=true, changed=false
-func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, kind string, payload CanvasOpPayload) (next *CanvasDocPayload, changed bool, replacedByRemote bool, err error) {
+func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, mealID uint, kind string, payload CanvasOpPayload) (next *CanvasDocPayload, changed bool, replacedByRemote bool, err error) {
 	if doc == nil {
 		next = defaultCanvasDoc()
 	} else {
@@ -209,15 +240,18 @@ func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, kind string, payload
 		if err := json.Unmarshal(payload.Sticker, &meta); err != nil || strings.TrimSpace(meta.ID) == "" {
 			return nil, false, false, errors.New("sticker 格式不合法")
 		}
-		idx := -1
-		for i, raw := range next.Stickers {
-			var cur canvasStickerMeta
-			if json.Unmarshal(raw, &cur) != nil {
-				continue
+		idx := findStickerIndex(next.Stickers, meta.ID, meta.MealDishID)
+		if meta.MealDishID != nil {
+			if idx >= 0 {
+				return next, false, false, nil
 			}
-			if strings.EqualFold(cur.ID, meta.ID) || (meta.MealDishID != nil && cur.MealDishID != nil && *meta.MealDishID == *cur.MealDishID) {
-				idx = i
-				break
+			var count int64
+			if err := model.DB.Model(&model.MealDish{}).
+				Where("id = ? AND meal_session_id = ?", *meta.MealDishID, mealID).Count(&count).Error; err != nil {
+				return nil, false, false, err
+			}
+			if count == 0 {
+				return next, false, false, nil
 			}
 		}
 		if idx >= 0 {
@@ -310,21 +344,6 @@ func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, kind string, payload
 		next.Strokes = filtered
 		return next, true, false, nil
 
-	case "clear_strokes":
-		if len(next.Strokes) == 0 {
-			return next, false, false, nil
-		}
-		next.Strokes = []json.RawMessage{}
-		return next, true, false, nil
-
-	case "clear_additions":
-		if len(next.Notes) == 0 && len(next.Strokes) == 0 {
-			return next, false, false, nil
-		}
-		next.Notes = []json.RawMessage{}
-		next.Strokes = []json.RawMessage{}
-		return next, true, false, nil
-
 	case "update_background":
 		if payload.Background != nil && strings.TrimSpace(*payload.Background) != "" {
 			next.Background = strings.TrimSpace(*payload.Background)
@@ -349,12 +368,96 @@ func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, kind string, payload
 
 	case "batch_stickers_notes":
 		if payload.Stickers != nil {
-			next.Stickers = append([]json.RawMessage(nil), payload.Stickers...)
+			next.Stickers = cloneRawSlice(payload.Stickers)
 		}
 		if payload.Notes != nil {
-			next.Notes = append([]json.RawMessage(nil), payload.Notes...)
+			next.Notes = cloneRawSlice(payload.Notes)
 		}
 		return next, true, false, nil
+
+	case "batch_upsert":
+		didChange := false
+		for _, raw := range payload.Stickers {
+			var meta canvasStickerMeta
+			if json.Unmarshal(raw, &meta) != nil || strings.TrimSpace(meta.ID) == "" {
+				continue
+			}
+			idx := -1
+			for i, existingRaw := range next.Stickers {
+				var cur canvasStickerMeta
+				if json.Unmarshal(existingRaw, &cur) != nil {
+					continue
+				}
+				if strings.EqualFold(cur.ID, meta.ID) || (meta.MealDishID != nil && cur.MealDishID != nil && *meta.MealDishID == *cur.MealDishID) {
+					idx = i
+					break
+				}
+			}
+			if idx >= 0 {
+				next.Stickers[idx] = raw
+			} else {
+				next.Stickers = append(next.Stickers, raw)
+			}
+			didChange = true
+		}
+		for _, raw := range payload.Notes {
+			var meta canvasIDMeta
+			if json.Unmarshal(raw, &meta) != nil || strings.TrimSpace(meta.ID) == "" {
+				continue
+			}
+			if idx := findIDIndex(next.Notes, meta.ID); idx >= 0 {
+				next.Notes[idx] = raw
+			} else {
+				next.Notes = append(next.Notes, raw)
+			}
+			didChange = true
+		}
+		return next, didChange, false, nil
+
+	case "patch_elements":
+		didChange := false
+		for _, patch := range payload.StickerPatches {
+			index := findStickerIndex(next.Stickers, patch.ID, patch.MealDishID)
+			applied, err := patchCanvasElement(next.Stickers, index, patch)
+			if err != nil {
+				return nil, false, false, err
+			}
+			didChange = didChange || applied
+		}
+		for _, patch := range payload.NotePatches {
+			index := findIDIndex(next.Notes, patch.ID)
+			applied, err := patchCanvasElement(next.Notes, index, patch)
+			if err != nil {
+				return nil, false, false, err
+			}
+			didChange = didChange || applied
+		}
+		return next, didChange, false, nil
+
+	case "batch_delete":
+		didChange := false
+		if len(payload.StickerIDs) > 0 {
+			filtered, removed := removeByIDs(next.Stickers, payload.StickerIDs)
+			if removed {
+				next.Stickers = filtered
+				didChange = true
+			}
+		}
+		if len(payload.NoteIDs) > 0 {
+			filtered, removed := removeByIDs(next.Notes, payload.NoteIDs)
+			if removed {
+				next.Notes = filtered
+				didChange = true
+			}
+		}
+		if len(payload.StrokeIDs) > 0 {
+			filtered, removed := removeByIDs(next.Strokes, payload.StrokeIDs)
+			if removed {
+				next.Strokes = filtered
+				didChange = true
+			}
+		}
+		return next, didChange, false, nil
 
 	case "replace_document":
 		if payload.Document == nil {
@@ -370,6 +473,58 @@ func applyCanvasOp(doc *CanvasDocPayload, currentRev int64, kind string, payload
 	}
 }
 
+func patchCanvasElement(items []json.RawMessage, index int, patch any) (bool, error) {
+	if index < 0 {
+		return false, nil
+	}
+	var element map[string]json.RawMessage
+	if err := json.Unmarshal(items[index], &element); err != nil {
+		return false, err
+	}
+
+	// 只合并已解码的更新字段，同时保留原对象的其他字段。
+	rawPatch, err := json.Marshal(patch)
+	if err != nil {
+		return false, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(rawPatch, &fields); err != nil {
+		return false, err
+	}
+	delete(fields, "id")
+	delete(fields, "mealDishID")
+
+	didChange := false
+	for key, value := range fields {
+		if !bytes.Equal(element[key], value) {
+			element[key] = value
+			didChange = true
+		}
+	}
+	if !didChange {
+		return false, nil
+	}
+	updated, err := json.Marshal(element)
+	if err != nil {
+		return false, err
+	}
+	items[index] = updated
+	return true, nil
+}
+
+func findStickerIndex(items []json.RawMessage, id string, dishID *uint) int {
+	if dishID == nil {
+		return findIDIndex(items, id)
+	}
+	for i, raw := range items {
+		var item canvasStickerMeta
+		if json.Unmarshal(raw, &item) == nil && item.MealDishID != nil && *item.MealDishID == *dishID {
+			return i
+		}
+	}
+	return -1
+}
+
 func findIDIndex(items []json.RawMessage, id string) int {
 	for i, raw := range items {
 		var meta canvasIDMeta
@@ -381,13 +536,32 @@ func findIDIndex(items []json.RawMessage, id string) int {
 }
 
 func removeByID(items []json.RawMessage, id string) ([]json.RawMessage, bool) {
+	return removeByIDs(items, []string{id})
+}
+
+func removeByIDs(items []json.RawMessage, ids []string) ([]json.RawMessage, bool) {
+	if len(ids) == 0 {
+		return items, false
+	}
+	targetSet := make(map[string]struct{}, len(ids))
+	for _, rawID := range ids {
+		trimmed := strings.ToLower(strings.TrimSpace(rawID))
+		if trimmed != "" {
+			targetSet[trimmed] = struct{}{}
+		}
+	}
+	if len(targetSet) == 0 {
+		return items, false
+	}
 	filtered := make([]json.RawMessage, 0, len(items))
 	removed := false
 	for _, raw := range items {
 		var meta canvasIDMeta
-		if json.Unmarshal(raw, &meta) == nil && strings.EqualFold(meta.ID, id) {
-			removed = true
-			continue
+		if json.Unmarshal(raw, &meta) == nil {
+			if _, ok := targetSet[strings.ToLower(strings.TrimSpace(meta.ID))]; ok {
+				removed = true
+				continue
+			}
 		}
 		filtered = append(filtered, raw)
 	}

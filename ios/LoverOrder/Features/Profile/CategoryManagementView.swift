@@ -7,6 +7,7 @@ struct CategoryManagementView: View {
     @State private var categories: [RecipeCategory] = []
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
+    @State private var loadID = 0
 
     @State private var newName: String = ""
     @State private var newIcon: String = ""
@@ -45,6 +46,9 @@ struct CategoryManagementView: View {
             }
             .task {
                 await load()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .categoriesChanged)) { _ in
+                Task { await load() }
             }
         }
     }
@@ -169,11 +173,18 @@ struct CategoryManagementView: View {
     }
 
     private func load() async {
+        loadID += 1
+        let requestID = loadID
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            if requestID == loadID { isLoading = false }
+        }
         do {
-            categories = try await CategoryService.shared.list()
+            let latest = try await CategoryService.shared.list()
+            guard requestID == loadID else { return }
+            categories = latest
         } catch {
+            guard requestID == loadID else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -188,7 +199,6 @@ struct CategoryManagementView: View {
             AppNotifications.categoriesChanged()
             newName = ""
             newIcon = ""
-            await load()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -216,7 +226,6 @@ struct CategoryManagementView: View {
             )
             AppNotifications.categoriesChanged()
             cancelEdit()
-            await load()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -226,7 +235,6 @@ struct CategoryManagementView: View {
         do {
             try await CategoryService.shared.delete(id: c.id)
             AppNotifications.categoriesChanged()
-            await load()
         } catch {
             errorMessage = error.localizedDescription
         }

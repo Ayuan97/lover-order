@@ -70,7 +70,16 @@ func (h *DiningHandler) Join(c *gin.Context) {
 // Current 访客当前参与中的聚餐
 func (h *DiningHandler) Current(c *gin.Context) {
 	uid, _ := middleware.CurrentUserID(c)
-	item, err := h.svc.Current(uid)
+	var mealID uint
+	if raw, ok := c.GetQuery("meal_id"); ok {
+		id, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil || id == 0 {
+			Fail(c, CodeBadRequest, "餐次 id 不合法")
+			return
+		}
+		mealID = uint(id)
+	}
+	item, err := h.svc.Current(uid, mealID)
 	if err != nil {
 		Fail(c, CodeBadRequest, err.Error())
 		return

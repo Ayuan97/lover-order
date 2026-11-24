@@ -24,6 +24,7 @@ type DeviceToken struct {
 	Platform    string    `json:"platform" gorm:"size:16;default:'ios';not null"`
 	Environment string    `json:"environment" gorm:"size:16;default:'sandbox';not null"`
 	AppVersion  string    `json:"app_version" gorm:"size:32"`
+	MutedKinds  string    `json:"-" gorm:"size:160;default:'';not null"`
 	IsActive    bool      `json:"is_active" gorm:"default:true;index"`
 	LastSeenAt  time.Time `json:"last_seen_at"`
 	CreatedAt   time.Time `json:"created_at"`

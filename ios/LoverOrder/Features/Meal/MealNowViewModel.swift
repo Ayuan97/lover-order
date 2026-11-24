@@ -43,6 +43,7 @@ final class MealNowViewModel: ObservableObject {
     private let recipeService = RecipeService.shared
     // 串行化 load / 改心情 避免慢请求覆盖新状态
     private var loadSeq: UInt = 0
+    private var mealReadSeq: UInt = 0
 
     var dishes: [MealDish] {
         meal?.dishes ?? []
@@ -67,6 +68,8 @@ final class MealNowViewModel: ObservableObject {
     func load(scene: MealScene, mood: Mood) async {
         loadSeq &+= 1
         let seq = loadSeq
+        mealReadSeq &+= 1
+        let mealSeq = mealReadSeq
         isLoading = true
         errorMessage = nil
         defer {
@@ -79,22 +82,26 @@ final class MealNowViewModel: ObservableObject {
         let freqTask = Task { try await recipeService.list(.init(page: 1, pageSize: 20)) }
 
         let currentRes = await currentTask.result
+        if seq == loadSeq, mealSeq == mealReadSeq {
+            switch currentRes {
+            case .success(let m):
+                let old = meal
+                meal = m
+                loadFailed = false
+                await detectCompletedByOther(old: old, new: m)
+            case .failure:
+                if meal == nil { loadFailed = true }
+            }
+        }
         let suggRes = await suggTask.result
         let freqRes = await freqTask.result
         guard seq == loadSeq else { return }
 
-        switch currentRes {
-        case .success(let m):
-            meal = m
-            loadFailed = false
-        case .failure:
-            if meal == nil { loadFailed = true }
-        }
         if case .success(let s) = suggRes { suggestions = s.items }
         if case .success(let f) = freqRes { frequents = f.items }
 
         restorePendingReview()
-        if case .failure(let err) = currentRes,
+        if mealSeq == mealReadSeq, case .failure(let err) = currentRes,
            meal == nil, suggestions.isEmpty, frequents.isEmpty {
             errorMessage = err.localizedDescription
         }
@@ -104,34 +111,33 @@ final class MealNowViewModel: ObservableObject {
     // 也做完成检测 + 对方加菜/定下的轻感知
     func refreshMeal(scene: MealScene, mood: Mood, selfUserId: UInt? = nil) async {
         syncPendingReview()
-        if let m = try? await mealService.current(scene: scene, mood: mood) {
-            await applyRemoteMeal(old: meal, new: m, selfUserId: selfUserId, broadcast: false)
-        }
+        await syncMeal(scene: scene, mood: mood, selfUserId: selfUserId, broadcast: false)
     }
 
     // 轮询静默同步 让另一台手机的改动几秒内自动出现 内容没变不动 UI
-    func syncMeal(scene: MealScene, mood: Mood, selfUserId: UInt? = nil) async {
-        guard let m = try? await mealService.current(scene: scene, mood: mood) else { return }
-        if m.syncSignature != meal?.syncSignature {
-            await applyRemoteMeal(old: meal, new: m, selfUserId: selfUserId, broadcast: true)
-        }
-    }
+    func syncMeal(scene: MealScene, mood: Mood, selfUserId: UInt? = nil, broadcast: Bool = true) async {
+        mealReadSeq &+= 1
+        let seq = mealReadSeq
+        guard let m = try? await mealService.current(scene: scene, mood: mood), seq == mealReadSeq else { return }
+        let old = meal
+        guard !broadcast || m.syncSignature != old?.syncSignature else { return }
 
-    private func applyRemoteMeal(old: MealSession?, new m: MealSession, selfUserId: UInt?, broadcast: Bool) async {
-        await noticePartnerActivity(old: old, new: m, selfUserId: selfUserId)
-        await detectCompletedByOther(old: old, new: m)
+        noticePartnerActivity(old: old, new: m, selfUserId: selfUserId)
         meal = m
+        loadFailed = false
         if broadcast {
             AppNotifications.mealChanged()
         }
+        await detectCompletedByOther(old: old, new: m)
     }
 
     // 对方在同一顿上的动作：加菜 / 定下 / 重选 — 只 tip，不打断
-    private func noticePartnerActivity(old: MealSession?, new m: MealSession, selfUserId: UInt?) async {
+    private func noticePartnerActivity(old: MealSession?, new m: MealSession, selfUserId: UInt?) {
         guard let old, old.id == m.id else { return }
 
         // 状态变化优先（比加菜更「大事」）
         if old.status == .planning, m.status == .confirmed {
+            guard !isActing else { return }
             tipMessage = "Ta 定下了 就这些"
             Haptics.success()
             return
@@ -257,7 +263,7 @@ final class MealNowViewModel: ObservableObject {
         }
     }
 
-    private func refreshIdeas(scene: MealScene, mood: Mood) async {
+    func refreshIdeas(scene: MealScene, mood: Mood) async {
         do {
             async let suggList = recipeService.list(.init(mood: mood, scene: scene, page: 1, pageSize: 20))
             async let freqList = recipeService.list(.init(page: 1, pageSize: 20))
@@ -318,31 +324,39 @@ final class MealNowViewModel: ObservableObject {
         }
     }
 
-    func confirm() async {
-        guard let meal, !isActing else { return }
+    func confirm() async -> Bool {
+        guard let meal, !isActing else { return false }
         isActing = true
         defer { isActing = false }
         do {
-            self.meal = try await mealService.confirm(id: meal.id)
+            let confirmed = try await mealService.confirm(id: meal.id)
+            mealReadSeq &+= 1
+            self.meal = confirmed
             Haptics.success()
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 
-    func complete() async {
-        guard let meal, !isActing else { return }
+    func complete() async -> Bool {
+        guard let meal, !isActing else { return false }
         if dishCount == 0 {
             errorMessage = "菜都没了 先留一道"
-            return
+            return false
         }
         isActing = true
         defer { isActing = false }
         do {
-            self.meal = try await mealService.complete(id: meal.id)
+            let completed = try await mealService.complete(id: meal.id)
+            mealReadSeq &+= 1
+            self.meal = completed
             Haptics.success()
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 }

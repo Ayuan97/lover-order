@@ -10,7 +10,7 @@ struct MealCanvasView: View {
     let pendingReviewMealId: UInt?
     let onAddDish: () -> Void
     let onReview: (UInt) -> Void
-    let onConfirm: () -> Void
+    let onConfirm: () async -> Bool
     let onShoppingList: () -> Void
     let onDining: () -> Void
     let onRetry: () async -> Void
@@ -24,12 +24,15 @@ struct MealCanvasView: View {
     var onGuestCollapse: (() -> Void)? = nil
     var onGuestLeave: (() -> Void)? = nil
     var onDeleteDish: ((MealDish) async -> Bool)? = nil
-    var onRemoteMealSync: (() -> Void)? = nil
+    var onRemoteMealSync: ((String) -> Void)? = nil
     var onGuestLightSurfaceChange: ((Bool) -> Void)? = nil
+    var isSheetPresented: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var realtime = CanvasRealtimeSession()
+    @StateObject private var fx = CanvasFXController()
+    @ObservedObject private var soundEngine = CanvasSoundEngine.shared
     @State private var background: CanvasBackground = .meadow
     @State private var blur: Double = 0.0
     @State private var moodFilter: CanvasMoodFilter = .none
@@ -53,17 +56,22 @@ struct MealCanvasView: View {
     @State private var drawingEnabled = false
     @State private var restoredMealID: UInt?
     @State private var isRemovingDish = false
+    @State private var isConfirmingCanvasAction = false
     @State private var canvasFrame: CGRect = .zero
     @State private var isExporting = false
     @State private var isEditing = false
     @State private var isCanvasInteracting = false
     @State private var alignmentGuides = CanvasAlignmentGuides()
-    @State private var undoStack: [CanvasHistorySnapshot] = []
-    @State private var redoStack: [CanvasHistorySnapshot] = []
+    @State private var undoStack: [CanvasHistoryAction] = []
+    @State private var redoStack: [CanvasHistoryAction] = []
+    @State private var transformUndoStart: CanvasTransformHistory?
+    @State private var blurUndoStart: CGFloat?
     @State private var transformEditorHasChanges = false
     @State private var activeEditor: CanvasEditorPanel?
     @State private var insertMode: CanvasInsertItem?
     @State private var draftText = ""
+    @State private var draftNoteID: UUID?
+    @State private var originalDraftText = ""
     @State private var draftFont: CanvasTextFont = .rounded
     @State private var draftColor: CanvasTextColor = .white
     @State private var draftScale: CGFloat = 1.0
@@ -78,6 +86,7 @@ struct MealCanvasView: View {
     @State private var deletingStickerFavorites: Set<UInt> = []
     @Namespace private var emojiCategoryHighlight
     @State private var backgroundPhotoItem: PhotosPickerItem?
+    @State private var backgroundPhotoRequest: UUID?
     @State private var stickerPhotoItem: PhotosPickerItem?
     @State private var isCreatingAlbumSticker = false
     @State private var strokeRedoStack: [CanvasStroke] = []
@@ -91,6 +100,22 @@ struct MealCanvasView: View {
     @State private var showLaunchOptionsSheet = false
     @State private var showLaunchLivePreview = false
     @State private var hasLoadedStudio = false
+    @State private var creatorMeta: LaunchCreatorMeta? = LaunchCanvasStore.loadCreatorMeta()
+    @State private var isSavingLaunch = false
+    @State private var blurDirtyForSync = false
+    @State private var recentlyAddedRemoteDishIDs: [UInt: Date] = [:]
+    @State private var queuedDishStickerIDs: Set<UInt> = []
+    @State private var fallbackCanvasFetchTask: Task<Void, Never>?
+    @State private var justInsertedStickerIDs: Set<UUID> = []
+    @State private var justInsertedNoteIDs: Set<UUID> = []
+    @State private var pendingDishRevealIDs: [UUID] = []
+    @State private var waitingRevealStickerIDs: Set<UUID> = []
+    @State private var dishRevealTask: Task<Void, Never>?
+    @State private var dishComboCount = 0
+    @State private var photoPickerDish: MealDish?
+    @State private var coverPrompt: (recipeId: UInt, dishName: String, image: String, cutoutImage: String?)?
+    @State private var coverPromptTask: Task<Void, Never>?
+    @State private var isSettingCover = false
     @FocusState private var textEditorFocused: Bool
 
     private static let todayDateFormatter: DateFormatter = {
@@ -116,6 +141,21 @@ struct MealCanvasView: View {
 
     private var headerMutedInk: Color {
         background.isLightSurface ? CanvasPalette.muted : Color.white.opacity(0.76)
+    }
+
+    private var isHouseholdCreator: Bool {
+        guard let uid = appState.currentUser?.id else { return false }
+        if let createdBy = appState.household?.createdBy {
+            return uid == createdBy
+        }
+        if let meta = creatorMeta {
+            return meta.canEdit || uid == meta.creatorId
+        }
+        return false
+    }
+
+    private var isReadOnlyCreatorPreview: Bool {
+        isLaunchStudio && launchConfig.source == .householdCreator && !isHouseholdCreator
     }
 
     @ViewBuilder
@@ -168,12 +208,18 @@ struct MealCanvasView: View {
     @ViewBuilder
     private var launchPreviewOverlay: some View {
         if isLaunchStudio && showLaunchLivePreview {
+            let previewConfig = LaunchCurtainConfig(
+                enabled: launchConfig.enabled,
+                source: launchConfig.source,
+                motion: effectiveLaunchMotion,
+                holdSpeed: effectiveLaunchHoldSpeed
+            )
             LaunchCurtainView(
-                config: launchConfig,
+                config: previewConfig,
                 previewPayload: LaunchCanvasDocumentPayload(document: currentDocumentSnapshot()),
                 canDismiss: true,
                 allowTapToSkip: true,
-                holdMilliseconds: max(launchConfig.holdSpeed.milliseconds, 2400)
+                holdMilliseconds: max(effectiveLaunchHoldSpeed.milliseconds, 2400)
             ) {
                 withAnimation(.easeOut(duration: 0.22)) {
                     showLaunchLivePreview = false
@@ -254,10 +300,17 @@ struct MealCanvasView: View {
             }
             .overlay(alignment: .top) { topHeaderOverlay }
             .overlay(alignment: .bottom) {
-                liveControls
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, (isLaunchStudio || isGuestMode) ? 16 : 78)
-                    .opacity(isExporting ? 0 : 1)
+                VStack(spacing: 10) {
+                    if let prompt = coverPrompt, !isExporting {
+                        coverPromptPill(prompt)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    liveControls
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, (isLaunchStudio || isGuestMode) ? 16 : 78)
+                .opacity(isExporting ? 0 : 1)
+                .animation(reduceMotion ? nil : .spring(response: 0.30, dampingFraction: 0.84), value: coverPrompt?.image)
             }
             .overlay { launchPreviewOverlay }
             .overlay { liveExportOverlay }
@@ -265,11 +318,28 @@ struct MealCanvasView: View {
 
     var body: some View {
         stageWithMediaModifiers
+            .allowsHitTesting(!isConfirmingCanvasAction)
             .sheet(isPresented: $isEditing, onDismiss: {
+                if activeEditor == .transform && transformEditorHasChanges {
+                    commitTransformEditorSync()
+                } else if activeEditor == .background && blurDirtyForSync {
+                    broadcastBlurUpdate()
+                }
                 activeEditor = nil
                 textEditorFocused = false
             }) {
                 inlineEditorSheetContent
+            }
+            .sheet(item: $photoPickerDish) { dish in
+                if let mealID = vm.meal?.id {
+                    DishPhotoPickerSheet(mealId: mealID, dish: dish) { result in
+                        applyReplacedDishPhoto(result)
+                    }
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(28)
+                    .preferredColorScheme(.light)
+                }
             }
             .background { launchOptionsSheetHost }
     }
@@ -301,6 +371,11 @@ struct MealCanvasView: View {
             .sheet(isPresented: $showLaunchOptionsSheet) {
                 LaunchStudioOptionsSheet(
                     config: $launchConfig,
+                    creatorMeta: creatorMeta,
+                    isHouseholdCreator: isHouseholdCreator,
+                    onSelectSource: { source in
+                        switchLaunchSource(to: source)
+                    },
                     onSelectTemplate: { template in
                         applyLaunchTemplate(template)
                     },
@@ -319,7 +394,7 @@ struct MealCanvasView: View {
                     }
                 )
                 .preferredColorScheme(.light)
-                .presentationDetents([.height(540), .large])
+                .presentationDetents([.height(580), .large])
                 .presentationDragIndicator(.visible)
                 .presentationCornerRadius(28)
             }
@@ -334,30 +409,65 @@ struct MealCanvasView: View {
                     reportLightSurface(background.isLightSurface)
                     restoreDocumentIfNeeded()
                     setupRealtimeHandlers()
-                    if let mealID = vm.meal?.id {
-                        realtime.connect(mealId: mealID)
+                    if let mealID = vm.meal?.id, let userID = appState.currentUser?.id {
+                        realtime.connect(mealId: mealID, userId: userID)
+                        scheduleHTTPFallbackFetch(mealID: mealID)
                     }
                 }
             }
             .onDisappear {
+                backgroundPhotoRequest = nil
+                backgroundPhotoItem = nil
+                fallbackCanvasFetchTask?.cancel()
+                fallbackCanvasFetchTask = nil
                 if !isLaunchStudio {
+                    flushPendingEditorChanges(clearLivePreview: true)
                     realtime.disconnect()
                 }
             }
             .onChange(of: scenePhase) { _, phase in
                 guard !isLaunchStudio else { return }
-                if phase == .active, let mealID = vm.meal?.id {
-                    realtime.ensureConnected(mealId: mealID)
+                switch phase {
+                case .active:
+                    if let mealID = vm.meal?.id, let userID = appState.currentUser?.id {
+                        realtime.ensureConnected(mealId: mealID, userId: userID, probeIfConnected: true)
+                        if !hasReceivedWelcome {
+                            scheduleHTTPFallbackFetch(mealID: mealID)
+                        }
+                    }
+                    if activeEditor == .emoji && stickerSource == .favorites {
+                        Task { await loadStickerFavorites() }
+                    }
+                case .background, .inactive:
+                    flushPendingEditorChanges(clearLivePreview: true)
+                @unknown default:
+                    break
+                }
+            }
+            .onChange(of: appState.activeTab) { _, tab in
+                guard !isLaunchStudio, !isGuestMode, tab == 0 else { return }
+                if let mealID = vm.meal?.id, let userID = appState.currentUser?.id {
+                    realtime.ensureConnected(mealId: mealID, userId: userID, probeIfConnected: true)
+                    if !hasReceivedWelcome {
+                        scheduleHTTPFallbackFetch(mealID: mealID)
+                    }
                 }
             }
             .onChange(of: vm.meal?.id) { _, newMealID in
                 guard !isLaunchStudio else { return }
+                fallbackCanvasFetchTask?.cancel()
+                fallbackCanvasFetchTask = nil
                 hasReceivedWelcome = false
+                blurDirtyForSync = false
+                recentlyAddedRemoteDishIDs.removeAll()
+                queuedDishStickerIDs.removeAll()
                 selectedStickerID = nil
                 selectedNoteID = nil
                 finishSelecting()
                 activeStroke.removeAll()
                 strokeRedoStack.removeAll()
+                backgroundPhotoRequest = nil
+                backgroundPhotoItem = nil
                 stickerPhotoItem = nil
                 isCreatingAlbumSticker = false
                 drawingEnabled = false
@@ -367,9 +477,23 @@ struct MealCanvasView: View {
                 textEditorFocused = false
                 undoStack.removeAll()
                 redoStack.removeAll()
+                transformUndoStart = nil
+                blurUndoStart = nil
+                justInsertedStickerIDs.removeAll()
+                justInsertedNoteIDs.removeAll()
+                pendingDishRevealIDs.removeAll()
+                waitingRevealStickerIDs.removeAll()
+                dishRevealTask?.cancel()
+                dishRevealTask = nil
+                dishComboCount = 0
+                photoPickerDish = nil
+                coverPrompt = nil
+                coverPromptTask?.cancel()
+                coverPromptTask = nil
                 restoreDocumentIfNeeded()
-                if let newMealID {
-                    realtime.connect(mealId: newMealID)
+                if let newMealID, let userID = appState.currentUser?.id {
+                    realtime.connect(mealId: newMealID, userId: userID)
+                    scheduleHTTPFallbackFetch(mealID: newMealID)
                 } else {
                     realtime.disconnect()
                 }
@@ -383,7 +507,9 @@ struct MealCanvasView: View {
             .onChange(of: vm.dishes.map(\.id)) { _, _ in
                 guard !isLaunchStudio else { return }
                 let myUserId = appState.currentUser?.id
-                let addedDishID = restoredMealID == vm.meal?.id
+                let hadRestored = restoredMealID == vm.meal?.id
+                let existingDishIDs = Set(stickers.compactMap(\.mealDishID))
+                let addedDishID = hadRestored
                     ? vm.dishes.first(where: { dish in
                         !stickers.contains(where: { $0.mealDishID == dish.id })
                             && (myUserId == nil || dish.addedBy == nil || dish.addedBy == myUserId)
@@ -391,6 +517,22 @@ struct MealCanvasView: View {
                     : nil
                 syncStickers(broadcast: !isApplyingRemoteUpdate && hasReceivedWelcome)
                 selectedElements.formIntersection(Set(layerEntries.map(\.selection)))
+                let newlyCreatedIDs = hadRestored
+                    ? stickers.compactMap { sticker -> UUID? in
+                        guard let did = sticker.mealDishID, !existingDishIDs.contains(did) else { return nil }
+                        return sticker.id
+                    }
+                    : []
+                if !newlyCreatedIDs.isEmpty {
+                    if isSheetPresented {
+                        waitingRevealStickerIDs.formUnion(newlyCreatedIDs)
+                        for id in newlyCreatedIDs where !pendingDishRevealIDs.contains(id) {
+                            pendingDishRevealIDs.append(id)
+                        }
+                    } else {
+                        triggerDishArrivalFX(for: newlyCreatedIDs)
+                    }
+                }
                 if !isCanvasInteracting, !drawingEnabled, !isEditing,
                    let addedDishID, let added = stickers.first(where: { $0.mealDishID == addedDishID }) {
                     finishSelecting()
@@ -398,19 +540,58 @@ struct MealCanvasView: View {
                     selectedNoteID = nil
                 }
             }
+            .onChange(of: vm.dishes.map { "\($0.id)|\($0.recipeImage ?? "")|\($0.recipeCutoutImage ?? "")" }) { _, _ in
+                guard !isLaunchStudio else { return }
+                syncStickers(broadcast: false)
+            }
+            .onChange(of: isSheetPresented) { _, presented in
+                guard !presented, !pendingDishRevealIDs.isEmpty else { return }
+                flushPendingDishReveals()
+            }
     }
 
-    private var stageWithMediaModifiers: some View {
+    private var stageWithEditorModifiers: some View {
         stageWithMealModifiers
             .onChange(of: selectedNoteID) { _, _ in
-                if activeEditor == .insert {
-                    draftText = selectedTextNote?.text ?? ""
+                if activeEditor == .insert, let note = selectedTextNote {
+                    draftNoteID = note.id
+                    originalDraftText = note.text
+                    draftText = note.text
                 }
             }
-            .onChange(of: selectedCanvasElement) { _, _ in transformEditorHasChanges = false }
+            .onChange(of: selectedCanvasElement) { oldSelection, _ in
+                if transformEditorHasChanges, let oldSelection {
+                    commitTransformEditorSync(for: oldSelection)
+                }
+                transformEditorHasChanges = false
+            }
+            .onChange(of: activeEditor) { oldPanel, _ in
+                if oldPanel == .transform && transformEditorHasChanges {
+                    commitTransformEditorSync()
+                } else if oldPanel == .background && blurDirtyForSync {
+                    broadcastBlurUpdate()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .stickerFavoritesChanged)) { _ in
+                guard activeEditor == .emoji else { return }
+                Task { await loadStickerFavorites() }
+            }
+            .onChange(of: stickerSource) { _, next in
+                if next == .favorites && activeEditor == .emoji {
+                    Task { await loadStickerFavorites() }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .launchCanvasChanged)) { _ in
+                guard isLaunchStudio else { return }
+                refreshCreatorMetaAndPreviewIfNeeded()
+            }
             .onChange(of: notes.map(\.id)) { _, _ in
                 selectedElements.formIntersection(Set(layerEntries.map(\.selection)))
             }
+    }
+
+    private var stageWithMediaModifiers: some View {
+        stageWithEditorModifiers
             .onChange(of: background) { oldValue, newValue in
                 reportLightSurface(newValue.isLightSurface)
                 if !usesCustomBrushColor, oldValue.isLightSurface != newValue.isLightSurface,
@@ -420,43 +601,16 @@ struct MealCanvasView: View {
                 }
                 saveDocument()
             }
-            .onChange(of: blur) { _, _ in saveDocument() }
+            .onChange(of: blur) { _, _ in
+                saveDocument()
+            }
             .onChange(of: moodFilter) { _, _ in
                 saveDocument()
             }
             .onChange(of: customBackgroundData) { _, _ in saveDocument() }
             .onChange(of: backgroundPhotoItem) { _, item in
                 guard let item else { return }
-                Task {
-                    guard let data = try? await item.loadTransferable(type: Data.self),
-                          let image = UIImage(data: data),
-                          let preview = image.canvasPreviewData else {
-                        backgroundPhotoItem = nil
-                        showCanvasTip("无法读取照片，请重新选择")
-                        return
-                    }
-                    await MainActor.run {
-                        recordUndoSnapshot()
-                        customBackgroundData = preview
-                        customBackgroundURL = nil
-                        background = .custom
-                        backgroundPhotoItem = nil
-                    }
-                    guard !isLaunchStudio else { return }
-                    do {
-                        let uploaded = try await UploadService.shared.uploadImage(preview, filename: "canvas_bg.jpg", mime: "image/jpeg")
-                        await MainActor.run {
-                            guard customBackgroundData == preview else { return }
-                            customBackgroundURL = uploaded.path
-                            saveDocument()
-                            broadcastBackgroundUpdate()
-                        }
-                    } catch {
-                        await MainActor.run {
-                            showCanvasTip("背景图上传失败，仅本机可见")
-                        }
-                    }
-                }
+                selectBackgroundPhoto(item)
             }
             .onChange(of: stickerPhotoItem) { _, item in
                 guard let item else { return }
@@ -468,8 +622,8 @@ struct MealCanvasView: View {
         switch activeEditor {
         case .transform: return [.height(360)]
         case .emoji: return [.height(540), .large]
-        case .brush: return [.height(470), .large]
-        case .effects: return [.height(420), .large]
+        case .brush: return [.height(540), .large]
+        case .effects: return [.height(470), .large]
         case .insert: return [.height(620), .large]
         case .background: return [.height(336)]
         case nil: return [.height(430)]
@@ -543,6 +697,17 @@ struct MealCanvasView: View {
                 Label("一键换排版", systemImage: "rectangle.3.group")
             }
             .disabled(stickers.isEmpty)
+
+            Divider()
+
+            Button {
+                toggleSoundFX()
+            } label: {
+                Label(
+                    soundEngine.isEnabled ? "关闭创作音效" : "开启创作音效",
+                    systemImage: soundEngine.isEnabled ? "speaker.wave.2" : "speaker.slash"
+                )
+            }
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: liveMotionEnabled ? "livephoto" : "livephoto.slash")
@@ -604,10 +769,29 @@ struct MealCanvasView: View {
         }
     }
 
+    private var effectiveLaunchMotion: LaunchCurtainMotion {
+        if isReadOnlyCreatorPreview, let raw = creatorMeta?.motion, let m = LaunchCurtainMotion(rawValue: raw) {
+            return m
+        }
+        return launchConfig.motion
+    }
+
+    private var effectiveLaunchHoldSpeed: LaunchHoldSpeed {
+        if isReadOnlyCreatorPreview, let raw = creatorMeta?.holdSpeed, let s = LaunchHoldSpeed(rawValue: raw) {
+            return s
+        }
+        return launchConfig.holdSpeed
+    }
+
     private var launchStudioHeader: some View {
         let isLight = background.isLightSurface
         let saveFill = isLight ? CanvasPalette.obsidianInk : Color.white
         let saveInk = isLight ? Color.white : CanvasPalette.obsidianInk
+        let saveTitle: String = {
+            if isSavingLaunch { return "发布中" }
+            if launchConfig.source == .householdCreator && isHouseholdCreator { return "发布共享" }
+            return "保存"
+        }()
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center, spacing: 6) {
                 Button {
@@ -632,9 +816,9 @@ struct MealCanvasView: View {
                     showLaunchOptionsSheet = true
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: launchConfig.motion.icon)
+                        Image(systemName: effectiveLaunchMotion.icon)
                             .font(.system(size: 11, weight: .semibold))
-                        Text(launchConfig.motion.title)
+                        Text(effectiveLaunchMotion.title)
                             .font(.system(size: 12, weight: .semibold, design: .rounded))
                             .lineLimit(1)
                         Image(systemName: "chevron.down")
@@ -650,11 +834,13 @@ struct MealCanvasView: View {
                     .contentShape(Capsule())
                 }
                 .buttonStyle(CanvasPressStyle())
-                .accessibilityLabel("选择开屏动效与模板")
+                .accessibilityLabel("选择开屏来源、动效与模板")
 
                 Spacer(minLength: 4)
 
-                undoRedoCapsule
+                if !isReadOnlyCreatorPreview {
+                    undoRedoCapsule
+                }
 
                 Button {
                     Haptics.light()
@@ -679,13 +865,13 @@ struct MealCanvasView: View {
                     .contentShape(Capsule())
                 }
                 .buttonStyle(SoftPressStyle())
-                .disabled(isCanvasInteracting)
+                .disabled(isCanvasInteracting || isSavingLaunch)
                 .accessibilityLabel("全屏试看开屏动画")
 
                 Button {
                     saveLaunchStudioAndDismiss()
                 } label: {
-                    Text("保存")
+                    Text(saveTitle)
                         .font(.system(size: 13, weight: .semibold, design: .rounded))
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
@@ -698,86 +884,140 @@ struct MealCanvasView: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(SoftPressStyle())
-                .disabled(isCanvasInteracting)
+                .disabled(isCanvasInteracting || isSavingLaunch)
                 .accessibilityLabel("保存开屏设置")
             }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: canUndoCanvas)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: canRedoCanvas)
 
-            HStack(spacing: 6) {
-                Button {
-                    Haptics.light()
-                    launchConfig.enabled.toggle()
-                } label: {
-                    HStack(spacing: 5) {
-                        Circle()
-                            .fill(launchConfig.enabled ? (isLight ? CanvasPalette.obsidianInk : Color(red: 0.56, green: 0.88, blue: 0.58)) : headerMutedInk.opacity(0.6))
-                            .frame(width: 6, height: 6)
-                        Text(launchConfig.enabled ? "开屏已开启" : "开屏已关闭")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .lineLimit(1)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    Button {
+                        Haptics.light()
+                        launchConfig.enabled.toggle()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(launchConfig.enabled ? (isLight ? CanvasPalette.obsidianInk : Color(red: 0.56, green: 0.88, blue: 0.58)) : headerMutedInk.opacity(0.6))
+                                .frame(width: 6, height: 6)
+                            Text(launchConfig.enabled ? "开屏已开启" : "开屏已关闭")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .lineLimit(1)
+                        }
+                        .fixedSize(horizontal: true, vertical: false)
+                        .foregroundStyle(launchConfig.enabled ? headerInk : headerMutedInk)
+                        .padding(.horizontal, 10)
+                        .frame(height: 24)
+                        .background { adaptiveGlass(Capsule()) }
+                        .frame(minHeight: 30)
+                        .contentShape(Capsule())
                     }
-                    .fixedSize(horizontal: true, vertical: false)
-                    .foregroundStyle(launchConfig.enabled ? headerInk : headerMutedInk)
-                    .padding(.horizontal, 10)
-                    .frame(height: 24)
-                    .background { adaptiveGlass(Capsule()) }
-                    .frame(minHeight: 30)
-                    .contentShape(Capsule())
-                }
-                .buttonStyle(CanvasPressStyle(scale: 0.96))
+                    .buttonStyle(CanvasPressStyle(scale: 0.96))
 
-                Button {
-                    Haptics.light()
-                    finishEditing()
-                    showLaunchOptionsSheet = true
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "square.grid.2x2")
-                            .font(.system(size: 10, weight: .semibold))
-                        Text("模板与节奏 · \(launchConfig.holdSpeed.title)")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .lineLimit(1)
-                    }
-                    .fixedSize(horizontal: true, vertical: false)
-                    .foregroundStyle(headerInk)
-                    .padding(.horizontal, 10)
-                    .frame(height: 24)
-                    .background { adaptiveGlass(Capsule()) }
-                    .frame(minHeight: 30)
-                    .contentShape(Capsule())
-                }
-                .buttonStyle(CanvasPressStyle(scale: 0.96))
-
-                Menu {
-                    Button("保存为实况照片", systemImage: "livephoto") {
-                        saveCanvasAsLivePhoto()
-                    }
-                    .disabled(isExporting || liveExportProgress != nil)
-                    Button("保存静态图片", systemImage: "square.and.arrow.down") {
-                        saveCanvasToPhotos()
-                    }
-                    Button("全部轻盈动起来", systemImage: "sparkles") {
-                        activateAllLiveMotion()
-                    }
-                    Button("恢复默认开屏", systemImage: "arrow.counterclockwise") {
-                        resetLaunchStudioToDefault()
-                    }
-                    Button("清空画布元素", systemImage: "trash", role: .destructive) {
-                        clearLaunchCanvasAdditions()
-                    }
-                    .disabled(stickers.isEmpty && notes.isEmpty && strokes.isEmpty)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 12, weight: .semibold))
+                    Menu {
+                        Button {
+                            Haptics.light()
+                            switchLaunchSource(to: .householdCreator)
+                        } label: {
+                            Label(
+                                launchConfig.source == .householdCreator ? "使用家庭创建者的（当前）" : "使用家庭创建者的",
+                                systemImage: launchConfig.source == .householdCreator ? "checkmark" : "house.fill"
+                            )
+                        }
+                        Button {
+                            Haptics.light()
+                            switchLaunchSource(to: .personal)
+                        } label: {
+                            Label(
+                                launchConfig.source == .personal ? "使用自己 DIY 的（当前）" : "使用自己 DIY 的",
+                                systemImage: launchConfig.source == .personal ? "checkmark" : "paintbrush"
+                            )
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: launchConfig.source == .householdCreator ? "house.fill" : "paintbrush")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text(launchConfig.source == .householdCreator
+                                ? (isHouseholdCreator ? "家庭共享 · 我创建的" : "家庭共享 · \(creatorMeta?.creatorNickname ?? "创建者")")
+                                : "个人 DIY")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .lineLimit(1)
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 8.5, weight: .bold))
+                                .opacity(0.7)
+                        }
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundStyle(headerInk)
-                        .frame(width: 24, height: 24)
-                        .background { adaptiveGlass(Circle()) }
-                        .frame(minWidth: 30, minHeight: 30)
-                        .contentShape(Circle())
+                        .padding(.horizontal, 10)
+                        .frame(height: 24)
+                        .background { adaptiveGlass(Capsule()) }
+                        .frame(minHeight: 30)
+                        .contentShape(Capsule())
+                    }
+                    .disabled(isSavingLaunch)
+
+                    Button {
+                        Haptics.light()
+                        finishEditing()
+                        showLaunchOptionsSheet = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "square.grid.2x2")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text("\(effectiveLaunchHoldSpeed.title) · \(launchConfig.source.shortLabel)")
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .lineLimit(1)
+                        }
+                        .fixedSize(horizontal: true, vertical: false)
+                        .foregroundStyle(headerInk)
+                        .padding(.horizontal, 10)
+                        .frame(height: 24)
+                        .background { adaptiveGlass(Capsule()) }
+                        .frame(minHeight: 30)
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(CanvasPressStyle(scale: 0.96))
+
+                    Menu {
+                        Button("保存为实况照片", systemImage: "livephoto") {
+                            saveCanvasAsLivePhoto()
+                        }
+                        .disabled(isExporting || liveExportProgress != nil)
+                        Button("保存静态图片", systemImage: "square.and.arrow.down") {
+                            saveCanvasToPhotos()
+                        }
+                        if !isReadOnlyCreatorPreview {
+                            Button("全部轻盈动起来", systemImage: "sparkles") {
+                                activateAllLiveMotion()
+                            }
+                        }
+                        Button(
+                            soundEngine.isEnabled ? "关闭创作音效" : "开启创作音效",
+                            systemImage: soundEngine.isEnabled ? "speaker.wave.2" : "speaker.slash"
+                        ) {
+                            toggleSoundFX()
+                        }
+                        if !isReadOnlyCreatorPreview {
+                            Button("恢复默认开屏", systemImage: "arrow.counterclockwise") {
+                                resetLaunchStudioToDefault()
+                            }
+                            Button("清空画布元素", systemImage: "trash", role: .destructive) {
+                                clearLaunchCanvasAdditions()
+                            }
+                            .disabled(stickers.isEmpty && notes.isEmpty && strokes.isEmpty)
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(headerInk)
+                            .frame(width: 24, height: 24)
+                            .background { adaptiveGlass(Circle()) }
+                            .frame(minWidth: 30, minHeight: 30)
+                            .contentShape(Circle())
+                    }
+                    .disabled(isCanvasInteracting)
+                    .accessibilityLabel("更多开屏创作选项")
                 }
-                .disabled(isCanvasInteracting)
-                .accessibilityLabel("更多开屏创作选项")
             }
         }
     }
@@ -829,7 +1069,7 @@ struct MealCanvasView: View {
                         actionBarConfirm()
                     } label: {
                         HStack(spacing: 4) {
-                            if vm.isActing {
+                            if vm.isActing || isConfirmingCanvasAction {
                                 ProgressView().tint(Color.white).controlSize(.small)
                             } else {
                                 Image(systemName: confirmIcon).font(.system(size: 12, weight: .semibold))
@@ -1077,7 +1317,7 @@ struct MealCanvasView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(SoftPressStyle())
-                    .disabled(!isLaunchStudio && (vm.meal == nil || vm.isActing))
+                    .disabled(isReadOnlyCreatorPreview || (!isLaunchStudio && (vm.meal == nil || vm.isActing)))
                     .opacity((!isLaunchStudio && (vm.meal == nil || vm.isActing)) ? 0.45 : 1)
                     .padding(.bottom, 40)
                     .accessibilityLabel(isLaunchStudio ? "添加开屏贴纸与文字" : "从菜谱添加第一道菜")
@@ -1103,15 +1343,17 @@ struct MealCanvasView: View {
                     CanvasStickerView(
                         sticker: $sticker,
                         canvasSize: proxy.size,
-                        isSelected: !isExporting && !isEditing && !isSelecting && stickerID == selectedStickerID,
+                        isSelected: !isReadOnlyCreatorPreview && !isExporting && !isEditing && !isSelecting && stickerID == selectedStickerID,
                         reduceMotion: reduceMotion || isSelecting || !liveMotionEnabled,
                         reportsBounds: isSelecting,
                         isLightSurface: background.isLightSurface,
+                        isFreshArrival: justInsertedStickerIDs.contains(stickerID),
+                        isPendingReveal: waitingRevealStickerIDs.contains(stickerID),
                         canMoveForward: orderedLayers.first?.selection != .sticker(stickerID),
                         canMoveBackward: orderedLayers.last?.selection != .sticker(stickerID),
                         alignmentTargets: alignmentTargets(excluding: .sticker(stickerID)),
                         remotePreview: preview,
-                        onTransformStart: { rememberTransform(for: .sticker(stickerID)) },
+                        onTransformStart: { rememberTransform($0, for: .sticker(stickerID)) },
                         onSelect: {
                             if selectedStickerID != stickerID { Haptics.light() }
                             withAnimation(.spring(response: 0.30, dampingFraction: 0.76)) {
@@ -1137,6 +1379,13 @@ struct MealCanvasView: View {
                         onDuplicate: sticker.mealDishID == nil ? {
                             duplicateElement(.sticker(stickerID))
                         } : nil,
+                        onReplacePhoto: (!isLaunchStudio && !isGuestMode && sticker.mealDishID != nil) ? {
+                            guard let dishID = stickers.first(where: { $0.id == stickerID })?.mealDishID,
+                                  let dish = vm.dishes.first(where: { $0.id == dishID }) else { return }
+                            selectedStickerID = stickerID
+                            selectedNoteID = nil
+                            photoPickerDish = dish
+                        } : nil,
                         onLiveChange: {
                             guard !isLaunchStudio,
                                   let current = stickers.first(where: { $0.id == stickerID }) else { return }
@@ -1149,17 +1398,17 @@ struct MealCanvasView: View {
                             )
                         },
                         onChange: {
+                            recordTransformUndo(for: .sticker(stickerID))
                             if !isLaunchStudio {
                                 realtime.sendLivePreview(targetKind: "clear", targetId: stickerID.uuidString)
                             }
                             saveDocument()
-                            broadcastStickerUpsert(id: stickerID)
                         }
                     )
                     .transition(.opacity)
                     .zIndex(Double(sticker.layer))
                     .accessibilityHidden(isSelecting)
-                    .allowsHitTesting(!drawingEnabled && !isSelecting && (!isCanvasInteracting || selectedStickerID == stickerID))
+                    .allowsHitTesting(!isReadOnlyCreatorPreview && !drawingEnabled && !isSelecting && (!isCanvasInteracting || selectedStickerID == stickerID))
                 }
 
                 ForEach($notes) { $note in
@@ -1168,15 +1417,16 @@ struct MealCanvasView: View {
                     CanvasNoteView(
                         note: $note,
                         canvasSize: proxy.size,
-                        isSelected: !isExporting && !isEditing && !isSelecting && noteID == selectedNoteID,
+                        isSelected: !isReadOnlyCreatorPreview && !isExporting && !isEditing && !isSelecting && noteID == selectedNoteID,
                         freezesMotion: isSelecting || !liveMotionEnabled,
                         reportsBounds: isSelecting,
                         isLightSurface: background.isLightSurface,
+                        isFreshArrival: justInsertedNoteIDs.contains(noteID),
                         canMoveForward: orderedLayers.first?.selection != .note(noteID),
                         canMoveBackward: orderedLayers.last?.selection != .note(noteID),
                         alignmentTargets: alignmentTargets(excluding: .note(noteID)),
                         remotePreview: preview,
-                        onTransformStart: { rememberTransform(for: .note(noteID)) },
+                        onTransformStart: { rememberTransform($0, for: .note(noteID)) },
                         onSelect: {
                             if selectedNoteID != noteID { Haptics.light() }
                             withAnimation(.spring(response: 0.30, dampingFraction: 0.76)) {
@@ -1215,53 +1465,72 @@ struct MealCanvasView: View {
                             )
                         },
                         onChange: {
+                            recordTransformUndo(for: .note(noteID))
                             if !isLaunchStudio {
                                 realtime.sendLivePreview(targetKind: "clear", targetId: noteID.uuidString)
                             }
                             saveDocument()
-                            broadcastNoteUpsert(id: noteID)
                         }
                     )
                     .transition(.opacity)
                     .zIndex(Double(note.layer))
                     .accessibilityHidden(isSelecting)
-                    .allowsHitTesting(!drawingEnabled && !isSelecting && (!isCanvasInteracting || selectedNoteID == noteID))
+                    .allowsHitTesting(!isReadOnlyCreatorPreview && !drawingEnabled && !isSelecting && (!isCanvasInteracting || selectedNoteID == noteID))
                 }
 
                 CanvasDrawingView(
                     strokes: $strokes,
                     activeStroke: $activeStroke,
                     remoteActiveStrokes: isExporting ? [] : remoteActiveStrokes,
-                    isEnabled: drawingEnabled,
+                    isEnabled: drawingEnabled && !isReadOnlyCreatorPreview,
+                    isSparkleAnimated: !isExporting && liveMotionEnabled && !reduceMotion && !isSelecting && scenePhase == .active,
                     brush: brushColor,
                     paintColor: customBrushColor,
                     style: brushStyle,
                     width: brushWidth,
-                    onStart: { recordUndoSnapshot() },
-                    onLiveStroke: { normalizedPoints in
-                        guard !isLaunchStudio else { return }
-                        let live = CanvasStroke(
-                            points: normalizedPoints,
-                            color: brushColor,
-                            customColor: CanvasRGBA(color: customBrushColor),
-                            style: brushStyle,
-                            width: brushWidth,
-                            isNormalized: true
-                        )
+                    onStart: {
+                        CanvasSoundEngine.shared.playBrushStart(profile: brushStyle.audioProfile)
+                        Haptics.soft()
+                    },
+                    onStrokePoint: { point, speed in
+                        CanvasSoundEngine.shared.playBrushMove(profile: brushStyle.audioProfile, speed: speed)
+                        if !isExporting {
+                            fx.updateBrushTip(
+                                point: point,
+                                color: customBrushColor,
+                                profile: brushStyle.audioProfile,
+                                width: brushWidth,
+                                speed: speed
+                            )
+                        }
+                    },
+                    onLiveStroke: isLaunchStudio ? nil : { live in
                         realtime.sendLivePreview(targetKind: "stroke", targetId: "stroke", activeStroke: live)
                     },
-                    onEnd: {
+                    onEnd: { lastPoint in
                         strokeRedoStack.removeAll()
+                        CanvasSoundEngine.shared.playBrushEnd(profile: brushStyle.audioProfile)
+                        Haptics.soft()
+                        fx.endBrushTip(at: lastPoint, color: customBrushColor, profile: brushStyle.audioProfile)
                         if !isLaunchStudio {
                             realtime.sendLivePreview(targetKind: "clear", targetId: "stroke")
                         }
                         saveDocument()
                         if let last = strokes.last {
+                            var undoBefore = currentCanvasSnapshot()
+                            undoBefore.strokes.removeLast()
+                            recordUndoAction(from: undoBefore)
                             broadcastOp("add_stroke", payload: .addStroke(last))
                         }
                     }
                 )
                 .frame(width: proxy.size.width, height: proxy.size.height)
+
+                if !isExporting && !reduceMotion {
+                    CanvasBurstFXOverlay(controller: fx, isLightSurface: background.isLightSurface)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .zIndex(998)
+                }
 
                 if !isExporting {
                     Path { path in
@@ -1300,12 +1569,18 @@ struct MealCanvasView: View {
                                 CanvasElementActionBar(
                                     title: selectedElementTitle,
                                     canEditText: selectedTextNote != nil,
+                                    canReplacePhoto: selectedDishForPhotoReplace != nil,
                                     canDuplicate: canDuplicateSelectedElement,
                                     isDeleting: isRemovingDish,
                                     layers: orderedLayers,
                                     selection: overlay.selection,
                                     onSelect: selectElement,
                                     onEditText: { openEditor(.insert) },
+                                    onReplacePhoto: {
+                                        if let dish = selectedDishForPhotoReplace {
+                                            photoPickerDish = dish
+                                        }
+                                    },
                                     onEdit: { openEditor(.effects) },
                                     onDuplicate: { duplicateElement(overlay.selection) },
                                     onLayerMove: { moveLayer($0, for: overlay.selection) },
@@ -1332,13 +1607,10 @@ struct MealCanvasView: View {
                         selection: $selectedElements,
                         transforms: selectedElements.compactMap { currentTransform(for: $0) },
                         isLightSurface: background.isLightSurface,
-                        onMoveStart: { _ in
-                            recordUndoSnapshot()
-                        },
                         onMove: moveElements,
-                        onChange: {
+                        onChange: { transforms in
+                            recordGroupMoveUndo(transforms)
                             saveDocument()
-                            broadcastBatchStickersNotes()
                         }
                     )
                 }
@@ -1374,7 +1646,39 @@ struct MealCanvasView: View {
         let ctaFill = isLight ? CanvasPalette.obsidianInk : Color.white
         let ctaInk = isLight ? Color.white : CanvasPalette.obsidianInk
         return Group {
-            if isSelecting {
+            if isReadOnlyCreatorPreview {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(creatorMeta?.hasCustom == true
+                            ? "正在使用「\(creatorMeta?.creatorNickname ?? "创建者")」的开屏"
+                            : "创建者暂未发布共享开屏")
+                            .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(headerInk)
+                            .lineLimit(1)
+                        Text("仅家庭创建者可修改共享开屏，你可以直接基于它 DIY")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(headerMutedInk)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Button {
+                        Haptics.light()
+                        forkCreatorLaunchToPersonalDIY()
+                    } label: {
+                        Text("自己 DIY")
+                            .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(ctaInk)
+                            .padding(.horizontal, 13)
+                            .frame(height: 34)
+                            .background(ctaFill, in: Capsule())
+                    }
+                    .buttonStyle(CanvasPressStyle(scale: 0.94))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background { adaptiveGlass(Capsule()) }
+                .padding(.horizontal, 14)
+            } else if isSelecting {
                 HStack(spacing: 2) {
                     LiveControlButton(title: "全选内容", icon: "selection.all",
                         isLightSurface: isLight,
@@ -1415,10 +1719,11 @@ struct MealCanvasView: View {
                         ForEach(CanvasBrushColor.allCases) { item in
                             let selected = !usesCustomBrushColor && item == brushColor
                             Button {
-                                Haptics.light()
+                                Haptics.selection()
                                 brushColor = item
                                 customBrushColor = item.color
                                 usesCustomBrushColor = false
+                                CanvasSoundEngine.shared.playBrushStart(profile: brushStyle.audioProfile)
                             } label: {
                                 ZStack {
                                     if selected {
@@ -1554,6 +1859,7 @@ struct MealCanvasView: View {
 
                     Button {
                         Haptics.light()
+                        CanvasSoundEngine.shared.playToolbarPop(open: false)
                         withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.84)) {
                             toolsExpanded = false
                         }
@@ -1610,6 +1916,7 @@ struct MealCanvasView: View {
 
                     Button {
                         Haptics.light()
+                        CanvasSoundEngine.shared.playToolbarPop(open: true)
                         withAnimation(reduceMotion ? nil : .spring(response: 0.30, dampingFraction: 0.82)) {
                             toolsExpanded = true
                         }
@@ -1743,10 +2050,11 @@ struct MealCanvasView: View {
                             if let selectedNoteID,
                                let index = notes.firstIndex(where: { $0.id == selectedNoteID }),
                                notes[index].isPlainText {
-                                if notes[index].text != phrase { recordUndoSnapshot() }
+                                let undoBefore = currentCanvasSnapshot()
+                                defer { recordElementEdit(from: undoBefore) }
                                 notes[index].text = phrase
+                                originalDraftText = phrase
                                 saveDocument()
-                                broadcastNoteUpsert(id: selectedNoteID)
                             }
                         } label: {
                             Text(phrase)
@@ -2337,6 +2645,11 @@ struct MealCanvasView: View {
         .foregroundStyle(CanvasPalette.ink)
         .tint(CanvasPalette.accent)
         .disabled(selectedCanvasElement == nil)
+        .onDisappear {
+            if transformEditorHasChanges {
+                commitTransformEditorSync()
+            }
+        }
     }
 
     @ViewBuilder
@@ -2427,10 +2740,11 @@ struct MealCanvasView: View {
                     ForEach(CanvasBrushColor.allCases) { item in
                         let selected = !usesCustomBrushColor && item == brushColor
                         Button {
-                            Haptics.light()
+                            Haptics.selection()
                             brushColor = item
                             customBrushColor = item.color
                             usesCustomBrushColor = false
+                            CanvasSoundEngine.shared.playBrushStart(profile: brushStyle.audioProfile)
                         } label: {
                             Circle()
                                 .fill(item.color)
@@ -2466,14 +2780,19 @@ struct MealCanvasView: View {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
                         ForEach(CanvasBrushStyle.allCases) { item in
                             Button {
-                                Haptics.light()
+                                Haptics.selection()
                                 brushStyle = item
+                                CanvasSoundEngine.shared.playBrushStart(profile: item.audioProfile)
                             } label: {
                                 VStack(spacing: 7) {
-                                    CanvasBrushPreview(style: item, color: item == .neon ? (usesCustomBrushColor ? customBrushColor : (brushColor == .white ? CanvasBrushColor.coral.color : brushColor.color)) : CanvasPalette.ink)
+                                    let needsDarkPill = item == .neon || item == .sparkle
+                                    let previewColor = needsDarkPill
+                                        ? (usesCustomBrushColor ? customBrushColor : (brushColor == .white ? CanvasBrushColor.coral.color : brushColor.color))
+                                        : CanvasPalette.ink
+                                    CanvasBrushPreview(style: item, color: previewColor)
                                         .frame(height: 22)
                                         .padding(.horizontal, 8)
-                                        .background(item == .neon ? CanvasPalette.obsidianInk.opacity(0.88) : Color.clear, in: Capsule())
+                                        .background(needsDarkPill ? CanvasPalette.obsidianInk.opacity(0.88) : Color.clear, in: Capsule())
                                     Text(item.title)
                                         .font(.system(size: 11, weight: .medium))
                                         .foregroundStyle(item == brushStyle ? CanvasPalette.ink : CanvasPalette.muted)
@@ -2557,7 +2876,7 @@ struct MealCanvasView: View {
                                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                                     .stroke(CanvasPalette.line, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                             }
-                            Text("相册")
+                            Text(backgroundPhotoRequest != nil && !isLaunchStudio ? "上传中…" : "相册")
                                 .font(.system(size: 10.5, weight: .medium, design: .rounded))
                                 .foregroundStyle(CanvasPalette.muted)
                         }
@@ -2587,11 +2906,14 @@ struct MealCanvasView: View {
                     ForEach(CanvasMoodFilter.allCases) { item in
                         let selected = moodFilter == item
                         Button {
-                            Haptics.light()
+                            Haptics.soft()
                             if moodFilter != item {
-                                recordUndoSnapshot()
+                                let undoBefore = currentCanvasSnapshot()
+                                defer { recordUndoAction(from: undoBefore) }
                                 moodFilter = item
-                                broadcastBackgroundUpdate()
+                                broadcastOp("update_background", payload: CanvasOpPayload(moodFilter: item.rawValue))
+                                fx.emitBackgroundPulse(in: canvasFrame.size, isLight: background.isLightSurface)
+                                CanvasSoundEngine.shared.playBackgroundWhoosh()
                             }
                         } label: {
                             Text(item.title)
@@ -2616,11 +2938,14 @@ struct MealCanvasView: View {
                 Text("背景虚化")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(CanvasPalette.muted)
-                Slider(value: $blur, in: 0...10) { editing in
-                    if editing {
-                        recordUndoSnapshot()
-                    } else {
-                        broadcastBackgroundUpdate()
+                Slider(value: Binding(get: { blur }, set: { value in
+                    guard blur != value else { return }
+                    if blurUndoStart == nil { blurUndoStart = blur }
+                    blur = value
+                    blurDirtyForSync = !isLaunchStudio
+                }), in: 0...10) { editing in
+                    if !editing {
+                        broadcastBlurUpdate()
                     }
                 }
                 .tint(CanvasPalette.obsidianInk)
@@ -2632,15 +2957,74 @@ struct MealCanvasView: View {
         }
     }
 
+    private func selectBackgroundPhoto(_ item: PhotosPickerItem) {
+        let request = UUID()
+        backgroundPhotoRequest = request
+        let mealID = vm.meal?.id
+        let launchSource = launchConfig.source
+        Task { @MainActor in
+            defer {
+                if backgroundPhotoRequest == request {
+                    backgroundPhotoRequest = nil
+                    backgroundPhotoItem = nil
+                }
+            }
+            guard let data = try? await item.loadTransferable(type: Data.self),
+                  let image = UIImage(data: data),
+                  let preview = image.canvasPreviewData else {
+                if backgroundPhotoRequest == request {
+                    showCanvasTip("无法读取照片，请重新选择")
+                }
+                return
+            }
+            guard backgroundPhotoRequest == request else { return }
+            do {
+                var path: String?
+                if !isLaunchStudio {
+                    let uploaded = try await UploadService.shared.uploadImage(
+                        preview, filename: "canvas_bg.jpg", mime: "image/jpeg"
+                    )
+                    path = uploaded.path
+                }
+                guard backgroundPhotoRequest == request, vm.meal?.id == mealID,
+                      !isLaunchStudio || launchConfig.source == launchSource else { return }
+                let undoBefore = currentCanvasSnapshot()
+                background = .custom
+                customBackgroundData = preview
+                customBackgroundURL = path
+                recordUndoAction(from: undoBefore)
+                if let path {
+                    saveDocument()
+                    broadcastOp("update_background", payload: CanvasOpPayload(
+                        background: undoBefore.background == .custom ? nil : CanvasBackground.custom.rawValue,
+                        customBackgroundURL: path
+                    ))
+                }
+                fx.emitBackgroundPulse(in: canvasFrame.size, isLight: CanvasBackground.custom.isLightSurface)
+                CanvasSoundEngine.shared.playBackgroundWhoosh()
+                Haptics.soft()
+            } catch {
+                if backgroundPhotoRequest == request {
+                    showCanvasTip("背景照片上传失败，请重新选择")
+                }
+            }
+        }
+    }
+
     private func backgroundThumbnail(_ item: CanvasBackground) -> some View {
         let isChosen = background == item
         return Button {
+            backgroundPhotoRequest = nil
+            backgroundPhotoItem = nil
             if item != .custom || customBackgroundData != nil || customBackgroundURL != nil {
-                Haptics.light()
+                Haptics.soft()
                 if background != item {
-                    recordUndoSnapshot()
+                    let undoBefore = currentCanvasSnapshot()
+                    defer { recordUndoAction(from: undoBefore) }
                     background = item
-                    broadcastBackgroundUpdate()
+                    broadcastOp("update_background", payload: CanvasOpPayload(background: item.rawValue))
+                    fx.emitBackgroundPulse(in: canvasFrame.size, isLight: item.isLightSurface)
+                    CanvasSoundEngine.shared.playBackgroundWhoosh()
                 }
             }
         } label: {
@@ -2701,6 +3085,15 @@ struct MealCanvasView: View {
         }
     }
 
+    private var selectedDishForPhotoReplace: MealDish? {
+        guard !isLaunchStudio, !isGuestMode,
+              let selectedStickerID,
+              let dishID = stickers.first(where: { $0.id == selectedStickerID })?.mealDishID else {
+            return nil
+        }
+        return vm.dishes.first(where: { $0.id == dishID })
+    }
+
     private var selectedElementTitle: String {
         switch selectedCanvasElement {
         case .sticker(let id):
@@ -2748,10 +3141,12 @@ struct MealCanvasView: View {
     private func updateSelectedTransform(scale: CGFloat? = nil, rotation: Double? = nil) {
         guard scale.map({ min(max($0, 0.3), 3) != selectedElementScale }) == true
             || rotation.map({ $0 != selectedElementRotation }) == true else { return }
-        if !transformEditorHasChanges, let selection = selectedCanvasElement {
-            rememberTransform(for: selection)
-            transformEditorHasChanges = true
-        }
+        guard let selection = selectedCanvasElement else { return }
+        var fields: Set<CanvasTransformField> = []
+        if scale != nil { fields.insert(.scale) }
+        if rotation != nil { fields.insert(.rotation) }
+        rememberTransform(fields, for: selection)
+        transformEditorHasChanges = true
         switch selectedCanvasElement {
         case .sticker(let id):
             guard let index = stickers.firstIndex(where: { $0.id == id }) else { return }
@@ -2793,18 +3188,12 @@ struct MealCanvasView: View {
         }
     }
 
-    private func commitTransformEditorSync() {
+    private func commitTransformEditorSync(for explicitSelection: CanvasSelection? = nil) {
+        guard transformEditorHasChanges, let selection = explicitSelection ?? selectedCanvasElement else { return }
+        transformEditorHasChanges = false
+        recordTransformUndo(for: selection)
         guard !isLaunchStudio else { return }
-        switch selectedCanvasElement {
-        case .sticker(let id):
-            realtime.sendLivePreview(targetKind: "clear", targetId: id.uuidString)
-            broadcastStickerUpsert(id: id)
-        case .note(let id):
-            realtime.sendLivePreview(targetKind: "clear", targetId: id.uuidString)
-            broadcastNoteUpsert(id: id)
-        case nil:
-            break
-        }
+        realtime.sendLivePreview(targetKind: "clear", targetId: "")
     }
 
     private func currentTransform(for selection: CanvasSelection) -> CanvasTransformUndo? {
@@ -2841,61 +3230,107 @@ struct MealCanvasView: View {
         )
     }
 
-    private func recordUndoSnapshot() {
-        let snap = currentCanvasSnapshot()
-        if undoStack.last != snap {
-            undoStack.append(snap)
-            if undoStack.count > 20 {
-                undoStack.removeFirst(undoStack.count - 20)
-            }
-            redoStack.removeAll()
-        }
-    }
-
-    private func rememberTransform(for selection: CanvasSelection) {
-        _ = selection
-        transformEditorHasChanges = false
-        recordUndoSnapshot()
-    }
-
-    private func undoLastAction() {
-        guard canUndoCanvas, let target = undoStack.popLast() else { return }
-        redoStack.append(currentCanvasSnapshot())
-        if redoStack.count > 20 {
-            redoStack.removeFirst(redoStack.count - 20)
-        }
-        applyHistorySnapshot(target)
-    }
-
-    private func redoLastAction() {
-        guard canRedoCanvas, let target = redoStack.popLast() else { return }
-        undoStack.append(currentCanvasSnapshot())
+    private func recordUndoAction(from before: CanvasHistorySnapshot) {
+        let after = currentCanvasSnapshot()
+        guard before != after else { return }
+        undoStack.append(CanvasHistoryAction(from: after, to: before))
         if undoStack.count > 20 {
             undoStack.removeFirst(undoStack.count - 20)
         }
-        applyHistorySnapshot(target)
+        redoStack.removeAll()
     }
 
-    private func applyHistorySnapshot(_ target: CanvasHistorySnapshot) {
-        let currentDishes = stickers.filter { $0.mealDishID != nil }
-        let snapshotStickersByID = Dictionary(uniqueKeysWithValues: target.stickers.map { ($0.id, $0) })
-        let restoredDishes: [CanvasSticker] = currentDishes.map { current in
-            guard let prev = snapshotStickersByID[current.id] else { return current }
-            var updated = current
-            updated.position = prev.position
-            updated.scale = prev.scale
-            updated.rotationDegrees = prev.rotationDegrees
-            updated.layer = prev.layer
-            updated.effect = prev.effect
-            updated.style = prev.style
-            return updated
-        }
-        let restoredCustomStickers = target.stickers.filter { $0.mealDishID == nil }
+    private func recordElementEdit(from before: CanvasHistorySnapshot) {
+        recordUndoAction(from: before)
+        broadcastElementEdits(since: before)
+    }
 
+    private func rememberTransform(_ fields: Set<CanvasTransformField>, for selection: CanvasSelection) {
+        var start = transformUndoStart ?? CanvasTransformHistory(selection: selection)
+        if start.selection != selection {
+            start = CanvasTransformHistory(selection: selection)
+        }
+        let needsPosition = fields.contains(.position) && start.position == nil
+        let needsScale = fields.contains(.scale) && start.scale == nil
+        let needsRotation = fields.contains(.rotation) && start.rotation == nil
+        guard needsPosition || needsScale || needsRotation,
+              let current = currentTransform(for: selection) else { return }
+        if needsPosition { start.position = current.position }
+        if needsScale { start.scale = current.scale }
+        if needsRotation { start.rotation = current.rotationDegrees }
+        transformUndoStart = start
+    }
+
+    private func recordTransformUndo(for selection: CanvasSelection) {
+        guard let start = transformUndoStart, start.selection == selection else { return }
+        transformUndoStart = nil
+        var before = currentCanvasSnapshot()
+        switch selection {
+        case .sticker(let id):
+            guard let index = before.stickers.firstIndex(where: { $0.id == id }) else { return }
+            if let position = start.position { before.stickers[index].position = position }
+            if let scale = start.scale { before.stickers[index].scale = scale }
+            if let rotation = start.rotation { before.stickers[index].rotationDegrees = rotation }
+        case .note(let id):
+            guard let index = before.notes.firstIndex(where: { $0.id == id }) else { return }
+            if let position = start.position { before.notes[index].position = position }
+            if let scale = start.scale { before.notes[index].scale = scale }
+            if let rotation = start.rotation { before.notes[index].rotationDegrees = rotation }
+        }
+        recordElementEdit(from: before)
+    }
+
+    private func recordGroupMoveUndo(_ transforms: [CanvasTransformUndo]) {
+        var before = currentCanvasSnapshot()
+        for transform in transforms {
+            switch transform.selection {
+            case .sticker(let id):
+                if let index = before.stickers.firstIndex(where: { $0.id == id }) {
+                    before.stickers[index].position = transform.position
+                }
+            case .note(let id):
+                if let index = before.notes.firstIndex(where: { $0.id == id }) {
+                    before.notes[index].position = transform.position
+                }
+            }
+        }
+        recordElementEdit(from: before)
+    }
+
+    private func undoLastAction() {
+        guard canUndoCanvas, let action = undoStack.popLast() else { return }
+        if let redo = applyHistoryAction(action) {
+            redoStack.append(redo)
+        }
+        CanvasSoundEngine.shared.playUndo()
+    }
+
+    private func redoLastAction() {
+        guard canRedoCanvas, let action = redoStack.popLast() else { return }
+        if let undo = applyHistoryAction(action) {
+            undoStack.append(undo)
+        }
+        CanvasSoundEngine.shared.playRedo()
+    }
+
+    private func applyHistoryAction(_ action: CanvasHistoryAction) -> CanvasHistoryAction? {
+        let before = currentCanvasSnapshot()
+        if isLaunchStudio {
+            applyHistoryState(action.to)
+        } else {
+            applySharedHistoryAction(action, to: before)
+        }
+        let after = currentCanvasSnapshot()
+        guard after != before else { return nil }
+        Haptics.light()
+        return CanvasHistoryAction(from: after, to: before)
+    }
+
+    private func applyHistoryState(_ target: CanvasHistorySnapshot) {
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            stickers = restoredDishes + restoredCustomStickers
+            stickers = target.stickers
             notes = target.notes
             strokes = target.strokes
             background = target.background
@@ -2909,8 +3344,118 @@ struct MealCanvasView: View {
             selectedElements.formIntersection(Set(layerEntries.map(\.selection)))
         }
         saveDocument()
-        broadcastOp("replace_document", payload: .replaceDocument(currentDocumentSnapshot()))
-        Haptics.light()
+    }
+
+    private func applySharedHistoryAction(_ action: CanvasHistoryAction, to current: CanvasHistorySnapshot) {
+        let source = action.from
+        let target = action.to
+        let stickerChanges = restoreHistoryItems(current.stickers, from: source.stickers, to: target.stickers) { sticker, old, new in
+            restoreHistoryField(&sticker.position, from: old.position, to: new.position)
+            restoreHistoryField(&sticker.scale, from: old.scale, to: new.scale)
+            restoreHistoryField(&sticker.rotationDegrees, from: old.rotationDegrees, to: new.rotationDegrees)
+            restoreHistoryField(&sticker.layer, from: old.layer, to: new.layer)
+            restoreHistoryField(&sticker.effect, from: old.effect, to: new.effect)
+            restoreHistoryField(&sticker.style, from: old.style, to: new.style)
+        }
+        let noteChanges = restoreHistoryItems(current.notes, from: source.notes, to: target.notes) { note, old, new in
+            restoreHistoryField(&note.position, from: old.position, to: new.position)
+            restoreHistoryField(&note.scale, from: old.scale, to: new.scale)
+            restoreHistoryField(&note.rotationDegrees, from: old.rotationDegrees, to: new.rotationDegrees)
+            restoreHistoryField(&note.layer, from: old.layer, to: new.layer)
+            restoreHistoryField(&note.text, from: old.text, to: new.text)
+            restoreHistoryField(&note.font, from: old.font, to: new.font)
+            restoreHistoryField(&note.color, from: old.color, to: new.color)
+            restoreHistoryField(&note.textStyle, from: old.textStyle, to: new.textStyle)
+            restoreHistoryField(&note.textEffect, from: old.textEffect, to: new.textEffect)
+        }
+        let strokeChanges = restoreHistoryItems(current.strokes, from: source.strokes, to: target.strokes) { stroke, old, new in
+            restoreHistoryField(&stroke, from: old, to: new)
+        }
+        var next = current
+        next.stickers = stickerChanges.items
+        next.notes = noteChanges.items
+        next.strokes = strokeChanges.items
+        restoreHistoryField(&next.background, from: source.background, to: target.background)
+        restoreHistoryField(&next.blur, from: source.blur, to: target.blur)
+        restoreHistoryField(&next.moodFilter, from: source.moodFilter, to: target.moodFilter)
+        if source.customBackgroundData != target.customBackgroundData || source.customBackgroundURL != target.customBackgroundURL,
+           source.customBackgroundURL == current.customBackgroundURL,
+           source.customBackgroundURL != nil || source.customBackgroundData == current.customBackgroundData {
+            next.customBackgroundData = target.customBackgroundData
+            next.customBackgroundURL = target.customBackgroundURL
+        }
+        guard next != current else { return }
+        applyHistoryState(next)
+
+        let existingStickerIDs = Set(current.stickers.map(\.id))
+        let existingNoteIDs = Set(current.notes.map(\.id))
+        let insertedStickers = stickerChanges.upserts.filter { !existingStickerIDs.contains($0.id) }
+        let insertedNotes = noteChanges.upserts.filter { !existingNoteIDs.contains($0.id) }
+        if !insertedStickers.isEmpty || !insertedNotes.isEmpty {
+            broadcastOp("batch_upsert", payload: .batchUpsert(
+                stickers: insertedStickers.isEmpty ? nil : insertedStickers,
+                notes: insertedNotes.isEmpty ? nil : insertedNotes
+            ))
+        }
+        broadcastElementEdits(since: current)
+        if !stickerChanges.removals.isEmpty || !noteChanges.removals.isEmpty {
+            broadcastOp("batch_delete", payload: .batchDelete(
+                stickerIds: stickerChanges.removals.isEmpty ? nil : stickerChanges.removals,
+                noteIds: noteChanges.removals.isEmpty ? nil : noteChanges.removals
+            ))
+        }
+        for stroke in strokeChanges.upserts {
+            broadcastOp("add_stroke", payload: .addStroke(stroke))
+        }
+        for id in strokeChanges.removals {
+            broadcastOp("delete_stroke", payload: .deleteStroke(id: id))
+        }
+        let backgroundURLChanged = next.customBackgroundURL != current.customBackgroundURL
+        if next.background != current.background || next.blur != current.blur || next.moodFilter != current.moodFilter || backgroundURLChanged {
+            broadcastOp("update_background", payload: CanvasOpPayload(
+                background: next.background == current.background ? nil : next.background.rawValue,
+                blur: next.blur == current.blur ? nil : next.blur,
+                moodFilter: next.moodFilter == current.moodFilter ? nil : next.moodFilter.rawValue,
+                customBackgroundURL: backgroundURLChanged ? next.customBackgroundURL : nil,
+                clearCustomBackgroundURL: backgroundURLChanged && next.customBackgroundURL == nil ? true : nil
+            ))
+        }
+    }
+
+    private func restoreHistoryItems<Item: Identifiable & Equatable>(
+        _ current: [Item], from source: [Item], to target: [Item],
+        restore: (inout Item, Item, Item) -> Void
+    ) -> (items: [Item], upserts: [Item], removals: [Item.ID]) {
+        let sourceByID = Dictionary(uniqueKeysWithValues: source.map { ($0.id, $0) })
+        let targetByID = Dictionary(uniqueKeysWithValues: target.map { ($0.id, $0) })
+        let currentIDs = Set(current.map(\.id))
+        var items: [Item] = []
+        var upserts: [Item] = []
+        var removals: [Item.ID] = []
+        for item in current {
+            var restored = item
+            if let old = sourceByID[item.id] {
+                if let new = targetByID[item.id] {
+                    restore(&restored, old, new)
+                } else if item == old {
+                    removals.append(item.id)
+                    continue
+                }
+            }
+            items.append(restored)
+            if restored != item { upserts.append(restored) }
+        }
+        for item in target where sourceByID[item.id] == nil && !currentIDs.contains(item.id) {
+            items.append(item)
+            upserts.append(item)
+        }
+        return (items, upserts, removals)
+    }
+
+    private func restoreHistoryField<Value: Equatable>(_ current: inout Value, from source: Value, to target: Value) {
+        if source != target && current == source {
+            current = target
+        }
     }
 
     private func moveElements(_ transforms: [CanvasTransformUndo], by offset: CGSize) {
@@ -2958,25 +3503,23 @@ struct MealCanvasView: View {
         let ordered = layerEntries.sorted { $0.layer < $1.layer }
         guard let currentIndex = ordered.firstIndex(where: { $0.selection == selected }) else { return }
 
+        let undoBefore = currentCanvasSnapshot()
         switch move {
         case .front:
             guard currentIndex < ordered.count - 1 else { return }
-            recordUndoSnapshot()
             setLayer((ordered.last?.layer ?? 0) + 1, for: selected)
         case .back:
             guard currentIndex > 0 else { return }
-            recordUndoSnapshot()
             setLayer((ordered.first?.layer ?? 0) - 1, for: selected)
         case .forward, .backward:
             let targetIndex = move == .forward ? currentIndex + 1 : currentIndex - 1
             guard ordered.indices.contains(targetIndex) else { return }
-            recordUndoSnapshot()
             let other = ordered[targetIndex]
             setLayer(other.layer, for: selected)
             setLayer(ordered[currentIndex].layer, for: other.selection)
         }
         saveDocument()
-        broadcastBatchStickersNotes()
+        recordElementEdit(from: undoBefore)
     }
 
     private func setLayer(_ layer: Int, for selection: CanvasSelection) {
@@ -2995,16 +3538,22 @@ struct MealCanvasView: View {
         case .sticker(let id):
             guard let sticker = stickers.first(where: { $0.id == id }) else { return }
             if sticker.mealDishID == nil {
-                recordUndoSnapshot()
+                let removedPos = sticker.position
+                let undoBefore = currentCanvasSnapshot()
+                defer { recordUndoAction(from: undoBefore) }
                 stickers.removeAll { $0.id == id }
                 selectedStickerID = nil
                 closeEditor()
                 saveDocument()
                 broadcastOp("delete_sticker", payload: .deleteSticker(id: id))
+                fx.emitDeletePoof(at: removedPos, in: canvasFrame.size)
+                CanvasSoundEngine.shared.playDeletePoof()
+                Haptics.soft()
                 return
             }
             guard !isRemovingDish,
                   let dish = vm.dishes.first(where: { $0.id == sticker.mealDishID }) else { return }
+            let removedPos = sticker.position
             isRemovingDish = true
             Task {
                 defer { isRemovingDish = false }
@@ -3018,11 +3567,16 @@ struct MealCanvasView: View {
                 if deleted {
                     syncStickers(broadcast: false)
                     broadcastOp("delete_sticker", payload: .deleteSticker(id: id, mealDishID: dish.id))
+                    fx.emitDeletePoof(at: removedPos, in: canvasFrame.size)
+                    CanvasSoundEngine.shared.playDeletePoof()
+                    Haptics.soft()
                 }
             }
         case .note(let id):
-            guard notes.contains(where: { $0.id == id }) else { return }
-            recordUndoSnapshot()
+            guard let existing = notes.first(where: { $0.id == id }) else { return }
+            let removedPos = existing.position
+            let undoBefore = currentCanvasSnapshot()
+            defer { recordUndoAction(from: undoBefore) }
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
                 notes.removeAll { $0.id == id }
                 selectedNoteID = nil
@@ -3030,6 +3584,9 @@ struct MealCanvasView: View {
             closeEditor()
             saveDocument()
             broadcastOp("delete_note", payload: .deleteNote(id: id))
+            fx.emitDeletePoof(at: removedPos, in: canvasFrame.size)
+            CanvasSoundEngine.shared.playDeletePoof()
+            Haptics.soft()
         }
     }
 
@@ -3037,7 +3594,8 @@ struct MealCanvasView: View {
         switch selected {
         case .sticker(let id):
             guard let source = stickers.first(where: { $0.id == id }), source.mealDishID == nil else { return }
-            recordUndoSnapshot()
+            let undoBefore = currentCanvasSnapshot()
+            defer { recordUndoAction(from: undoBefore) }
             let copy = CanvasSticker(
                 mealDishID: nil,
                 name: source.name,
@@ -3056,14 +3614,18 @@ struct MealCanvasView: View {
                 layer: nextLayerIndex
             )
             stickers.append(copy)
+            markFreshStickerArrival(copy.id)
             selectedStickerID = copy.id
             selectedNoteID = nil
             saveDocument()
             broadcastStickerUpsert(id: copy.id)
+            fx.emitDuplicate(at: copy.position, in: canvasFrame.size)
+            CanvasSoundEngine.shared.playDuplicate()
             Haptics.light()
         case .note(let id):
             guard let source = notes.first(where: { $0.id == id }) else { return }
-            recordUndoSnapshot()
+            let undoBefore = currentCanvasSnapshot()
+            defer { recordUndoAction(from: undoBefore) }
             let copy = CanvasNote(
                 text: source.text,
                 isEmoji: source.isEmoji,
@@ -3082,10 +3644,13 @@ struct MealCanvasView: View {
                 emojiAsset: source.emojiAsset
             )
             notes.append(copy)
+            markFreshNoteArrival(copy.id)
             selectedStickerID = nil
             selectedNoteID = copy.id
             saveDocument()
             broadcastNoteUpsert(id: copy.id)
+            fx.emitDuplicate(at: copy.position, in: canvasFrame.size)
+            CanvasSoundEngine.shared.playDuplicate()
             Haptics.light()
         }
     }
@@ -3113,13 +3678,18 @@ struct MealCanvasView: View {
             activeEditor = panel
             isEditing = true
             drawingEnabled = false
-            if panel == .insert, let selectedNoteID, let note = notes.first(where: { $0.id == selectedNoteID }), note.isPlainText {
-                draftText = note.text
-                draftFont = note.font
-                draftColor = note.color
-                draftScale = note.scale
-                draftTextStyle = note.textStyle
-                draftTextEffect = note.textEffect
+            if panel == .insert {
+                let note = selectedTextNote
+                draftNoteID = note?.id
+                originalDraftText = note?.text ?? ""
+                if let note {
+                    draftText = note.text
+                    draftFont = note.font
+                    draftColor = note.color
+                    draftScale = note.scale
+                    draftTextStyle = note.textStyle
+                    draftTextEffect = note.textEffect
+                }
             }
             if panel != .insert {
                 insertMode = nil
@@ -3164,9 +3734,28 @@ struct MealCanvasView: View {
     }
 
     private func actionBarConfirm() {
-        guard !vm.isActing, !isRemovingDish else { return }
+        guard let meal = vm.meal, !vm.isActing, !isRemovingDish, !isConfirmingCanvasAction else { return }
+        if meal.status == .confirmed, backgroundPhotoRequest != nil {
+            showCanvasTip("背景照片正在上传，请完成后再点「吃完了」")
+            return
+        }
+        flushPendingEditorChanges(clearLivePreview: true)
         finishEditing()
-        onConfirm()
+        isConfirmingCanvasAction = true
+        Task { @MainActor in
+            defer { isConfirmingCanvasAction = false }
+            if meal.status == .confirmed {
+                guard await realtime.waitForCanvasSave(mealId: meal.id) else {
+                    showCanvasTip("画布还没同步，请检查网络后再点「吃完了」")
+                    return
+                }
+            }
+            guard vm.meal?.id == meal.id, vm.meal?.status == meal.status else { return }
+            if await onConfirm() {
+                fx.emitCelebrationShower(in: canvasFrame.size)
+                CanvasSoundEngine.shared.playCelebrate()
+            }
+        }
     }
 
     private var hasCanvasAdditions: Bool {
@@ -3209,14 +3798,17 @@ struct MealCanvasView: View {
 
     private func clearCanvasAdditions() {
         guard !notes.isEmpty || !strokes.isEmpty else { return }
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordUndoAction(from: undoBefore) }
         notes.removeAll()
         strokes.removeAll()
         strokeRedoStack.removeAll()
         activeStroke.removeAll()
         selectedNoteID = nil
         saveDocument()
-        broadcastOp("clear_additions", payload: CanvasOpPayload())
+        broadcastOp("batch_delete", payload: .batchDelete(
+            noteIds: undoBefore.notes.map(\.id), strokeIds: undoBefore.strokes.map(\.id)
+        ))
     }
 
     private func undoStroke() {
@@ -3224,6 +3816,7 @@ struct MealCanvasView: View {
         strokeRedoStack.append(last)
         saveDocument()
         broadcastOp("delete_stroke", payload: .deleteStroke(id: last.id))
+        CanvasSoundEngine.shared.playUndo()
         Haptics.light()
     }
 
@@ -3232,23 +3825,27 @@ struct MealCanvasView: View {
         strokes.append(restored)
         saveDocument()
         broadcastOp("add_stroke", payload: .addStroke(restored))
+        CanvasSoundEngine.shared.playRedo()
         Haptics.light()
     }
 
     private func clearStrokes() {
         guard !strokes.isEmpty else { return }
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordUndoAction(from: undoBefore) }
         strokes.removeAll()
         strokeRedoStack.removeAll()
         activeStroke.removeAll()
         saveDocument()
-        broadcastOp("clear_strokes", payload: CanvasOpPayload())
+        broadcastOp("batch_delete", payload: .batchDelete(strokeIds: undoBefore.strokes.map(\.id)))
+        CanvasSoundEngine.shared.playDeletePoof()
         Haptics.light()
     }
 
     private func applyNextSmartLayout() {
         guard !stickers.isEmpty else { return }
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordElementEdit(from: undoBefore) }
         let preset = CanvasLayoutPreset.allCases[layoutPresetIndex % CanvasLayoutPreset.allCases.count]
         layoutPresetIndex += 1
         let orderedIndices = stickers.indices.sorted { lhs, rhs in
@@ -3267,8 +3864,9 @@ struct MealCanvasView: View {
             }
         }
         saveDocument()
-        broadcastBatchStickersNotes(includeStickers: true, includeNotes: false)
-        Haptics.light()
+        fx.emitLayoutWave(positions: stickers.map(\.position), in: canvasFrame.size)
+        CanvasSoundEngine.shared.playLayoutShuffle()
+        Haptics.medium()
         showCanvasTip("已切换排版：\(preset.title)")
     }
 
@@ -3316,7 +3914,8 @@ struct MealCanvasView: View {
     }
 
     private func insertText(_ text: String) {
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordUndoAction(from: undoBefore) }
         let note = CanvasNote(
             text: text,
             isEmoji: false,
@@ -3329,77 +3928,85 @@ struct MealCanvasView: View {
             textStyle: draftTextStyle
         )
         notes.append(note)
+        markFreshNoteArrival(note.id)
         selectedStickerID = nil
         selectedNoteID = note.id
         saveDocument()
         broadcastNoteUpsert(id: note.id)
+        fx.emitTextPlace(at: note.position, in: canvasFrame.size, color: draftColor.color)
+        CanvasSoundEngine.shared.playTextPlace()
+        Haptics.light()
     }
 
     private func setSelectedNoteScale(_ scale: CGFloat) {
         guard let selectedNoteID, let index = notes.firstIndex(where: { $0.id == selectedNoteID }), notes[index].isPlainText else { return }
         guard notes[index].scale != scale else { return }
-        rememberTransform(for: .note(selectedNoteID))
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordElementEdit(from: undoBefore) }
         withAnimation(.spring(response: 0.30, dampingFraction: 0.76)) {
             notes[index].scale = scale
         }
         saveDocument()
-        broadcastNoteUpsert(id: selectedNoteID)
     }
 
     private func setSelectedNoteFont(_ font: CanvasTextFont) {
         guard let selectedNoteID, let index = notes.firstIndex(where: { $0.id == selectedNoteID }), notes[index].isPlainText else { return }
         guard notes[index].font != font else { return }
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordElementEdit(from: undoBefore) }
         notes[index].font = font
         saveDocument()
-        broadcastNoteUpsert(id: selectedNoteID)
     }
 
     private func setSelectedNoteColor(_ color: CanvasTextColor) {
         guard let selectedNoteID, let index = notes.firstIndex(where: { $0.id == selectedNoteID }), notes[index].isPlainText else { return }
         guard notes[index].color != color else { return }
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordElementEdit(from: undoBefore) }
         notes[index].color = color
         saveDocument()
-        broadcastNoteUpsert(id: selectedNoteID)
     }
 
     private func setSelectedNoteStyle(_ style: CanvasTextStyle) {
         guard let selectedNoteID, let index = notes.firstIndex(where: { $0.id == selectedNoteID }), notes[index].isPlainText else { return }
         guard notes[index].textStyle != style else { return }
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordElementEdit(from: undoBefore) }
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.16)) {
             notes[index].textStyle = style
         }
         saveDocument()
-        broadcastNoteUpsert(id: selectedNoteID)
     }
 
     private func setSelectedNoteEffect(_ effect: CanvasTextEffect) {
         guard let selectedNoteID, let index = notes.firstIndex(where: { $0.id == selectedNoteID }), notes[index].isPlainText else { return }
         guard notes[index].textEffect != effect else { return }
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordElementEdit(from: undoBefore) }
         withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.76)) {
             notes[index].textEffect = effect
         }
         saveDocument()
-        broadcastNoteUpsert(id: selectedNoteID)
+        let accent = background.isLightSurface ? CanvasPalette.accent : notes[index].color.color
+        fx.emitEffectApplied(at: notes[index].position, in: canvasFrame.size, accent: accent)
+        CanvasSoundEngine.shared.playEffectSparkle()
     }
 
     private func commitDraftText() {
         let value = draftText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        if let selectedNoteID, let index = notes.firstIndex(where: { $0.id == selectedNoteID }), notes[index].isPlainText {
-            recordUndoSnapshot()
-            withAnimation(.spring(response: 0.32, dampingFraction: 0.76)) {
-                notes[index].text = value
-                notes[index].font = draftFont
-                notes[index].color = draftColor
-                notes[index].textStyle = draftTextStyle
-                notes[index].textEffect = draftTextEffect
+        if let draftNoteID {
+            if value != originalDraftText.trimmingCharacters(in: .whitespacesAndNewlines),
+               let index = notes.firstIndex(where: { $0.id == draftNoteID }), notes[index].isPlainText {
+                let undoBefore = currentCanvasSnapshot()
+                withAnimation(.spring(response: 0.32, dampingFraction: 0.76)) {
+                    notes[index].text = value
+                }
+                saveDocument()
+                recordElementEdit(from: undoBefore)
+                fx.emitTextPlace(at: notes[index].position, in: canvasFrame.size, color: notes[index].color.color)
+                CanvasSoundEngine.shared.playTextPlace()
             }
-            saveDocument()
-            broadcastNoteUpsert(id: selectedNoteID)
         } else {
             insertText(value)
         }
@@ -3408,29 +4015,34 @@ struct MealCanvasView: View {
     }
 
     private func clearEmojiStickers() {
-        guard notes.contains(where: { $0.isEmoji }) else { return }
-        recordUndoSnapshot()
+        let removedIDs = notes.filter { $0.isEmoji }.map(\.id)
+        guard !removedIDs.isEmpty else { return }
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordUndoAction(from: undoBefore) }
         notes.removeAll { $0.isEmoji }
         if let selectedNoteID, !notes.contains(where: { $0.id == selectedNoteID }) {
             self.selectedNoteID = nil
         }
         saveDocument()
-        broadcastBatchStickersNotes(includeStickers: false, includeNotes: true)
+        broadcastOp("batch_delete", payload: .batchDelete(noteIds: removedIDs))
     }
 
     private func clearDoodleStickers() {
-        guard notes.contains(where: { $0.isDoodle }) else { return }
-        recordUndoSnapshot()
+        let removedIDs = notes.filter { $0.isDoodle }.map(\.id)
+        guard !removedIDs.isEmpty else { return }
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordUndoAction(from: undoBefore) }
         notes.removeAll { $0.isDoodle }
         if let selectedNoteID, !notes.contains(where: { $0.id == selectedNoteID }) {
             self.selectedNoteID = nil
         }
         saveDocument()
-        broadcastBatchStickersNotes(includeStickers: false, includeNotes: true)
+        broadcastOp("batch_delete", payload: .batchDelete(noteIds: removedIDs))
     }
 
     private func insertDoodle(_ kind: CanvasDoodleKind) {
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordUndoAction(from: undoBefore) }
         let note = CanvasNote(
             text: kind.title,
             isEmoji: false,
@@ -3445,14 +4057,19 @@ struct MealCanvasView: View {
             doodle: kind
         )
         notes.append(note)
+        markFreshNoteArrival(note.id)
         selectedStickerID = nil
         selectedNoteID = note.id
         saveDocument()
         broadcastNoteUpsert(id: note.id)
+        fx.emitDoodleStamp(at: note.position, in: canvasFrame.size, color: doodleColor.color)
+        CanvasSoundEngine.shared.playDoodleStamp()
+        Haptics.rigid()
     }
 
     private func insertEmoji(_ item: CanvasCustomEmoji) {
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordUndoAction(from: undoBefore) }
         let note = CanvasNote(
             text: item.title,
             isEmoji: true,
@@ -3461,31 +4078,41 @@ struct MealCanvasView: View {
             emojiAsset: item.assetName
         )
         notes.append(note)
+        markFreshNoteArrival(note.id)
         selectedStickerID = nil
         selectedNoteID = note.id
         saveDocument()
         broadcastNoteUpsert(id: note.id)
+        fx.emitEmojiPop(at: note.position, in: canvasFrame.size, assetID: item.id)
+        CanvasSoundEngine.shared.playEmojiPop()
+        Haptics.medium()
     }
 
     private func insertPhotoSticker(_ path: String, name: String = "拍照贴图") {
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordUndoAction(from: undoBefore) }
         let isPNG = path.lowercased().hasSuffix(".png")
         let sticker = CanvasSticker(
             name: name, image: path, isCutout: isPNG,
             position: insertionPosition(isEmoji: true), layer: nextLayerIndex
         )
         stickers.append(sticker)
+        markFreshStickerArrival(sticker.id)
         finishSelecting()
         selectedStickerID = sticker.id
         selectedNoteID = nil
         saveDocument()
         broadcastStickerUpsert(id: sticker.id)
-        Haptics.light()
+        fx.emitCutoutMagic(at: sticker.position, in: canvasFrame.size)
+        CanvasSoundEngine.shared.playCutoutMagic()
+        Haptics.popSequence()
     }
 
     @MainActor
     private func createStickerFromAlbumPhoto(_ item: PhotosPickerItem) async {
         guard !isCreatingAlbumSticker else { return }
+        let targetMealID = vm.meal?.id
+        let wasLaunchStudio = isLaunchStudio
         isCreatingAlbumSticker = true
         defer {
             isCreatingAlbumSticker = false
@@ -3511,6 +4138,8 @@ struct MealCanvasView: View {
             }
             let saved = try await StickerFavoriteService.shared.save(image: uploaded.path)
             rememberStickerFavorite(saved)
+            guard isLaunchStudio == wasLaunchStudio,
+                  wasLaunchStudio || vm.meal?.id == targetMealID else { return }
             insertPhotoSticker(saved.image, name: usedCutout ? "相册贴图" : "照片贴图")
             showCanvasTip(usedCutout ? "抠图完成，已贴上画布并收藏" : "已按照片做成贴纸并收藏")
         } catch {
@@ -3596,6 +4225,9 @@ struct MealCanvasView: View {
     }
 
     private func syncStickers(broadcast: Bool = false, preserveUnknownRemoteDishes: Bool = false) {
+        let now = Date()
+        recentlyAddedRemoteDishIDs = recentlyAddedRemoteDishIDs.filter { now.timeIntervalSince($0.value) < 6 }
+
         let customStickers = stickers.filter { $0.mealDishID == nil }
         let existing = Dictionary(uniqueKeysWithValues: stickers.compactMap { sticker in
             sticker.mealDishID.map { ($0, sticker) }
@@ -3608,10 +4240,14 @@ struct MealCanvasView: View {
         var newLayer = nextLayerIndex
         var occupiedStickers = customStickers + existing.values
         var resultStickers = customStickers
-        if preserveUnknownRemoteDishes {
-            resultStickers.append(contentsOf: removedDishStickers)
+        var preservedUnknown: [CanvasSticker] = []
+        for removed in removedDishStickers {
+            if let did = removed.mealDishID,
+               preserveUnknownRemoteDishes || recentlyAddedRemoteDishIDs[did] != nil {
+                resultStickers.append(removed)
+                preservedUnknown.append(removed)
+            }
         }
-        var newlyCreated: [(sticker: CanvasSticker, addedBy: UInt?)] = []
         for (index, dish) in vm.dishes.enumerated() {
             let cutout = dish.recipeCutoutImage.flatMap { $0.isEmpty ? nil : $0 }
             if var old = existing[dish.id] {
@@ -3642,7 +4278,6 @@ struct MealCanvasView: View {
                 )
                 occupiedStickers.append(created)
                 resultStickers.append(created)
-                newlyCreated.append((sticker: created, addedBy: dish.addedBy))
             }
         }
         stickers = resultStickers
@@ -3651,18 +4286,23 @@ struct MealCanvasView: View {
         }
         saveDocument()
 
-        if preserveUnknownRemoteDishes && !removedDishStickers.isEmpty {
-            onRemoteMealSync?()
+        if !preservedUnknown.isEmpty {
+            onRemoteMealSync?("dish_missing")
         }
 
+        // 不在本地轮询差集里反向广播 delete_sticker，避免旧列表误删同伴刚加的菜；删除只由删菜按钮或服务端广播驱动
         if broadcast && !isLaunchStudio && !isApplyingRemoteUpdate && hasReceivedWelcome {
-            let myUserID = appState.currentUser?.id
-            for item in newlyCreated where item.addedBy == nil || myUserID == nil || item.addedBy == myUserID {
-                broadcastOp("upsert_sticker", payload: .upsertSticker(item.sticker))
+            for sticker in resultStickers {
+                if let dishID = sticker.mealDishID, currentDishIDs.contains(dishID) {
+                    queueDishStickerIfNeeded(sticker, dishID: dishID)
+                }
             }
-            for removed in removedDishStickers {
-                broadcastOp("delete_sticker", payload: .deleteSticker(id: removed.id, mealDishID: removed.mealDishID))
-            }
+        }
+    }
+
+    private func queueDishStickerIfNeeded(_ sticker: CanvasSticker, dishID: UInt) {
+        if queuedDishStickerIDs.insert(dishID).inserted {
+            broadcastOp("upsert_sticker", payload: .upsertSticker(sticker))
         }
     }
 
@@ -3675,40 +4315,55 @@ struct MealCanvasView: View {
         guard let selectedStickerID,
               let index = stickers.firstIndex(where: { $0.id == selectedStickerID }),
               stickers[index].effect != effect else { return }
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordElementEdit(from: undoBefore) }
         withAnimation(.spring(response: 0.34, dampingFraction: 0.72)) {
             stickers[index].effect = effect
         }
         saveDocument()
-        broadcastStickerUpsert(id: selectedStickerID)
+        let accent = background.isLightSurface ? CanvasPalette.accent : Color(red: 1.0, green: 0.88, blue: 0.52)
+        fx.emitEffectApplied(at: stickers[index].position, in: canvasFrame.size, accent: accent)
+        CanvasSoundEngine.shared.playEffectSparkle()
+        Haptics.selection()
     }
 
     private func applyStickerStyle(_ style: CanvasStickerStyle) {
         guard let selectedStickerID,
               let index = stickers.firstIndex(where: { $0.id == selectedStickerID }),
               stickers[index].style != style else { return }
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordElementEdit(from: undoBefore) }
         withAnimation(.spring(response: 0.30, dampingFraction: 0.78)) {
             stickers[index].style = style
         }
         saveDocument()
-        broadcastStickerUpsert(id: selectedStickerID)
+        let accent = style == .crystal
+            ? Color(red: 0.72, green: 0.90, blue: 1.00)
+            : (background.isLightSurface ? CanvasPalette.accent : .white)
+        fx.emitEffectApplied(at: stickers[index].position, in: canvasFrame.size, accent: accent)
+        CanvasSoundEngine.shared.playEffectSparkle()
+        Haptics.selection()
     }
 
     private func applyTextEffect(_ effect: CanvasTextEffect) {
         guard let selectedNoteID,
               let index = notes.firstIndex(where: { $0.id == selectedNoteID }),
               notes[index].textEffect != effect else { return }
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordElementEdit(from: undoBefore) }
         withAnimation(.spring(response: 0.34, dampingFraction: 0.72)) {
             notes[index].textEffect = effect
         }
         saveDocument()
-        broadcastNoteUpsert(id: selectedNoteID)
+        let accent = background.isLightSurface ? CanvasPalette.accent : notes[index].color.color
+        fx.emitEffectApplied(at: notes[index].position, in: canvasFrame.size, accent: accent)
+        CanvasSoundEngine.shared.playEffectSparkle()
+        Haptics.selection()
     }
 
     private func activateAllLiveMotion() {
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordElementEdit(from: undoBefore) }
         withAnimation(.spring(response: 0.34, dampingFraction: 0.78)) {
             liveMotionEnabled = true
             for index in stickers.indices where !stickers[index].effect.isAnimated {
@@ -3719,8 +4374,86 @@ struct MealCanvasView: View {
             }
         }
         saveDocument()
-        broadcastBatchStickersNotes()
+        fx.emitCelebrationShower(in: canvasFrame.size)
+        CanvasSoundEngine.shared.playCelebrate()
+        Haptics.success()
         showCanvasTip("画布已进入实况微动模式")
+    }
+
+    private func toggleSoundFX() {
+        soundEngine.isEnabled.toggle()
+        Haptics.selection()
+        if soundEngine.isEnabled {
+            soundEngine.playEffectSparkle()
+        }
+        showCanvasTip(soundEngine.isEnabled ? "已开启创作音效" : "已关闭创作音效")
+    }
+
+    private func markFreshStickerArrival(_ id: UUID) {
+        justInsertedStickerIDs.insert(id)
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(0.95))
+            justInsertedStickerIDs.remove(id)
+        }
+    }
+
+    private func markFreshNoteArrival(_ id: UUID) {
+        justInsertedNoteIDs.insert(id)
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(0.95))
+            justInsertedNoteIDs.remove(id)
+        }
+    }
+
+    private func triggerDishArrivalFX(for ids: [UUID]) {
+        guard !ids.isEmpty else { return }
+        if ids.count == 1, let id = ids.first, let sticker = stickers.first(where: { $0.id == id }) {
+            markFreshStickerArrival(id)
+            fx.emitDishPlated(at: sticker.position, in: canvasFrame.size)
+            CanvasSoundEngine.shared.playDishPlated(comboIndex: dishComboCount)
+            dishComboCount &+= 1
+            Haptics.popSequence()
+            return
+        }
+        Task { @MainActor in
+            for (idx, id) in ids.enumerated() {
+                if idx > 0 {
+                    try? await Task.sleep(for: .milliseconds(110))
+                }
+                guard let sticker = stickers.first(where: { $0.id == id }) else { continue }
+                markFreshStickerArrival(id)
+                fx.emitDishPlated(at: sticker.position, in: canvasFrame.size)
+                CanvasSoundEngine.shared.playDishPlated(comboIndex: dishComboCount)
+                dishComboCount &+= 1
+                Haptics.popSequence()
+            }
+        }
+    }
+
+    private func flushPendingDishReveals() {
+        let queue = pendingDishRevealIDs
+        pendingDishRevealIDs.removeAll()
+        guard !queue.isEmpty else { return }
+        dishRevealTask?.cancel()
+        dishRevealTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(160))
+            guard !Task.isCancelled else { return }
+            for (idx, id) in queue.enumerated() {
+                if idx > 0 {
+                    try? await Task.sleep(for: .milliseconds(110))
+                }
+                guard !Task.isCancelled else { return }
+                withAnimation(reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.68)) {
+                    _ = waitingRevealStickerIDs.remove(id)
+                }
+                guard let sticker = stickers.first(where: { $0.id == id }) else { continue }
+                markFreshStickerArrival(id)
+                fx.emitDishPlated(at: sticker.position, in: canvasFrame.size)
+                CanvasSoundEngine.shared.playDishPlated(comboIndex: dishComboCount)
+                dishComboCount &+= 1
+                Haptics.popSequence()
+            }
+        }
     }
 
     private func makeStarterDateNote(layer: Int) -> CanvasNote {
@@ -3867,25 +4600,205 @@ struct MealCanvasView: View {
         }
     }
 
+    @ViewBuilder
+    private func coverPromptPill(_ prompt: (recipeId: UInt, dishName: String, image: String, cutoutImage: String?)) -> some View {
+        HStack(spacing: 8) {
+            Text("已换成今天这盘")
+                .font(.system(size: 12.5, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.white.opacity(0.92))
+            Button {
+                Task { await promoteCover(prompt) }
+            } label: {
+                HStack(spacing: 4) {
+                    if isSettingCover {
+                        ProgressView().tint(CanvasPalette.obsidianInk).controlSize(.mini)
+                    }
+                    Text("设为菜谱封面")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(CanvasPalette.obsidianInk)
+                .padding(.horizontal, 10)
+                .frame(height: 26)
+                .background(Color.white, in: Capsule())
+            }
+            .buttonStyle(CanvasPressStyle(scale: 0.94))
+            .disabled(isSettingCover)
+
+            Button {
+                coverPromptTask?.cancel()
+                withAnimation(.easeOut(duration: 0.2)) {
+                    coverPrompt = nil
+                }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Color.white.opacity(0.72))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭提示")
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 8)
+        .padding(.vertical, 7)
+        .background(CanvasPalette.obsidianInk.opacity(0.90), in: Capsule())
+        .overlay {
+            Capsule().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.7)
+        }
+        .shadow(color: Color.black.opacity(0.24), radius: 12, y: 5)
+    }
+
+    private func applyReplacedDishPhoto(_ result: DishPhotoApplyResult) {
+        let updatedDish = result.updatedDish
+        if var list = vm.meal?.dishes,
+           let dishIndex = list.firstIndex(where: { $0.id == updatedDish.id }) {
+            list[dishIndex] = updatedDish
+            vm.meal?.dishes = list
+        }
+
+        if let idx = stickers.firstIndex(where: { $0.mealDishID == updatedDish.id }) {
+            let cutout = updatedDish.recipeCutoutImage.flatMap { $0.isEmpty ? nil : $0 }
+            let targetImage = cutout ?? updatedDish.recipeImage
+            stickers[idx].image = targetImage
+            stickers[idx].isCutout = (cutout != nil)
+            saveDocument()
+            Haptics.success()
+        }
+
+        if let rid = updatedDish.recipeId,
+           let img = updatedDish.recipeImage, !img.isEmpty,
+           !result.isAlreadyCover {
+            coverPromptTask?.cancel()
+            withAnimation(.spring(response: 0.30, dampingFraction: 0.84)) {
+                coverPrompt = (rid, updatedDish.recipeName, img, updatedDish.recipeCutoutImage)
+            }
+            coverPromptTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(4.5))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.2)) {
+                    coverPrompt = nil
+                }
+            }
+        } else {
+            coverPromptTask?.cancel()
+            coverPrompt = nil
+            showCanvasTip(result.isAlreadyCover ? "已恢复菜谱默认图" : "已换成本顿实拍")
+        }
+    }
+
+    @MainActor
+    private func promoteCover(_ prompt: (recipeId: UInt, dishName: String, image: String, cutoutImage: String?)) async {
+        guard !isSettingCover else { return }
+        isSettingCover = true
+        coverPromptTask?.cancel()
+        defer { isSettingCover = false }
+        do {
+            _ = try await RecipeService.shared.setCover(
+                id: prompt.recipeId,
+                image: prompt.image,
+                cutoutImage: prompt.cutoutImage
+            )
+            withAnimation(.easeOut(duration: 0.2)) {
+                coverPrompt = nil
+            }
+            Haptics.success()
+            showCanvasTip("已设为「\(prompt.dishName)」默认封面")
+        } catch {
+            showCanvasTip(error.localizedDescription)
+        }
+    }
+
     private func restoreLaunchStudioIfNeeded() {
         guard isLaunchStudio, !hasLoadedStudio else { return }
         hasLoadedStudio = true
         launchConfig = LaunchCurtainStore.load()
-        applyLaunchCanvasPayload(LaunchCanvasStore.loadOrDefaultPayload(), recordUndo: false)
+        creatorMeta = LaunchCanvasStore.loadCreatorMeta()
+        loadStudioDocument(for: launchConfig.source, recordUndo: false)
+        toolsExpanded = !isReadOnlyCreatorPreview
+        undoStack.removeAll()
+        redoStack.removeAll()
+        Task {
+            await appState.refreshHousehold()
+            await appState.refreshHouseholdLaunchCanvas()
+        }
+    }
+
+    private func loadStudioDocument(for source: LaunchCurtainSource, recordUndo: Bool) {
+        switch source {
+        case .householdCreator:
+            if let creatorPayload = LaunchCanvasStore.loadCreatorPayload() {
+                applyLaunchCanvasPayload(creatorPayload, recordUndo: recordUndo)
+                if !recordUndo, isHouseholdCreator, let meta = LaunchCanvasStore.loadCreatorMeta(), meta.hasCustom {
+                    let normalizedMotion = meta.motion == "polaroidDrop" ? "softReveal" : meta.motion
+                    if let m = LaunchCurtainMotion(rawValue: normalizedMotion) {
+                        launchConfig.motion = m
+                    }
+                    if let s = LaunchHoldSpeed(rawValue: meta.holdSpeed) {
+                        launchConfig.holdSpeed = s
+                    }
+                }
+            } else {
+                applyLaunchCanvasPayload(LaunchCanvasStore.makeTemplatePayload(.morningTable), recordUndo: recordUndo)
+            }
+        case .personal:
+            applyLaunchCanvasPayload(LaunchCanvasStore.loadPersonalPayloadOrDefault(), recordUndo: recordUndo)
+        }
+    }
+
+    private func switchLaunchSource(to newSource: LaunchCurtainSource) {
+        guard newSource != launchConfig.source else { return }
+        finishEditing()
+        if launchConfig.source == .personal {
+            LaunchCanvasStore.save(LaunchCanvasDocumentPayload(document: currentDocumentSnapshot()))
+        }
+        launchConfig.source = newSource
+        loadStudioDocument(for: newSource, recordUndo: false)
+        toolsExpanded = !isReadOnlyCreatorPreview
+        undoStack.removeAll()
+        redoStack.removeAll()
+        showCanvasTip(newSource == .householdCreator ? "已切换到家庭共享开屏" : "已切换到个人 DIY 开屏")
+    }
+
+    private func forkCreatorLaunchToPersonalDIY() {
+        finishEditing()
+        let copyDoc = currentDocumentSnapshot()
+        LaunchCanvasStore.save(LaunchCanvasDocumentPayload(document: copyDoc))
+        launchConfig.source = .personal
+        launchConfig.motion = effectiveLaunchMotion
+        launchConfig.holdSpeed = effectiveLaunchHoldSpeed
         toolsExpanded = true
         undoStack.removeAll()
         redoStack.removeAll()
+        Haptics.light()
+        showCanvasTip("已复制到个人 DIY，可自由修改")
+    }
+
+    private func refreshCreatorMetaAndPreviewIfNeeded() {
+        let latestMeta = LaunchCanvasStore.loadCreatorMeta()
+        creatorMeta = latestMeta
+        if launchConfig.source == .householdCreator && (isReadOnlyCreatorPreview || undoStack.isEmpty) {
+            if let creatorPayload = LaunchCanvasStore.loadCreatorPayload() {
+                applyLaunchCanvasPayload(creatorPayload, recordUndo: false)
+                if isHouseholdCreator, let latestMeta, latestMeta.hasCustom {
+                    let normalizedMotion = latestMeta.motion == "polaroidDrop" ? "softReveal" : latestMeta.motion
+                    if let m = LaunchCurtainMotion(rawValue: normalizedMotion) { launchConfig.motion = m }
+                    if let s = LaunchHoldSpeed(rawValue: latestMeta.holdSpeed) { launchConfig.holdSpeed = s }
+                }
+            }
+        }
     }
 
     private func applyLaunchCanvasPayload(_ payload: LaunchCanvasDocumentPayload, recordUndo: Bool) {
-        if recordUndo {
-            recordUndoSnapshot()
+        let undoBefore = recordUndo ? currentCanvasSnapshot() : nil
+        defer {
+            if let undoBefore { recordUndoAction(from: undoBefore) }
         }
         let doc = payload.document
         background = CanvasBackground(rawValue: doc.background) ?? .morningTable
         blur = doc.blur
         moodFilter = doc.moodFilter
         customBackgroundData = doc.customBackgroundData
+        customBackgroundURL = doc.customBackgroundURL
         stickers = doc.stickers
         notes = doc.notes
         strokes = doc.strokes
@@ -3903,6 +4816,8 @@ struct MealCanvasView: View {
     private func applyLaunchTemplate(_ template: LaunchCanvasTemplate) {
         let payload = LaunchCanvasStore.makeTemplatePayload(template)
         applyLaunchCanvasPayload(payload, recordUndo: true)
+        fx.emitBackgroundPulse(in: canvasFrame.size, isLight: background.isLightSurface)
+        CanvasSoundEngine.shared.playBackgroundWhoosh()
         Haptics.light()
         showCanvasTip("已套用「\(template.title)」模板")
     }
@@ -3918,7 +4833,8 @@ struct MealCanvasView: View {
 
     private func clearLaunchCanvasAdditions() {
         guard !stickers.isEmpty || !notes.isEmpty || !strokes.isEmpty else { return }
-        recordUndoSnapshot()
+        let undoBefore = currentCanvasSnapshot()
+        defer { recordUndoAction(from: undoBefore) }
         stickers.removeAll()
         notes.removeAll()
         strokes.removeAll()
@@ -3932,8 +4848,48 @@ struct MealCanvasView: View {
 
     private func saveLaunchStudioAndDismiss() {
         finishEditing()
-        LaunchCanvasStore.save(LaunchCanvasDocumentPayload(document: currentDocumentSnapshot()))
+        if launchConfig.source == .householdCreator && isHouseholdCreator {
+            guard !isSavingLaunch else { return }
+            isSavingLaunch = true
+            let motionRaw = launchConfig.motion.rawValue
+            let holdSpeedRaw = launchConfig.holdSpeed.rawValue
+            var snapshot = currentDocumentSnapshot()
+            Task { @MainActor in
+                defer { isSavingLaunch = false }
+                do {
+                    if background == .custom,
+                       let bgData = snapshot.customBackgroundData,
+                       (snapshot.customBackgroundURL ?? "").isEmpty {
+                        let uploaded = try await UploadService.shared.uploadImage(bgData, filename: "launch_bg.jpg", mime: "image/jpeg")
+                        snapshot.customBackgroundURL = uploaded.path
+                        customBackgroundURL = uploaded.path
+                    }
+                    let resp = try await HouseholdService.shared.saveLaunchCanvas(
+                        SaveLaunchCanvasRequest(
+                            document: snapshot.networkSanitized(),
+                            motion: motionRaw,
+                            holdSpeed: holdSpeedRaw
+                        )
+                    )
+                    LaunchCanvasStore.saveCreatorCache(resp, hydratedDocument: snapshot)
+                    creatorMeta = LaunchCanvasStore.loadCreatorMeta()
+                    LaunchCurtainStore.save(launchConfig)
+                    AppNotifications.launchCanvasChanged()
+                    CanvasSoundEngine.shared.playCelebrate()
+                    Haptics.success()
+                    onCloseLaunchStudio?()
+                } catch {
+                    showCanvasTip(error.localizedDescription)
+                }
+            }
+            return
+        }
+        if launchConfig.source == .personal {
+            LaunchCanvasStore.save(LaunchCanvasDocumentPayload(document: currentDocumentSnapshot()))
+        }
         LaunchCurtainStore.save(launchConfig)
+        AppNotifications.launchCanvasChanged()
+        CanvasSoundEngine.shared.playCelebrate()
         Haptics.success()
         onCloseLaunchStudio?()
     }
@@ -3990,6 +4946,7 @@ struct MealCanvasView: View {
                 customBackgroundData = nil
             }
             stickers = doc.stickers
+            queuedDishStickerIDs.formUnion(doc.stickers.compactMap(\.mealDishID))
             notes = doc.notes
             strokes = doc.strokes
             reportLightSurface(background.isLightSurface)
@@ -4003,6 +4960,10 @@ struct MealCanvasView: View {
         switch kind {
         case "upsert_sticker":
             guard let incoming = payload.sticker else { return }
+            if let dishID = incoming.mealDishID {
+                queuedDishStickerIDs.insert(dishID)
+                recentlyAddedRemoteDishIDs[dishID] = Date()
+            }
             if let idx = stickers.firstIndex(where: {
                 $0.id == incoming.id
                     || (incoming.mealDishID != nil && $0.mealDishID == incoming.mealDishID)
@@ -4053,14 +5014,6 @@ struct MealCanvasView: View {
             } else if !strokes.isEmpty {
                 strokes.removeLast()
             }
-        case "clear_strokes":
-            strokes.removeAll()
-            strokeRedoStack.removeAll()
-        case "clear_additions":
-            notes.removeAll()
-            strokes.removeAll()
-            strokeRedoStack.removeAll()
-            selectedNoteID = nil
         case "update_background":
             if let bgRaw = payload.background, let bg = CanvasBackground(rawValue: bgRaw) {
                 background = bg
@@ -4094,6 +5047,69 @@ struct MealCanvasView: View {
             if let selectedNoteID, !notes.contains(where: { $0.id == selectedNoteID }) {
                 self.selectedNoteID = nil
             }
+        case "batch_upsert":
+            if let incomingStickers = payload.stickers {
+                for incoming in incomingStickers {
+                    if let dishID = incoming.mealDishID {
+                        recentlyAddedRemoteDishIDs[dishID] = Date()
+                    }
+                    if let idx = stickers.firstIndex(where: {
+                        $0.id == incoming.id
+                            || (incoming.mealDishID != nil && $0.mealDishID == incoming.mealDishID)
+                    }) {
+                        let oldID = stickers[idx].id
+                        stickers[idx] = incoming
+                        if selectedStickerID == oldID {
+                            selectedStickerID = incoming.id
+                        }
+                    } else {
+                        stickers.append(incoming)
+                    }
+                }
+            }
+            if let incomingNotes = payload.notes {
+                for incoming in incomingNotes {
+                    if let idx = notes.firstIndex(where: { $0.id == incoming.id }) {
+                        notes[idx] = incoming
+                    } else {
+                        notes.append(incoming)
+                    }
+                }
+            }
+        case "patch_elements":
+            for patch in payload.stickerPatches ?? [] {
+                if let index = stickers.firstIndex(where: { sticker in
+                    if let dishID = patch.mealDishID { return sticker.mealDishID == dishID }
+                    return sticker.id == patch.id
+                }) {
+                    patch.apply(to: &stickers[index])
+                }
+            }
+            for patch in payload.notePatches ?? [] {
+                if let index = notes.firstIndex(where: { $0.id == patch.id }) {
+                    patch.apply(to: &notes[index])
+                }
+            }
+        case "batch_delete":
+            if let targetStickerIDs = payload.stickerIds, !targetStickerIDs.isEmpty {
+                let idSet = Set(targetStickerIDs.map { $0.lowercased() })
+                stickers.removeAll { idSet.contains($0.id.uuidString.lowercased()) }
+                if let selectedStickerID, !stickers.contains(where: { $0.id == selectedStickerID }) {
+                    self.selectedStickerID = nil
+                }
+            }
+            if let targetNoteIDs = payload.noteIds, !targetNoteIDs.isEmpty {
+                let idSet = Set(targetNoteIDs.map { $0.lowercased() })
+                notes.removeAll { idSet.contains($0.id.uuidString.lowercased()) }
+                if let selectedNoteID, !notes.contains(where: { $0.id == selectedNoteID }) {
+                    self.selectedNoteID = nil
+                }
+            }
+            if let targetStrokeIDs = payload.strokeIds, !targetStrokeIDs.isEmpty {
+                let idSet = Set(targetStrokeIDs.map { $0.lowercased() })
+                strokes.removeAll { idSet.contains($0.id.uuidString.lowercased()) }
+                strokeRedoStack.removeAll { idSet.contains($0.id.uuidString.lowercased()) }
+            }
         case "replace_document":
             if let doc = payload.document {
                 let urlChanged = doc.customBackgroundURL != customBackgroundURL
@@ -4119,59 +5135,111 @@ struct MealCanvasView: View {
         selectedElements.formIntersection(Set(layerEntries.map(\.selection)))
     }
 
+    private func flushPendingEditorChanges(clearLivePreview: Bool = false) {
+        guard !isLaunchStudio else { return }
+        if blurDirtyForSync {
+            broadcastBlurUpdate()
+        }
+        if transformEditorHasChanges {
+            commitTransformEditorSync()
+        }
+        if clearLivePreview {
+            realtime.sendLivePreview(targetKind: "clear", targetId: "")
+        }
+        saveDocument()
+    }
+
+    private func scheduleHTTPFallbackFetch(mealID: UInt) {
+        guard !isLaunchStudio else { return }
+        fallbackCanvasFetchTask?.cancel()
+        fallbackCanvasFetchTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.2))
+            guard !Task.isCancelled, !isLaunchStudio, vm.meal?.id == mealID, !hasReceivedWelcome else { return }
+            guard let resp = try? await MealService.shared.fetchCanvas(mealId: mealID),
+                  resp.revision > realtime.currentRevision,
+                  let remoteDoc = resp.document else {
+                return
+            }
+            guard !Task.isCancelled, !hasReceivedWelcome, vm.meal?.id == mealID else { return }
+            realtime.currentRevision = resp.revision
+            applyRemoteDocument(remoteDoc)
+            applyRemoteState { applyPendingCanvasOps() }
+            syncStickers(broadcast: false, preserveUnknownRemoteDishes: true)
+            saveDocument()
+        }
+    }
+
     private func setupRealtimeHandlers() {
         realtime.onWelcome = { msg in
             guard msg.mealId == vm.meal?.id else { return }
+            fallbackCanvasFetchTask?.cancel()
+            fallbackCanvasFetchTask = nil
             hasReceivedWelcome = true
             if msg.revision > 0, let remoteDoc = msg.document {
                 applyRemoteDocument(remoteDoc)
-                syncStickers(broadcast: false, preserveUnknownRemoteDishes: true)
-                let queued = realtime.drainPendingOps()
-                if !queued.isEmpty {
-                    applyRemoteState {
-                        for item in queued {
-                            applyCanvasOpLocally(kind: item.kind, payload: item.payload)
-                        }
-                    }
-                    for item in queued {
-                        realtime.sendOp(kind: item.kind, payload: item.payload)
-                    }
+                if msg.canEdit {
+                    applyRemoteState { applyPendingCanvasOps() }
+                    realtime.resendPendingOps()
                 }
+                syncStickers(broadcast: msg.canEdit, preserveUnknownRemoteDishes: true)
                 saveDocument()
-            } else {
-                _ = realtime.drainPendingOps()
-                realtime.sendOp(
-                    kind: "replace_document",
-                    payload: .replaceDocument(currentDocumentSnapshot(), onlyIfEmpty: true)
-                )
+            } else if msg.canEdit {
+                applyRemoteState { applyPendingCanvasOps() }
+                realtime.seedCanvas(currentDocumentSnapshot())
             }
+            onRemoteMealSync?("canvas_connected")
         }
 
         realtime.onSnapshot = { msg in
-            guard msg.mealId == vm.meal?.id, msg.clientId != realtime.clientID else { return }
+            guard msg.mealId == vm.meal?.id else { return }
+            fallbackCanvasFetchTask?.cancel()
+            fallbackCanvasFetchTask = nil
             if let remoteDoc = msg.document {
                 applyRemoteDocument(remoteDoc)
-                syncStickers(broadcast: false, preserveUnknownRemoteDishes: true)
+                applyRemoteState { applyPendingCanvasOps() }
+                syncStickers(broadcast: true, preserveUnknownRemoteDishes: true)
                 saveDocument()
             }
         }
 
         realtime.onOpApplied = { msg in
-            guard msg.mealId == vm.meal?.id, msg.clientId != realtime.clientID else { return }
+            guard msg.mealId == vm.meal?.id else { return }
             realtime.remotePreviews.removeValue(forKey: msg.clientId)
             applyRemoteState {
+                if msg.clientId == realtime.clientID, msg.kind == "add_stroke", let strokeID = msg.payload.stroke?.id {
+                    strokes.removeAll { $0.id == strokeID }
+                }
                 applyCanvasOpLocally(kind: msg.kind, payload: msg.payload)
+                applyPendingCanvasOps()
             }
             saveDocument()
         }
 
         realtime.onMealSync = { msg in
             guard msg.mealId == vm.meal?.id else { return }
-            onRemoteMealSync?()
+            onRemoteMealSync?(msg.reason)
+        }
+
+        realtime.onNetworkRecovered = {
+            onRemoteMealSync?("network_recovered")
+        }
+
+        realtime.onConnectionLost = {
+            onRemoteMealSync?("canvas_disconnected")
         }
 
         realtime.onError = { message in
             showCanvasTip(message)
+        }
+    }
+
+    private func applyPendingCanvasOps() {
+        for op in realtime.allUnconfirmedOps() {
+            if op.kind == "upsert_sticker", let dishID = op.payload.sticker?.mealDishID,
+               stickers.contains(where: { $0.mealDishID == dishID }) {
+                continue
+            }
+            applyCanvasOpLocally(kind: op.kind, payload: op.payload)
         }
     }
 
@@ -4189,9 +5257,6 @@ struct MealCanvasView: View {
 
     private func broadcastOp(_ kind: String, payload: CanvasOpPayload) {
         guard !isLaunchStudio, !isApplyingRemoteUpdate, vm.meal != nil else { return }
-        if !hasReceivedWelcome && kind == "replace_document" && payload.onlyIfEmpty == true {
-            return
-        }
         realtime.sendOp(kind: kind, payload: payload)
     }
 
@@ -4205,27 +5270,62 @@ struct MealCanvasView: View {
         broadcastOp("upsert_note", payload: .upsertNote(note))
     }
 
-    private func broadcastBatchStickersNotes(includeStickers: Bool = true, includeNotes: Bool = true) {
-        broadcastOp(
-            "batch_stickers_notes",
-            payload: .batch(
-                stickers: includeStickers ? stickers : nil,
-                notes: includeNotes ? notes : nil
+    private func broadcastElementEdits(since before: CanvasHistorySnapshot) {
+        guard !isLaunchStudio else { return }
+        let oldStickers = Dictionary(uniqueKeysWithValues: before.stickers.map { ($0.id, $0) })
+        let oldNotes = Dictionary(uniqueKeysWithValues: before.notes.map { ($0.id, $0) })
+        var stickerPatches: [CanvasElementPatch] = []
+        for sticker in stickers {
+            guard let old = oldStickers[sticker.id], old != sticker else { continue }
+            if let dishID = sticker.mealDishID {
+                queueDishStickerIfNeeded(old, dishID: dishID)
+            }
+            stickerPatches.append(CanvasElementPatch(
+                id: sticker.id,
+                mealDishID: sticker.mealDishID,
+                position: changedField(old.position, sticker.position),
+                scale: changedField(old.scale, sticker.scale),
+                rotationDegrees: changedField(old.rotationDegrees, sticker.rotationDegrees),
+                layer: changedField(old.layer, sticker.layer),
+                effect: changedField(old.effect, sticker.effect),
+                style: changedField(old.style, sticker.style)
+            ))
+        }
+        let notePatches: [CanvasElementPatch] = notes.compactMap { note in
+            guard let old = oldNotes[note.id], old != note else { return nil }
+            return CanvasElementPatch(
+                id: note.id,
+                position: changedField(old.position, note.position),
+                scale: changedField(old.scale, note.scale),
+                rotationDegrees: changedField(old.rotationDegrees, note.rotationDegrees),
+                layer: changedField(old.layer, note.layer),
+                text: changedField(old.text, note.text),
+                font: changedField(old.font, note.font),
+                color: changedField(old.color, note.color),
+                textStyle: changedField(old.textStyle, note.textStyle),
+                textEffect: changedField(old.textEffect, note.textEffect)
             )
-        )
+        }
+        guard !stickerPatches.isEmpty || !notePatches.isEmpty else { return }
+        broadcastOp("patch_elements", payload: CanvasOpPayload(
+            stickerPatches: stickerPatches.isEmpty ? nil : stickerPatches,
+            notePatches: notePatches.isEmpty ? nil : notePatches
+        ))
     }
 
-    private func broadcastBackgroundUpdate() {
-        broadcastOp(
-            "update_background",
-            payload: .updateBackground(
-                background: background.rawValue,
-                blur: blur,
-                moodFilter: moodFilter.rawValue,
-                customBackgroundURL: customBackgroundURL,
-                clearCustomBackgroundURL: background != .custom && customBackgroundURL == nil
-            )
-        )
+    private func changedField<Value: Equatable>(_ old: Value, _ new: Value) -> Value? {
+        old == new ? nil : new
+    }
+
+    private func broadcastBlurUpdate() {
+        blurDirtyForSync = false
+        guard let previousBlur = blurUndoStart else { return }
+        blurUndoStart = nil
+        guard previousBlur != blur else { return }
+        var before = currentCanvasSnapshot()
+        before.blur = previousBlur
+        recordUndoAction(from: before)
+        broadcastOp("update_background", payload: CanvasOpPayload(blur: blur))
     }
 
     /// 将当前画布合成为真正的 Apple Live Photo（静态封面 + 3 秒配对实况视频）写入系统相册。
@@ -4243,7 +5343,9 @@ struct MealCanvasView: View {
                 ) { progress in
                     liveExportProgress = progress
                 }
-                Haptics.light()
+                fx.emitCelebrationShower(in: canvasFrame.size)
+                CanvasSoundEngine.shared.playCelebrate()
+                Haptics.success()
                 showCanvasTip("实况照片已保存到相册")
             } catch {
                 showCanvasTip(error.localizedDescription)
@@ -4311,9 +5413,17 @@ struct MealCanvasSnapshotView: View {
             }
         }
         .task(id: mealID) {
-            let synced = await syncRemoteMealCanvasIfNeeded(mealID: mealID, forceRefresh: allowLivePlayback)
+            let synced = await syncRemoteMealCanvasIfNeeded(mealID: mealID, forceRefresh: true)
             if synced || document == nil {
                 document = CanvasDocumentStore.load(mealID: mealID)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .historyChanged)) { _ in
+            Task {
+                let synced = await syncRemoteMealCanvasIfNeeded(mealID: mealID, forceRefresh: true)
+                if synced || document == nil {
+                    document = CanvasDocumentStore.load(mealID: mealID)
+                }
             }
         }
     }
@@ -4562,6 +5672,8 @@ private struct CanvasDocumentArtwork: View {
             CanvasStrokeDrawingLayer(
                 strokes: document.strokes,
                 activeStroke: [],
+                isSparkleAnimated: false,
+                fixedTime: isLiveActive ? time : nil,
                 paintColor: .white,
                 style: .solid,
                 width: 4
@@ -4644,6 +5756,12 @@ private enum LiveCanvasExporterHelper {
                             cacheKey: url.absoluteString
                         )
                         stickerMedia[sticker.id] = (rendered, true)
+                    } else if sticker.style == .crystal {
+                        let rendered = await StickerBorderRenderer.shared.makeCrystalSticker(
+                            from: subject,
+                            cacheKey: url.absoluteString
+                        )
+                        stickerMedia[sticker.id] = (rendered, true)
                     } else {
                         stickerMedia[sticker.id] = (subject, true)
                     }
@@ -4696,12 +5814,14 @@ private enum LiveCanvasExporterHelper {
             width: prepared.canvasSize.width * renderScale,
             height: prepared.canvasSize.height * renderScale
         )
+        let hasTypewriterText = document.notes.contains { $0.textEffect == .typewriter }
+        let keyframeIndex = hasTypewriterText ? 48 : 12
 
         try await LivePhotoExporter.exportAndSave(
             pixelSize: pixelSize,
             frameCount: 72,
             fps: 24,
-            keyframeIndex: 12,
+            keyframeIndex: keyframeIndex,
             onProgress: onProgress
         ) { frameIndex in
             let frameTime = Double(frameIndex) / 24.0
@@ -4709,6 +5829,7 @@ private enum LiveCanvasExporterHelper {
                 document: document,
                 size: prepared.canvasSize,
                 time: frameTime,
+                typewriterProgress: min(Double(frameIndex) / Double(keyframeIndex), 1),
                 bgImage: prepared.bgImage,
                 orderedStickers: prepared.orderedStickers,
                 orderedNotes: prepared.orderedNotes,
@@ -4726,6 +5847,7 @@ private struct LiveCanvasExportFrame: View {
     let document: CanvasDocument
     let size: CGSize
     let time: TimeInterval
+    var typewriterProgress: Double = 1
     let bgImage: UIImage?
     let orderedStickers: [CanvasSticker]
     let orderedNotes: [CanvasNote]
@@ -4767,6 +5889,8 @@ private struct LiveCanvasExportFrame: View {
             CanvasStrokeDrawingLayer(
                 strokes: document.strokes,
                 activeStroke: [],
+                isSparkleAnimated: false,
+                fixedTime: time,
                 paintColor: .white,
                 style: .solid,
                 width: 4
@@ -4782,22 +5906,19 @@ private struct LiveCanvasExportFrame: View {
         let boxSide = baseSize * (sticker.isCutout ? 1.24 : 1.12)
         let phase = sticker.id.motionPhaseOffset
         let media = stickerMedia[sticker.id]
+        let isCrystal = sticker.style == .crystal
 
         Group {
-            if sticker.style == .polaroid {
-                PolaroidStickerCard(
-                    image: media?.image,
-                    isCutout: media?.isCutout ?? sticker.isCutout,
-                    name: sticker.name,
-                    compact: false,
-                    isLightSurface: isLight
-                )
-            } else if let media {
+            if let media {
                 if media.isCutout {
                     Image(uiImage: media.image)
                         .resizable()
                         .scaledToFit()
                         .padding(4)
+                        .shadow(
+                            color: isCrystal ? Color.white.opacity(isLight ? 0.52 : 0.42) : .clear,
+                            radius: isCrystal ? 7 : 0
+                        )
                         .shadow(color: Color.black.opacity(isLight ? 0.16 : 0.32), radius: 14, y: 8)
                         .shadow(color: Color.black.opacity(isLight ? 0.08 : 0.16), radius: 3, y: 2)
                 } else {
@@ -4806,14 +5927,36 @@ private struct LiveCanvasExportFrame: View {
                             .resizable()
                             .scaledToFill()
                             .frame(width: proxy.size.width, height: proxy.size.height)
+                            .overlay {
+                                if isCrystal {
+                                    LinearGradient(
+                                        colors: [.clear, Color.white.opacity(0.22), Color.white.opacity(0.05), .clear],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                }
+                            }
                             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                             .overlay {
-                                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                    .strokeBorder(
-                                        sticker.style == .dieCut ? Color.white : (isLight ? Color.black.opacity(0.06) : Color.white.opacity(0.18)),
-                                        lineWidth: sticker.style == .dieCut ? 3.5 : 0.7
-                                    )
+                                if isCrystal {
+                                    ZStack {
+                                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                            .strokeBorder(Color.white.opacity(0.36), lineWidth: 4.5)
+                                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                            .strokeBorder(Color.white.opacity(0.84), lineWidth: 1.0)
+                                    }
+                                } else {
+                                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                        .strokeBorder(
+                                            sticker.style == .dieCut ? Color.white : (isLight ? Color.black.opacity(0.06) : Color.white.opacity(0.18)),
+                                            lineWidth: sticker.style == .dieCut ? 3.5 : 0.7
+                                        )
+                                }
                             }
+                            .shadow(
+                                color: isCrystal ? Color.white.opacity(isLight ? 0.48 : 0.36) : .clear,
+                                radius: isCrystal ? 6 : 0
+                            )
                             .shadow(color: Color.black.opacity(isLight ? 0.14 : 0.34), radius: 12, y: 7)
                     }
                 }
@@ -4827,6 +5970,12 @@ private struct LiveCanvasExportFrame: View {
                             .multilineTextAlignment(.center)
                             .padding(12)
                     }
+                    .overlay {
+                        if isCrystal {
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.75), lineWidth: 1.4)
+                        }
+                    }
             }
         }
         .frame(width: boxSide, height: boxSide)
@@ -4837,13 +5986,24 @@ private struct LiveCanvasExportFrame: View {
                         isLight ? CanvasPalette.accent.opacity(0.85) : .white.opacity(0.94),
                         style: StrokeStyle(lineWidth: 1.6, lineCap: .round, dash: [5, 4])
                     )
+            } else if sticker.effect == .sparkleHalo {
+                CanvasSparkleOrbitOverlay(
+                    time: time,
+                    phase: phase,
+                    isLightSurface: isLight,
+                    compact: false,
+                    reduceMotion: false
+                )
             }
         }
         .shadow(
             color: Color.white.opacity(sticker.effect.glowOpacity(time: time, phase: phase, reduceMotion: false)),
             radius: sticker.effect.glowRadius
         )
-        .scaleEffect(sticker.effect.scale(time: time, phase: phase, reduceMotion: false))
+        .scaleEffect(
+            x: sticker.effect.scaleX(time: time, phase: phase, reduceMotion: false),
+            y: sticker.effect.scaleY(time: time, phase: phase, reduceMotion: false)
+        )
         .rotationEffect(.degrees(sticker.effect.rotation(time: time, phase: phase, reduceMotion: false)))
         .offset(sticker.effect.offset(time: time, phase: phase, reduceMotion: false))
         .scaleEffect(min(max(sticker.scale, 0.3), 3))
@@ -4856,7 +6016,9 @@ private struct LiveCanvasExportFrame: View {
         let count = note.text.count
         let fontSize: CGFloat = count > 18 ? 16 : count > 11 ? 18 : 21
         let phase = note.id.motionPhaseOffset
-        let visible = note.textEffect.visibleText(note.text, time: time, reduceMotion: false)
+        let visible = note.textEffect == .typewriter
+            ? String(note.text.prefix(Int(Double(count) * typewriterProgress)))
+            : note.text
 
         Group {
             if let doodle = note.doodle {
@@ -4894,10 +6056,25 @@ private struct LiveCanvasExportFrame: View {
                 )
             }
         }
+        .overlay {
+            if note.textEffect == .sparkle {
+                CanvasSparkleOrbitOverlay(
+                    time: time,
+                    phase: phase,
+                    isLightSurface: isLight,
+                    compact: false,
+                    reduceMotion: false
+                )
+                .padding(-10)
+            }
+        }
         .opacity(note.textEffect.opacity(time: time, reduceMotion: false))
         .offset(note.textEffect.offset(time: time, phase: phase, reduceMotion: false))
-        .scaleEffect(x: note.textEffect.scaleX(time: time, reduceMotion: false), y: note.textEffect.scaleY(time: time, reduceMotion: false))
-        .rotationEffect(.degrees(note.textEffect.rotation(time: time, reduceMotion: false)))
+        .scaleEffect(
+            x: note.textEffect.scaleX(time: time, phase: phase, reduceMotion: false),
+            y: note.textEffect.scaleY(time: time, phase: phase, reduceMotion: false)
+        )
+        .rotationEffect(.degrees(note.textEffect.rotation(time: time, phase: phase, reduceMotion: false)))
         .scaleEffect(min(max(note.scale, 0.3), 3))
         .rotationEffect(.degrees(note.rotationDegrees))
         .position(x: size.width * note.position.x, y: size.height * note.position.y)
@@ -5044,7 +6221,7 @@ private struct CanvasManipulation: ViewModifier {
     let alignmentTargets: [CanvasPoint]
     let isSelected: Bool
     let isHandleActive: Bool
-    let onTransformStart: () -> Void
+    let onTransformStart: (Set<CanvasTransformField>) -> Void
     let onSelect: () -> Void
     var onLiveChange: (() -> Void)? = nil
     let onChange: () -> Void
@@ -5124,11 +6301,12 @@ private struct CanvasManipulation: ViewModifier {
             canvasSize: canvasSize, isDragging: true, alignmentTargets: alignmentTargets, previousGuides: guides)
         if (placement.guides.vertical != nil && placement.guides.vertical != guides.vertical)
             || (placement.guides.horizontal != nil && placement.guides.horizontal != guides.horizontal) {
-            Haptics.light()
+            Haptics.selection()
+            CanvasSoundEngine.shared.playSnapTick()
         }
         guides = placement.guides
         if position != placement.position {
-            if !didChange { onTransformStart() }
+            onTransformStart([.position])
             didChange = true
             withTransaction(Transaction(animation: nil)) { position = placement.position }
             onLiveChange?()
@@ -5175,12 +6353,18 @@ private struct CanvasManipulation: ViewModifier {
         if let rotation = value.second?.rotation.degrees, rotation != 0 || start.hasRotated {
             transformStart?.hasRotated = true
             let placement = CanvasRotationPlacement(degrees: start.rotationDegrees + rotation, previousSnap: snappedAngle)
-            if let target = placement.snappedAngle, target != snappedAngle { Haptics.light() }
+            if let target = placement.snappedAngle, target != snappedAngle {
+                Haptics.selection()
+                CanvasSoundEngine.shared.playSnapTick()
+            }
             snappedAngle = placement.snappedAngle
             nextRotation = placement.degrees
         }
         if nextScale != scale || nextRotation != rotationDegrees {
-            if !didChange { onTransformStart() }
+            var fields: Set<CanvasTransformField> = []
+            if nextScale != scale { fields.insert(.scale) }
+            if nextRotation != rotationDegrees { fields.insert(.rotation) }
+            onTransformStart(fields)
             didChange = true
             withTransaction(Transaction(animation: nil)) {
                 scale = nextScale
@@ -5230,7 +6414,7 @@ private struct CanvasTransformControls: View {
     var isLightSurface: Bool = false
     var isRectangular: Bool = false
     var contentRatio: CGFloat = 1.0
-    let onTransformStart: () -> Void
+    let onTransformStart: (Set<CanvasTransformField>) -> Void
     var onLiveChange: (() -> Void)? = nil
     let onChange: () -> Void
 
@@ -5319,10 +6503,10 @@ private struct CanvasTransformControls: View {
                         if handle == .resize {
                             let nextScale = min(max(scale + increment * 0.1, 0.3), 3)
                             guard nextScale != scale else { return }
-                            onTransformStart()
+                            onTransformStart([.scale])
                             scale = nextScale
                         } else {
-                            onTransformStart()
+                            onTransformStart([.rotation])
                             rotationDegrees += increment * 15
                         }
                         onChange()
@@ -5397,7 +6581,7 @@ private struct CanvasTransformControls: View {
                         let requested = start.scale * distance / start.distance
                         let nextScale = min(max(requested, 0.3), 3)
                         if nextScale != scale, !start.hasChanged {
-                            onTransformStart()
+                            onTransformStart([.scale])
                             start.hasChanged = true
                         }
                         scale = nextScale
@@ -5411,10 +6595,13 @@ private struct CanvasTransformControls: View {
                         start.rotationDegrees += delta * 180 / .pi
                         start.angle = angle
                         let placement = CanvasRotationPlacement(degrees: start.rotationDegrees, previousSnap: start.snappedAngle)
-                        if let target = placement.snappedAngle, target != start.snappedAngle { Haptics.light() }
+                        if let target = placement.snappedAngle, target != start.snappedAngle {
+                            Haptics.selection()
+                            CanvasSoundEngine.shared.playSnapTick()
+                        }
                         start.snappedAngle = placement.snappedAngle
                         if placement.degrees != rotationDegrees, !start.hasChanged {
-                            onTransformStart()
+                            onTransformStart([.rotation])
                             start.hasChanged = true
                         }
                         rotationDegrees = placement.degrees
@@ -5440,15 +6627,31 @@ private struct CanvasTransformUndo: Equatable {
     let rotationDegrees: Double
 }
 
+private enum CanvasTransformField: Hashable {
+    case position, scale, rotation
+}
+
+private struct CanvasTransformHistory {
+    let selection: CanvasSelection
+    var position: CanvasPoint?
+    var scale: CGFloat?
+    var rotation: Double?
+}
+
+private struct CanvasHistoryAction {
+    let from: CanvasHistorySnapshot
+    let to: CanvasHistorySnapshot
+}
+
 private struct CanvasHistorySnapshot: Equatable {
-    let stickers: [CanvasSticker]
-    let notes: [CanvasNote]
-    let strokes: [CanvasStroke]
-    let background: CanvasBackground
-    let moodFilter: CanvasMoodFilter
-    let blur: CGFloat
-    let customBackgroundData: Data?
-    let customBackgroundURL: String?
+    var stickers: [CanvasSticker]
+    var notes: [CanvasNote]
+    var strokes: [CanvasStroke]
+    var background: CanvasBackground
+    var moodFilter: CanvasMoodFilter
+    var blur: CGFloat
+    var customBackgroundData: Data?
+    var customBackgroundURL: String?
 }
 
 private struct CanvasElementBoundsKey: PreferenceKey {
@@ -5495,9 +6698,8 @@ private struct CanvasMarqueeSelection: View {
     @Binding var selection: Set<CanvasSelection>
     let transforms: [CanvasTransformUndo]
     var isLightSurface: Bool = false
-    let onMoveStart: ([CanvasTransformUndo]) -> Void
     let onMove: ([CanvasTransformUndo], CGSize) -> Void
-    let onChange: () -> Void
+    let onChange: ([CanvasTransformUndo]) -> Void
 
     @GestureState(resetTransaction: Transaction(animation: nil)) private var isDragging = false
     @State private var drag: SelectionDrag?
@@ -5553,7 +6755,7 @@ private struct CanvasMarqueeSelection: View {
         .preference(key: CanvasElementInteractionKey.self, value: isDragging)
         .onChange(of: isDragging) { _, active in
             guard !active, let drag else { return }
-            if drag.movement?.didChange == true { onChange() }
+            if let movement = drag.movement, movement.didChange { onChange(movement.transforms) }
             if drag.movement?.didChange == true || (drag.movement == nil && !selection.isEmpty) { Haptics.light() }
             self.drag = nil
         }
@@ -5581,7 +6783,6 @@ private struct CanvasMarqueeSelection: View {
                         width: min(max(requested.width, min(0, 0.02 - (xs.min() ?? 0))), max(0, 0.98 - (xs.max() ?? 1))),
                         height: min(max(requested.height, min(0, 0.02 - (ys.min() ?? 0))), max(0, 0.98 - (ys.max() ?? 1))))
                     if offset != movement.appliedOffset {
-                        if !movement.didChange { onMoveStart(movement.transforms) }
                         onMove(movement.transforms, offset)
                         movement.appliedOffset = offset
                         movement.didChange = true
@@ -5706,7 +6907,7 @@ private enum CanvasEmojiCatalog {
         .init(id: "vibe_clover", title: "幸运草"),
         .init(id: "vibe_cat", title: "小猫"),
         .init(id: "vibe_puppy", title: "小狗"),
-        .init(id: "vibe_camera", title: "拍立得"),
+        .init(id: "vibe_camera", title: "小相机"),
         .init(id: "vibe_crown", title: "今日C位")
     ]
 
@@ -5826,6 +7027,18 @@ private struct CanvasEffectPreview: View {
                         )
                     }
                 }
+                .overlay {
+                    if effect == .sparkle {
+                        CanvasSparkleOrbitOverlay(
+                            time: time,
+                            phase: 0,
+                            isLightSurface: true,
+                            compact: true,
+                            reduceMotion: reduceMotion
+                        )
+                        .padding(-4)
+                    }
+                }
                 .opacity(effect.opacity(time: time, reduceMotion: reduceMotion))
                 .offset(effect.offset(time: time, reduceMotion: reduceMotion))
                 .scaleEffect(x: effect.scaleX(time: time, reduceMotion: reduceMotion), y: effect.scaleY(time: time, reduceMotion: reduceMotion))
@@ -5833,18 +7046,27 @@ private struct CanvasEffectPreview: View {
             case .sticker(let effect, let sticker):
                 StickerImageView(assetName: sticker.assetName, image: sticker.image, name: sticker.name, isCutout: sticker.isCutout, style: sticker.style, compact: true)
                     .frame(width: 44, height: 44)
-                    .scaleEffect(effect.scale(time: time, reduceMotion: reduceMotion))
+                    .scaleEffect(x: effect.scaleX(time: time, reduceMotion: reduceMotion), y: effect.scaleY(time: time, reduceMotion: reduceMotion))
                     .rotationEffect(.degrees(effect.rotation(time: time, reduceMotion: reduceMotion)))
                     .offset(effect.offset(time: time, reduceMotion: reduceMotion))
                     .shadow(
-                        color: effect == .none ? .clear : CanvasPalette.accent.opacity(effect == .glow ? 0.78 : (effect == .breathe ? 0.55 : 0)),
-                        radius: effect == .glow ? 10 : (effect == .breathe ? 8 : 0)
+                        color: effect == .none ? .clear : CanvasPalette.accent.opacity(effect == .glow ? 0.78 : (effect == .breathe ? 0.55 : (effect == .sparkleHalo ? 0.42 : 0))),
+                        radius: effect == .glow ? 10 : (effect == .breathe ? 8 : (effect == .sparkleHalo ? 6 : 0))
                     )
                     .overlay {
                         if effect == .outline {
                             StickerBlobShape(index: sticker.shapeIndex)
                                 .stroke(CanvasPalette.accent, style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
                                 .frame(width: 48, height: 48)
+                        } else if effect == .sparkleHalo {
+                            CanvasSparkleOrbitOverlay(
+                                time: time,
+                                phase: 0,
+                                isLightSurface: true,
+                                compact: true,
+                                reduceMotion: reduceMotion
+                            )
+                            .frame(width: 52, height: 52)
                         }
                     }
             }
@@ -5954,7 +7176,7 @@ enum CanvasBrushColor: String, CaseIterable, Identifiable, Codable {
 }
 
 enum CanvasBrushStyle: String, CaseIterable, Identifiable, Codable {
-    case solid, dotted, dashed, marker, crayon, neon
+    case solid, dotted, dashed, marker, crayon, neon, sparkle, rainbow, hearts
 
     var id: String { rawValue }
 
@@ -5966,7 +7188,16 @@ enum CanvasBrushStyle: String, CaseIterable, Identifiable, Codable {
         case .marker: return "荧光"
         case .crayon: return "蜡笔"
         case .neon: return "霓虹"
+        case .sparkle: return "星尘"
+        case .rainbow: return "彩虹"
+        case .hearts: return "爱心"
         }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = (try? container.decode(String.self)) ?? ""
+        self = CanvasBrushStyle(rawValue: raw) ?? .solid
     }
 
     var lineWidthMultiplier: CGFloat {
@@ -5974,6 +7205,8 @@ enum CanvasBrushStyle: String, CaseIterable, Identifiable, Codable {
         case .marker: return 2.2
         case .crayon: return 1.35
         case .neon: return 1.15
+        case .rainbow: return 1.25
+        case .hearts: return 1.45
         default: return 1
         }
     }
@@ -5983,6 +7216,20 @@ enum CanvasBrushStyle: String, CaseIterable, Identifiable, Codable {
         case .marker: return 0.34
         case .crayon: return 0.76
         default: return 1
+        }
+    }
+
+    var audioProfile: BrushAudioProfile {
+        switch self {
+        case .solid: return .solid
+        case .dotted: return .dotted
+        case .dashed: return .dashed
+        case .marker: return .marker
+        case .crayon: return .crayon
+        case .neon: return .neon
+        case .sparkle: return .sparkle
+        case .rainbow: return .rainbow
+        case .hearts: return .hearts
         }
     }
 }
@@ -6005,6 +7252,34 @@ private struct CanvasBrushPreview: View {
                 context.stroke(path, with: .color(color.opacity(0.32)), style: StrokeStyle(lineWidth: 8.5, lineCap: .round))
                 context.stroke(path, with: .color(color.opacity(0.65)), style: StrokeStyle(lineWidth: 5.0, lineCap: .round))
                 context.stroke(path, with: .color(Color.white.opacity(0.95)), style: StrokeStyle(lineWidth: 2.0, lineCap: .round))
+            } else if style == .sparkle {
+                var path = Path()
+                path.move(to: CGPoint(x: 4, y: y))
+                path.addLine(to: CGPoint(x: size.width - 4, y: y))
+                context.stroke(path, with: .color(color.opacity(0.45)), style: StrokeStyle(lineWidth: 4.5, lineCap: .round))
+                context.stroke(path, with: .color(Color.white.opacity(0.85)), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                for (idx, x) in stride(from: 7.0, through: size.width - 7.0, by: 12.0).enumerated() {
+                    let dy: CGFloat = idx.isMultiple(of: 2) ? -3.5 : 3.5
+                    let star = CanvasBurstFXOverlay.fourPointStarPath(center: CGPoint(x: x, y: y + dy), radius: 3.8, rotation: .degrees(Double(idx) * 18))
+                    context.fill(star, with: .color(idx.isMultiple(of: 2) ? .white : Color(red: 1.0, green: 0.90, blue: 0.56)))
+                }
+            } else if style == .rainbow {
+                let steps = max(8, Int((size.width - 6) / 4))
+                let dx = (size.width - 6) / CGFloat(steps)
+                for idx in 0..<steps {
+                    let x1 = 3 + CGFloat(idx) * dx
+                    let x2 = x1 + dx + 0.5
+                    var seg = Path()
+                    seg.move(to: CGPoint(x: x1, y: y))
+                    seg.addLine(to: CGPoint(x: x2, y: y))
+                    let hue = Double(idx) / Double(steps)
+                    context.stroke(seg, with: .color(Color(hue: hue, saturation: 0.78, brightness: 0.94)), style: StrokeStyle(lineWidth: 4.2, lineCap: .round))
+                }
+            } else if style == .hearts {
+                for (idx, x) in stride(from: 6.0, through: size.width - 6.0, by: 10.0).enumerated() {
+                    let heart = CanvasBurstFXOverlay.heartPath(center: CGPoint(x: x, y: y), radius: 3.4, rotation: .degrees(idx.isMultiple(of: 2) ? -6 : 6))
+                    context.fill(heart, with: .color(color))
+                }
             } else {
                 var path = Path()
                 path.move(to: CGPoint(x: 2, y: y))
@@ -6237,8 +7512,8 @@ struct CanvasDocument: Codable {
         moodFilter = try container.decodeIfPresent(CanvasMoodFilter.self, forKey: .moodFilter) ?? .none
         customBackgroundData = try container.decodeIfPresent(Data.self, forKey: .customBackgroundData)
         customBackgroundURL = try container.decodeIfPresent(String.self, forKey: .customBackgroundURL)
-        stickers = try container.decode([CanvasSticker].self, forKey: .stickers)
-        notes = try container.decode([CanvasNote].self, forKey: .notes)
+        stickers = try container.decodeIfPresent([CanvasSticker].self, forKey: .stickers) ?? []
+        notes = try container.decodeIfPresent([CanvasNote].self, forKey: .notes) ?? []
         strokes = try container.decodeIfPresent([CanvasStroke].self, forKey: .strokes) ?? []
         size = try container.decodeIfPresent(CGSize.self, forKey: .size)
     }
@@ -6483,7 +7758,7 @@ private struct CanvasMediaBackground: View {
     }
 }
 
-private extension UIImage {
+extension UIImage {
     /// Keep a selected photo small enough for the local canvas document while
     /// preserving a crisp portrait preview.
     var canvasPreviewData: Data? {
@@ -6503,7 +7778,7 @@ private extension UUID {
 enum CanvasStickerStyle: String, CaseIterable, Identifiable, Codable, Hashable {
     case dieCut
     case floating
-    case polaroid
+    case crystal
 
     var id: String { rawValue }
 
@@ -6511,7 +7786,7 @@ enum CanvasStickerStyle: String, CaseIterable, Identifiable, Codable, Hashable {
         switch self {
         case .dieCut: return "白边贴纸"
         case .floating: return "纯净悬浮"
-        case .polaroid: return "拍立得"
+        case .crystal: return "晶透贴纸"
         }
     }
 
@@ -6519,7 +7794,17 @@ enum CanvasStickerStyle: String, CaseIterable, Identifiable, Codable, Hashable {
         switch self {
         case .dieCut: return "square.on.circle"
         case .floating: return "circle.dashed"
-        case .polaroid: return "photo.artframe"
+        case .crystal: return "sparkles"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = (try? container.decode(String.self)) ?? ""
+        if raw == "polaroid" || raw == "crystal" {
+            self = .crystal
+        } else {
+            self = CanvasStickerStyle(rawValue: raw) ?? .dieCut
         }
     }
 }
@@ -6599,6 +7884,8 @@ enum CanvasEffect: String, CaseIterable, Identifiable, Codable {
     case shake
     case bounce
     case float
+    case jelly
+    case sparkleHalo
 
     var id: String { rawValue }
 
@@ -6611,6 +7898,8 @@ enum CanvasEffect: String, CaseIterable, Identifiable, Codable {
         case .shake: return "抖动"
         case .bounce: return "弹跳"
         case .float: return "漂浮"
+        case .jelly: return "果冻"
+        case .sparkleHalo: return "星光环绕"
         }
     }
 
@@ -6623,10 +7912,20 @@ enum CanvasEffect: String, CaseIterable, Identifiable, Codable {
         case .shake: return "waveform.path.ecg"
         case .bounce: return "arrow.up.and.down"
         case .float: return "wind"
+        case .jelly: return "water.waves"
+        case .sparkleHalo: return "sparkle"
         }
     }
 
-    var isAnimated: Bool { self == .shake || self == .bounce || self == .float || self == .breathe }
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = (try? container.decode(String.self)) ?? ""
+        self = CanvasEffect(rawValue: raw) ?? .none
+    }
+
+    var isAnimated: Bool {
+        self == .shake || self == .bounce || self == .float || self == .breathe || self == .jelly || self == .sparkleHalo
+    }
 
     func offset(time: TimeInterval, phase: Double = 0, reduceMotion: Bool) -> CGSize {
         guard !reduceMotion else { return .zero }
@@ -6634,6 +7933,7 @@ enum CanvasEffect: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .float: return CGSize(width: sin(t * 0.95) * 2.2, height: sin(t * 1.45) * 5.5)
         case .bounce: return CGSize(width: 0, height: -abs(sin(t * 2.1)) * 5)
+        case .sparkleHalo: return CGSize(width: 0, height: sin(t * 1.2) * 3.0)
         default: return .zero
         }
     }
@@ -6644,6 +7944,7 @@ enum CanvasEffect: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .shake: return sin(t * 9) * 3
         case .float: return sin(t * 1.15) * 1.3
+        case .jelly: return sin(t * 2.6) * 2.2
         default: return 0
         }
     }
@@ -6658,6 +7959,24 @@ enum CanvasEffect: String, CaseIterable, Identifiable, Codable {
         }
     }
 
+    func scaleX(time: TimeInterval, phase: Double = 0, reduceMotion: Bool) -> CGFloat {
+        guard !reduceMotion else { return 1 }
+        if self == .jelly {
+            let t = time + phase
+            return 1 + CGFloat(sin(t * 3.4) * 0.068)
+        }
+        return scale(time: time, phase: phase, reduceMotion: reduceMotion)
+    }
+
+    func scaleY(time: TimeInterval, phase: Double = 0, reduceMotion: Bool) -> CGFloat {
+        guard !reduceMotion else { return 1 }
+        if self == .jelly {
+            let t = time + phase
+            return 1 - CGFloat(sin(t * 3.4) * 0.062)
+        }
+        return scale(time: time, phase: phase, reduceMotion: reduceMotion)
+    }
+
     func glowOpacity(time: TimeInterval, phase: Double = 0, reduceMotion: Bool) -> Double {
         switch self {
         case .glow: return 0.85
@@ -6665,6 +7984,10 @@ enum CanvasEffect: String, CaseIterable, Identifiable, Codable {
             guard !reduceMotion else { return 0.35 }
             let wave = (sin((time + phase) * 1.85) + 1) * 0.5
             return 0.28 + 0.34 * wave
+        case .sparkleHalo:
+            guard !reduceMotion else { return 0.25 }
+            let wave = (sin((time + phase) * 2.0) + 1) * 0.5
+            return 0.20 + 0.28 * wave
         default: return 0
         }
     }
@@ -6673,6 +7996,7 @@ enum CanvasEffect: String, CaseIterable, Identifiable, Codable {
         switch self {
         case .glow: return 20
         case .breathe: return 15
+        case .sparkleHalo: return 14
         default: return 0
         }
     }
@@ -6685,6 +8009,9 @@ enum CanvasTextEffect: String, CaseIterable, Identifiable, Codable {
     case distort
     case fade
     case bounce
+    case jelly
+    case swing
+    case sparkle
 
     var id: String { rawValue }
 
@@ -6696,6 +8023,9 @@ enum CanvasTextEffect: String, CaseIterable, Identifiable, Codable {
         case .distort: return "扭曲"
         case .fade: return "浮现"
         case .bounce: return "跳动"
+        case .jelly: return "果冻"
+        case .swing: return "摇摆"
+        case .sparkle: return "星闪"
         }
     }
 
@@ -6707,7 +8037,16 @@ enum CanvasTextEffect: String, CaseIterable, Identifiable, Codable {
         case .distort: return "scribble.variable"
         case .fade: return "circle.lefthalf.filled"
         case .bounce: return "arrow.up.and.down.circle"
+        case .jelly: return "water.waves"
+        case .swing: return "metronome"
+        case .sparkle: return "sparkle"
         }
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = (try? container.decode(String.self)) ?? ""
+        self = CanvasTextEffect(rawValue: raw) ?? .plain
     }
 
     func visibleText(_ text: String, time: TimeInterval, reduceMotion: Bool) -> String {
@@ -6735,24 +8074,41 @@ enum CanvasTextEffect: String, CaseIterable, Identifiable, Codable {
             return CGSize(width: 0, height: sin(t * 1.25) * 5)
         case .bounce:
             return CGSize(width: 0, height: -abs(sin(t * 2.1)) * 5)
+        case .sparkle:
+            return CGSize(width: 0, height: sin(t * 1.1) * 2.5)
         default:
             return .zero
         }
     }
 
-    func scaleX(time: TimeInterval, reduceMotion: Bool) -> CGFloat {
-        guard self == .distort, !reduceMotion else { return 1 }
-        return CGFloat(1 + sin(time * 1.8) * 0.09)
+    func scaleX(time: TimeInterval, phase: Double = 0, reduceMotion: Bool) -> CGFloat {
+        guard !reduceMotion else { return 1 }
+        let t = time + phase
+        switch self {
+        case .distort: return CGFloat(1 + sin(t * 1.8) * 0.09)
+        case .jelly: return CGFloat(1 + sin(t * 3.4) * 0.075)
+        default: return 1
+        }
     }
 
-    func scaleY(time: TimeInterval, reduceMotion: Bool) -> CGFloat {
-        guard self == .distort, !reduceMotion else { return 1 }
-        return CGFloat(1 - sin(time * 1.8) * 0.06)
+    func scaleY(time: TimeInterval, phase: Double = 0, reduceMotion: Bool) -> CGFloat {
+        guard !reduceMotion else { return 1 }
+        let t = time + phase
+        switch self {
+        case .distort: return CGFloat(1 - sin(t * 1.8) * 0.06)
+        case .jelly: return CGFloat(1 - sin(t * 3.4) * 0.065)
+        default: return 1
+        }
     }
 
-    func rotation(time: TimeInterval, reduceMotion: Bool) -> Double {
-        guard self == .distort, !reduceMotion else { return 0 }
-        return sin(time * 1.8) * 4
+    func rotation(time: TimeInterval, phase: Double = 0, reduceMotion: Bool) -> Double {
+        guard !reduceMotion else { return 0 }
+        let t = time + phase
+        switch self {
+        case .distort: return sin(t * 1.8) * 4
+        case .swing: return sin(t * 2.0) * 6.5
+        default: return 0
+        }
     }
 
     private func positiveRemainder(_ value: TimeInterval, cycle: TimeInterval) -> TimeInterval {
@@ -6768,17 +8124,20 @@ private struct CanvasStickerView: View {
     let reduceMotion: Bool
     var reportsBounds = false
     var isLightSurface: Bool = false
+    var isFreshArrival: Bool = false
+    var isPendingReveal: Bool = false
     var canMoveForward: Bool = true
     var canMoveBackward: Bool = true
     var alignmentTargets: [CanvasPoint] = []
     var remotePreview: CanvasRemoteLivePreview? = nil
-    var onTransformStart: () -> Void = {}
+    var onTransformStart: (Set<CanvasTransformField>) -> Void = { _ in }
     let onSelect: () -> Void
     let onTransform: () -> Void
     let onLayerMove: (CanvasLayerMove) -> Void
     let onDelete: () -> Void
     var onFavorite: (() -> Void)? = nil
     var onDuplicate: (() -> Void)? = nil
+    var onReplacePhoto: (() -> Void)? = nil
     var onLiveChange: (() -> Void)? = nil
     let onChange: () -> Void
 
@@ -6791,6 +8150,12 @@ private struct CanvasStickerView: View {
 
     private var baseSize: CGFloat {
         max(110, min(canvasSize.width, canvasSize.height) * 0.37)
+    }
+
+    private var entranceScaleFactor: CGFloat {
+        if isPendingReveal { return 0.35 }
+        if hasAppeared || reduceMotion { return 1.0 }
+        return isFreshArrival ? 0.46 : 0.86
     }
 
     var body: some View {
@@ -6826,6 +8191,14 @@ private struct CanvasStickerView: View {
                                         dash: [5, 4]
                                     )
                                 )
+                        } else if sticker.effect == .sparkleHalo {
+                            CanvasSparkleOrbitOverlay(
+                                time: time,
+                                phase: phase,
+                                isLightSurface: isLightSurface,
+                                compact: false,
+                                reduceMotion: effectsPaused
+                            )
                         }
                     }
                     .shadow(
@@ -6833,7 +8206,10 @@ private struct CanvasStickerView: View {
                         radius: sticker.effect.glowRadius,
                         y: 0
                     )
-                    .scaleEffect(sticker.effect.scale(time: time, phase: phase, reduceMotion: effectsPaused))
+                    .scaleEffect(
+                        x: sticker.effect.scaleX(time: time, phase: phase, reduceMotion: effectsPaused),
+                        y: sticker.effect.scaleY(time: time, phase: phase, reduceMotion: effectsPaused)
+                    )
                     .rotationEffect(.degrees(sticker.effect.rotation(time: time, phase: phase, reduceMotion: effectsPaused)))
                     .offset(sticker.effect.offset(time: time, phase: phase, reduceMotion: effectsPaused))
 
@@ -6842,7 +8218,7 @@ private struct CanvasStickerView: View {
         }
         .frame(width: baseSize * 1.34, height: baseSize * 1.34)
         .contentShape(Rectangle())
-        .scaleEffect(min(max(displayScale, 0.3), 3) * (hasAppeared || reduceMotion ? 1 : 0.86))
+        .scaleEffect(min(max(displayScale, 0.3), 3) * entranceScaleFactor)
         .rotationEffect(.degrees(displayRotation))
         .overlay(alignment: .top) {
             if let activePreview {
@@ -6866,7 +8242,8 @@ private struct CanvasStickerView: View {
                 .allowsHitTesting(false)
             }
         }
-        .opacity(hasAppeared || reduceMotion ? 1 : 0)
+        .opacity(isPendingReveal ? 0 : (hasAppeared || reduceMotion ? 1 : 0))
+        .animation(reduceMotion ? nil : .spring(response: 0.44, dampingFraction: 0.62), value: isPendingReveal)
         .animation(reduceMotion || isManipulating ? nil : .easeOut(duration: 0.08), value: activePreview)
         .onTapGesture(perform: onSelect)
         .animation(.spring(response: 0.34, dampingFraction: 0.74), value: sticker.effect)
@@ -6880,7 +8257,7 @@ private struct CanvasStickerView: View {
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { onSelect() }
         .onAppear {
-            withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.72)) {
+            withAnimation(reduceMotion ? nil : .spring(response: isFreshArrival ? 0.44 : 0.32, dampingFraction: isFreshArrival ? 0.60 : 0.72)) {
                 hasAppeared = true
             }
         }
@@ -6896,8 +8273,6 @@ private struct CanvasStickerView: View {
                                 position: $sticker.position,
                                 scale: $sticker.scale, isHandleActive: $isHandleActive,
                                 isLightSurface: isLightSurface,
-                                isRectangular: sticker.style == .polaroid,
-                                contentRatio: sticker.style == .polaroid ? 0.92 : 1.0,
                                 onTransformStart: onTransformStart,
                                 onLiveChange: onLiveChange,
                                 onChange: onChange),
@@ -6919,6 +8294,9 @@ private struct CanvasStickerView: View {
     @ViewBuilder
     private var elementContextMenu: some View {
         Button("精细调整", systemImage: "arrow.up.left.and.arrow.down.right", action: onTransform)
+        if let onReplacePhoto {
+            Button("换一张图", systemImage: "camera", action: onReplacePhoto)
+        }
         if let onDuplicate {
             Button("复制一份", systemImage: "doc.on.doc", action: onDuplicate)
         }
@@ -6948,7 +8326,7 @@ private struct CanvasStickerView: View {
 
 }
 
-/// 真实菜品自动抠图主体（白边模切贴纸或纯净悬浮）与无图兜底卡。
+/// 真实菜品自动抠图主体（白边模切、纯净悬浮或晶透贴纸）与无图兜底卡。
 private struct StickerImageView: View {
     let assetName: String?
     let image: String?
@@ -6960,6 +8338,7 @@ private struct StickerImageView: View {
     @State private var loadedPhoto: UIImage?
     @State private var cutoutPhoto: UIImage?
     @State private var dieCutPhoto: UIImage?
+    @State private var crystalPhoto: UIImage?
     @State private var finishedLoading = false
 
     private var resolvedURL: URL? { APIConfig.imageURL(image) }
@@ -6969,25 +8348,24 @@ private struct StickerImageView: View {
         let cachedExtracted = isCutout ? nil : resolvedURL.flatMap { DishCutoutCache.shared.cachedCutout(for: $0) }
         let subjectImage: UIImage? = isCutout ? (loadedPhoto ?? cachedRaw) : (cutoutPhoto ?? cachedExtracted)
         let cachedRim = (style == .dieCut) ? resolvedURL.flatMap { StickerBorderRenderer.shared.cached(forKey: $0.absoluteString) } : nil
-        let displayCutout: UIImage? = (style == .dieCut) ? (dieCutPhoto ?? cachedRim ?? subjectImage) : subjectImage
+        let cachedCrystal = (style == .crystal) ? resolvedURL.flatMap { StickerBorderRenderer.shared.cachedCrystal(forKey: $0.absoluteString) } : nil
+        let displayCutout: UIImage? = style == .dieCut
+            ? (dieCutPhoto ?? cachedRim ?? subjectImage)
+            : (style == .crystal ? (crystalPhoto ?? cachedCrystal ?? subjectImage) : subjectImage)
         let rawImage: UIImage? = loadedPhoto ?? cachedRaw
+        let isCrystal = style == .crystal
 
         Group {
-            if style == .polaroid && !compact && (subjectImage != nil || rawImage != nil || finishedLoading || resolvedURL == nil) {
-                PolaroidStickerCard(
-                    image: subjectImage ?? rawImage,
-                    assetName: assetName,
-                    isCutout: subjectImage != nil,
-                    name: name,
-                    compact: compact,
-                    isLightSurface: isLightSurface
-                )
-            } else if resolvedURL != nil {
+            if resolvedURL != nil {
                 if let displayCutout {
                     Image(uiImage: displayCutout)
                         .resizable()
                         .scaledToFit()
                         .padding(compact ? 2 : 4)
+                        .shadow(
+                            color: isCrystal ? Color.white.opacity(isLightSurface ? 0.52 : 0.42) : .clear,
+                            radius: isCrystal ? (compact ? 4 : 7) : 0
+                        )
                         .shadow(
                             color: Color.black.opacity(isLightSurface ? 0.16 : 0.34),
                             radius: compact ? 4 : 14,
@@ -7014,9 +8392,25 @@ private struct StickerImageView: View {
                                 .resizable()
                                 .scaledToFill()
                                 .frame(width: proxy.size.width, height: proxy.size.height)
+                                .overlay {
+                                    if isCrystal {
+                                        LinearGradient(
+                                            colors: [.clear, Color.white.opacity(0.22), Color.white.opacity(0.05), .clear],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    }
+                                }
                                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                                 .overlay {
-                                    if style == .dieCut {
+                                    if isCrystal {
+                                        ZStack {
+                                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                                .strokeBorder(Color.white.opacity(0.36), lineWidth: 4.5)
+                                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                                .strokeBorder(Color.white.opacity(0.84), lineWidth: 1.0)
+                                        }
+                                    } else if style == .dieCut {
                                         RoundedRectangle(cornerRadius: 20, style: .continuous)
                                             .strokeBorder(Color.white, lineWidth: 3.5)
                                     } else {
@@ -7027,6 +8421,10 @@ private struct StickerImageView: View {
                                             )
                                     }
                                 }
+                                .shadow(
+                                    color: isCrystal ? Color.white.opacity(isLightSurface ? 0.48 : 0.36) : .clear,
+                                    radius: isCrystal ? 6 : 0
+                                )
                                 .shadow(
                                     color: Color.black.opacity(isLightSurface ? 0.14 : 0.36),
                                     radius: 12,
@@ -7044,12 +8442,13 @@ private struct StickerImageView: View {
             }
         }
         .animation(.easeOut(duration: 0.22), value: displayCutout != nil)
-        .task(id: resolvedURL) {
+        .task(id: "\(resolvedURL?.absoluteString ?? "")|\(isCutout)") {
+            loadedPhoto = nil
             finishedLoading = false
             cutoutPhoto = nil
             dieCutPhoto = nil
+            crystalPhoto = nil
             guard let url = resolvedURL else {
-                loadedPhoto = nil
                 return
             }
             if isCutout {
@@ -7067,6 +8466,12 @@ private struct StickerImageView: View {
                     if !Task.isCancelled {
                         dieCutPhoto = rimmed
                     }
+                    if style == .crystal {
+                        let crystal = await StickerBorderRenderer.shared.makeCrystalSticker(from: target, cacheKey: url.absoluteString)
+                        if !Task.isCancelled {
+                            crystalPhoto = crystal
+                        }
+                    }
                 }
                 return
             }
@@ -7076,6 +8481,12 @@ private struct StickerImageView: View {
                 let rimmed = await StickerBorderRenderer.shared.makeDieCutSticker(from: cachedCut, cacheKey: url.absoluteString)
                 if !Task.isCancelled {
                     dieCutPhoto = rimmed
+                }
+                if style == .crystal {
+                    let crystal = await StickerBorderRenderer.shared.makeCrystalSticker(from: cachedCut, cacheKey: url.absoluteString)
+                    if !Task.isCancelled {
+                        crystalPhoto = crystal
+                    }
                 }
                 return
             }
@@ -7096,15 +8507,33 @@ private struct StickerImageView: View {
                     if !Task.isCancelled {
                         dieCutPhoto = rimmed
                     }
+                    if style == .crystal {
+                        let crystal = await StickerBorderRenderer.shared.makeCrystalSticker(from: extracted, cacheKey: url.absoluteString)
+                        if !Task.isCancelled {
+                            crystalPhoto = crystal
+                        }
+                    }
                 }
+            }
+        }
+        .task(id: style) {
+            guard style == .crystal, crystalPhoto == nil, let url = resolvedURL else { return }
+            let cachedRaw = RemoteImageCache.shared.cachedImage(for: url)
+            let cachedExtracted = isCutout ? nil : DishCutoutCache.shared.cachedCutout(for: url)
+            guard let source = isCutout ? (loadedPhoto ?? cachedRaw) : (cutoutPhoto ?? cachedExtracted) else { return }
+            let crystal = await StickerBorderRenderer.shared.makeCrystalSticker(from: source, cacheKey: url.absoluteString)
+            if !Task.isCancelled {
+                crystalPhoto = crystal
             }
         }
     }
 
     @ViewBuilder
     private var fallback: some View {
+        let isCrystal = style == .crystal
         if let assetName {
             Image(assetName).resizable().scaledToFit()
+                .shadow(color: isCrystal ? Color.white.opacity(isLightSurface ? 0.50 : 0.42) : .clear, radius: isCrystal ? 7 : 0)
                 .shadow(color: Color.black.opacity(isLightSurface ? 0.16 : 0.45), radius: 10, y: 6)
         } else if compact {
             Text(name)
@@ -7120,8 +8549,8 @@ private struct StickerImageView: View {
                 .overlay {
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .strokeBorder(
-                            isLightSurface ? Color.black.opacity(0.08) : Color.white.opacity(0.18),
-                            lineWidth: 0.8
+                            isCrystal ? Color.white.opacity(0.75) : (isLightSurface ? Color.black.opacity(0.08) : Color.white.opacity(0.18)),
+                            lineWidth: isCrystal ? 1.4 : 0.8
                         )
                 }
                 .overlay {
@@ -7133,79 +8562,9 @@ private struct StickerImageView: View {
                         .minimumScaleFactor(0.78)
                         .padding(14)
                 }
+                .shadow(color: isCrystal ? Color.white.opacity(isLightSurface ? 0.45 : 0.34) : .clear, radius: isCrystal ? 6 : 0)
                 .shadow(color: Color.black.opacity(isLightSurface ? 0.08 : 0.30), radius: 10, y: 5)
         }
-    }
-}
-
-private struct PolaroidStickerCard: View {
-    let image: UIImage?
-    var assetName: String? = nil
-    let isCutout: Bool
-    let name: String
-    var compact: Bool = false
-    var isLightSurface: Bool = false
-
-    var body: some View {
-        let sideInset: CGFloat = compact ? 3 : 8
-        let bottomInset: CGFloat = compact ? 10 : 28
-        let outerRadius: CGFloat = compact ? 5 : 10
-        let innerRadius: CGFloat = compact ? 3 : 5
-
-        VStack(spacing: 0) {
-            GeometryReader { proxy in
-                ZStack {
-                    Color(red: 0.962, green: 0.950, blue: 0.928)
-                    if let image {
-                        if isCutout {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                                .padding(compact ? 3 : 8)
-                        } else {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: proxy.size.width, height: proxy.size.height)
-                        }
-                    } else if let assetName, !assetName.isEmpty {
-                        Image(assetName)
-                            .resizable()
-                            .scaledToFit()
-                            .padding(compact ? 4 : 10)
-                    } else {
-                        Text(name)
-                            .font(.system(size: compact ? 9 : 13, weight: .semibold, design: .rounded))
-                            .foregroundStyle(CanvasPalette.obsidianInk)
-                            .multilineTextAlignment(.center)
-                            .padding(6)
-                    }
-                }
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .clipShape(RoundedRectangle(cornerRadius: innerRadius, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: innerRadius, style: .continuous)
-                        .strokeBorder(Color.black.opacity(0.06), lineWidth: 0.6)
-                }
-            }
-            .padding(.top, sideInset)
-            .padding(.horizontal, sideInset)
-
-            Text(name)
-                .font(.custom("Noteworthy-Bold", size: compact ? 8.5 : 13.5))
-                .foregroundStyle(CanvasPalette.obsidianInk)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity)
-                .frame(height: bottomInset)
-                .padding(.horizontal, sideInset)
-        }
-        .background(Color(red: 0.992, green: 0.986, blue: 0.972), in: RoundedRectangle(cornerRadius: outerRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: outerRadius, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.07), lineWidth: 0.6)
-        }
-        .shadow(color: Color.black.opacity(isLightSurface ? 0.14 : 0.34), radius: compact ? 4 : 12, y: compact ? 2 : 6)
     }
 }
 
@@ -7950,11 +9309,12 @@ private struct CanvasNoteView: View {
     var freezesMotion = false
     var reportsBounds = false
     var isLightSurface: Bool = false
+    var isFreshArrival: Bool = false
     var canMoveForward: Bool = true
     var canMoveBackward: Bool = true
     var alignmentTargets: [CanvasPoint] = []
     var remotePreview: CanvasRemoteLivePreview? = nil
-    var onTransformStart: () -> Void = {}
+    var onTransformStart: (Set<CanvasTransformField>) -> Void = { _ in }
     let onSelect: () -> Void
     let onEdit: () -> Void
     let onTransform: () -> Void
@@ -7979,6 +9339,14 @@ private struct CanvasNoteView: View {
         if count > 18 { return 16 }
         if count > 11 { return 18 }
         return 21
+    }
+
+    private var entranceScaleFactor: CGFloat {
+        if hasAppeared || reduceMotion { return 1.0 }
+        if isFreshArrival {
+            return note.isDoodle ? 1.24 : 0.48
+        }
+        return 0.86
     }
 
     var body: some View {
@@ -8032,10 +9400,25 @@ private struct CanvasNoteView: View {
                     )
                 }
             }
+            .overlay {
+                if note.textEffect == .sparkle {
+                    CanvasSparkleOrbitOverlay(
+                        time: time,
+                        phase: phase,
+                        isLightSurface: isLightSurface,
+                        compact: false,
+                        reduceMotion: effectsPaused
+                    )
+                    .padding(-10)
+                }
+            }
             .opacity(note.textEffect.opacity(time: time, reduceMotion: effectsPaused))
             .offset(note.textEffect.offset(time: time, phase: phase, reduceMotion: effectsPaused))
-            .scaleEffect(x: note.textEffect.scaleX(time: time, reduceMotion: effectsPaused), y: note.textEffect.scaleY(time: time, reduceMotion: effectsPaused))
-            .rotationEffect(.degrees(note.textEffect.rotation(time: time, reduceMotion: effectsPaused)))
+            .scaleEffect(
+                x: note.textEffect.scaleX(time: time, phase: phase, reduceMotion: effectsPaused),
+                y: note.textEffect.scaleY(time: time, phase: phase, reduceMotion: effectsPaused)
+            )
+            .rotationEffect(.degrees(note.textEffect.rotation(time: time, phase: phase, reduceMotion: effectsPaused)))
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isSelected)
         }
         // 完整文字保留排版尺寸，打字过程中选中框和触摸区域保持稳定。
@@ -8043,7 +9426,7 @@ private struct CanvasNoteView: View {
         .padding(.vertical, note.isEmoji ? 10 : 10)
         .frame(minWidth: note.isEmoji ? 82 : (note.isDoodle ? 82 : 136), minHeight: note.isEmoji ? 82 : 60)
         .contentShape(Rectangle())
-        .scaleEffect(min(max(displayScale, 0.3), 3) * (hasAppeared || reduceMotion ? 1 : 0.86))
+        .scaleEffect(min(max(displayScale, 0.3), 3) * entranceScaleFactor)
         .rotationEffect(.degrees(displayRotation))
         .overlay(alignment: .top) {
             if let activePreview {
@@ -8087,7 +9470,9 @@ private struct CanvasNoteView: View {
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { onSelect() }
         .onAppear {
-            withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.72)) {
+            let response: Double = isFreshArrival ? (note.isDoodle ? 0.34 : 0.40) : 0.32
+            let damping: Double = isFreshArrival ? (note.isDoodle ? 0.58 : 0.60) : 0.72
+            withAnimation(reduceMotion ? nil : .spring(response: response, dampingFraction: damping)) {
                 hasAppeared = true
             }
         }
@@ -8158,7 +9543,10 @@ private struct CanvasNoteView: View {
 private struct CanvasStrokeDrawingLayer: View {
     let strokes: [CanvasStroke]
     let activeStroke: [CGPoint]
+    var activeStrokeID: UUID? = nil
     var remoteActiveStrokes: [CanvasStroke] = []
+    var isSparkleAnimated: Bool = false
+    var fixedTime: TimeInterval? = nil
     let paintColor: Color
     let style: CanvasBrushStyle
     let width: CGFloat
@@ -8190,7 +9578,34 @@ private struct CanvasStrokeDrawingLayer: View {
         return path
     }
 
-    private func drawStroke(in context: inout GraphicsContext, points: [CGPoint], color: Color, style: CanvasBrushStyle, width: CGFloat) {
+    private func sampledAlong(_ points: [CGPoint], step: CGFloat) -> [(point: CGPoint, angle: Double)] {
+        guard let first = points.first else { return [] }
+        if points.count == 1 {
+            return [(first, 0)]
+        }
+        var samples: [(CGPoint, Double)] = [(first, atan2(points[1].y - first.y, points[1].x - first.x))]
+        var carry: CGFloat = 0
+        for idx in 1..<points.count {
+            let p0 = points[idx - 1]
+            let p1 = points[idx]
+            let dx = p1.x - p0.x
+            let dy = p1.y - p0.y
+            let segLen = hypot(dx, dy)
+            guard segLen > 0.001 else { continue }
+            let angle = atan2(Double(dy), Double(dx))
+            var offset = step - carry
+            while offset <= segLen {
+                let ratio = offset / segLen
+                let pt = CGPoint(x: p0.x + dx * ratio, y: p0.y + dy * ratio)
+                samples.append((pt, angle))
+                offset += step
+            }
+            carry = segLen - (offset - step)
+        }
+        return samples
+    }
+
+    private func drawStroke(in context: inout GraphicsContext, seed: Double, points: [CGPoint], color: Color, style: CanvasBrushStyle, width: CGFloat, time: TimeInterval) {
         guard let first = points.first else { return }
         let strokeWidth = width * style.lineWidthMultiplier
         if style == .dotted {
@@ -8220,6 +9635,85 @@ private struct CanvasStrokeDrawingLayer: View {
             return
         }
 
+        if style == .sparkle {
+            if points.count == 1 {
+                let star = CanvasBurstFXOverlay.fourPointStarPath(center: first, radius: max(6, strokeWidth * 1.15), rotation: .radians(time * 0.6))
+                context.fill(star, with: .color(Color.white.opacity(0.92)))
+                return
+            }
+            let path = smoothedPath(for: points)
+            context.stroke(path, with: .color(color.opacity(0.36)), style: StrokeStyle(lineWidth: strokeWidth * 1.45, lineCap: .round, lineJoin: .round))
+            context.stroke(path, with: .color(Color.white.opacity(0.88)), style: StrokeStyle(lineWidth: max(1.4, strokeWidth * 0.58), lineCap: .round, lineJoin: .round))
+            let samples = sampledAlong(points, step: max(18, strokeWidth * 3.2))
+            for (idx, sample) in samples.enumerated() {
+                let hash = abs(Int((seed * 100).rounded()) &+ idx &* 37)
+                let perpAngle = sample.angle + .pi / 2
+                let jitter = CGFloat((hash % 13) - 6) * 0.95
+                let pt = CGPoint(
+                    x: sample.point.x + CGFloat(cos(perpAngle)) * jitter,
+                    y: sample.point.y + CGFloat(sin(perpAngle)) * jitter
+                )
+                let twinkle = 0.48 + 0.52 * (sin(time * 3.1 + Double(idx) * 0.9 + seed) + 1) * 0.5
+                let starColor: Color = hash.isMultiple(of: 2) ? .white : Color(red: 1.0, green: 0.90, blue: 0.56)
+                if hash % 3 == 0 {
+                    let dotR = max(1.5, (2.2 + strokeWidth * 0.22) * CGFloat(twinkle))
+                    context.fill(Path(ellipseIn: CGRect(x: pt.x - dotR, y: pt.y - dotR, width: dotR * 2, height: dotR * 2)), with: .color(starColor.opacity(twinkle)))
+                } else {
+                    let starR = max(3.5, (3.8 + strokeWidth * 0.44) * CGFloat(0.68 + 0.38 * twinkle))
+                    let star = CanvasBurstFXOverlay.fourPointStarPath(center: pt, radius: starR, rotation: .degrees(Double(hash % 45)))
+                    context.fill(star, with: .color(starColor.opacity(twinkle)))
+                }
+            }
+            return
+        }
+
+        if style == .rainbow {
+            if points.count == 1 {
+                let c = Color(hue: (seed * 0.1).truncatingRemainder(dividingBy: 1.0), saturation: 0.78, brightness: 0.96)
+                let r = strokeWidth * 0.65
+                context.fill(Path(ellipseIn: CGRect(x: first.x - r, y: first.y - r, width: r * 2, height: r * 2)), with: .color(c))
+                return
+            }
+            var cumLen: CGFloat = 0
+            for idx in 1..<points.count {
+                let p0 = points[idx - 1]
+                let p1 = points[idx]
+                let segLen = hypot(p1.x - p0.x, p1.y - p0.y)
+                let subSteps = max(1, Int((segLen / 8.0).rounded(.up)))
+                for s in 0..<subSteps {
+                    let t0 = CGFloat(s) / CGFloat(subSteps)
+                    let t1 = CGFloat(s + 1) / CGFloat(subSteps)
+                    let a = CGPoint(x: p0.x + (p1.x - p0.x) * t0, y: p0.y + (p1.y - p0.y) * t0)
+                    let b = CGPoint(x: p0.x + (p1.x - p0.x) * t1, y: p0.y + (p1.y - p0.y) * t1)
+                    let hue = ((Double(cumLen) * 0.0045) + seed * 0.02).truncatingRemainder(dividingBy: 1.0)
+                    let segColor = Color(hue: hue < 0 ? hue + 1 : hue, saturation: 0.78, brightness: 0.96)
+                    var seg = Path()
+                    seg.move(to: a)
+                    seg.addLine(to: b)
+                    context.stroke(seg, with: .color(segColor.opacity(0.24)), style: StrokeStyle(lineWidth: strokeWidth * 1.85, lineCap: .round))
+                    context.stroke(seg, with: .color(segColor), style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round))
+                    cumLen += segLen / CGFloat(subSteps)
+                }
+            }
+            return
+        }
+
+        if style == .hearts {
+            let samples = sampledAlong(points, step: max(16, strokeWidth * 2.7))
+            let radius = max(4.5, strokeWidth * 0.68)
+            for (idx, sample) in samples.enumerated() {
+                let tilt = sin(Double(idx) * 1.3 + seed) * 14
+                let heart = CanvasBurstFXOverlay.heartPath(center: sample.point, radius: radius, rotation: .degrees(tilt))
+                context.fill(heart, with: .color(color))
+                if radius >= 5.5 {
+                    let dotR = radius * 0.22
+                    let glint = Path(ellipseIn: CGRect(x: sample.point.x - radius * 0.34, y: sample.point.y - radius * 0.36, width: dotR, height: dotR))
+                    context.fill(glint, with: .color(Color.white.opacity(0.55)))
+                }
+            }
+            return
+        }
+
         if points.count == 1 {
             context.fill(
                 Path(ellipseIn: CGRect(x: first.x - strokeWidth / 2, y: first.y - strokeWidth / 2, width: strokeWidth, height: strokeWidth)),
@@ -8235,21 +9729,43 @@ private struct CanvasStrokeDrawingLayer: View {
         }
     }
 
-    var body: some View {
+    private var needsSparkleTimeline: Bool {
+        guard fixedTime == nil, isSparkleAnimated else { return false }
+        if style == .sparkle && !activeStroke.isEmpty { return true }
+        return strokes.contains(where: { $0.style == .sparkle })
+            || remoteActiveStrokes.contains(where: { $0.style == .sparkle })
+    }
+
+    private func renderCanvas(time: TimeInterval) -> some View {
         Canvas { context, size in
             for stroke in strokes {
                 let strokeColor = stroke.customColor?.color ?? stroke.color.color
                 let points = resolvedPoints(for: stroke, in: size)
-                drawStroke(in: &context, points: points, color: strokeColor, style: stroke.style, width: stroke.width)
+                drawStroke(in: &context, seed: stroke.id.motionPhaseOffset, points: points, color: strokeColor, style: stroke.style, width: stroke.width, time: time)
             }
             for remoteStroke in remoteActiveStrokes {
                 let strokeColor = remoteStroke.customColor?.color ?? remoteStroke.color.color
                 let points = resolvedPoints(for: remoteStroke, in: size)
-                drawStroke(in: &context, points: points, color: strokeColor, style: remoteStroke.style, width: remoteStroke.width)
+                drawStroke(in: &context, seed: remoteStroke.id.motionPhaseOffset, points: points, color: strokeColor, style: remoteStroke.style, width: remoteStroke.width, time: time)
             }
-            drawStroke(in: &context, points: activeStroke, color: paintColor, style: style, width: width)
+            if let activeStrokeID {
+                drawStroke(in: &context, seed: activeStrokeID.motionPhaseOffset, points: activeStroke,
+                           color: paintColor, style: style, width: width, time: time)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    var body: some View {
+        if let fixedTime {
+            renderCanvas(time: fixedTime)
+        } else if needsSparkleTimeline {
+            TimelineView(.animation(minimumInterval: 1.0 / 16.0)) { context in
+                renderCanvas(time: context.date.timeIntervalSinceReferenceDate)
+            }
+        } else {
+            renderCanvas(time: 0.5)
+        }
     }
 }
 
@@ -8258,13 +9774,18 @@ private struct CanvasDrawingView: View {
     @Binding var activeStroke: [CGPoint]
     var remoteActiveStrokes: [CanvasStroke] = []
     let isEnabled: Bool
+    var isSparkleAnimated: Bool = false
     let brush: CanvasBrushColor
     let paintColor: Color
     let style: CanvasBrushStyle
     let width: CGFloat
     var onStart: () -> Void = {}
-    var onLiveStroke: (([CGPoint]) -> Void)? = nil
-    let onEnd: () -> Void
+    var onStrokePoint: ((CGPoint, CGFloat) -> Void)? = nil
+    var onLiveStroke: ((CanvasStroke) -> Void)? = nil
+    let onEnd: (CGPoint?) -> Void
+
+    @State private var activeStrokeID = UUID()
+    @State private var lastPointTime: (point: CGPoint, time: TimeInterval)?
 
     var body: some View {
         GeometryReader { proxy in
@@ -8272,7 +9793,9 @@ private struct CanvasDrawingView: View {
                 CanvasStrokeDrawingLayer(
                     strokes: strokes,
                     activeStroke: activeStroke,
+                    activeStrokeID: activeStrokeID,
                     remoteActiveStrokes: remoteActiveStrokes,
+                    isSparkleAnimated: isSparkleAnimated,
                     paintColor: paintColor,
                     style: style,
                     width: width
@@ -8297,41 +9820,54 @@ private struct CanvasDrawingView: View {
         .allowsHitTesting(isEnabled)
     }
 
-    private func normalizedPoints(from rawPoints: [CGPoint], in size: CGSize) -> [CGPoint] {
+    private func currentStroke(in size: CGSize) -> CanvasStroke {
         let w = max(size.width, 1)
         let h = max(size.height, 1)
-        return rawPoints.map { CGPoint(x: $0.x / w, y: $0.y / h) }
+        return CanvasStroke(
+            id: activeStrokeID,
+            points: activeStroke.map { CGPoint(x: $0.x / w, y: $0.y / h) },
+            color: brush,
+            customColor: CanvasRGBA(color: paintColor),
+            style: style,
+            width: width,
+            isNormalized: true
+        )
     }
 
     private func drawGesture(in size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
+                let now = Date.timeIntervalSinceReferenceDate
                 if activeStroke.isEmpty {
                     onStart()
+                    activeStrokeID = UUID()
                     activeStroke = [value.startLocation]
-                    onLiveStroke?(normalizedPoints(from: activeStroke, in: size))
+                    lastPointTime = (value.startLocation, now)
+                    onStrokePoint?(value.startLocation, 140)
+                    onLiveStroke?(currentStroke(in: size))
                 }
                 if let last = activeStroke.last, hypot(value.location.x - last.x, value.location.y - last.y) < 2.0 {
                     return
                 }
+                let speed: CGFloat
+                if let prev = lastPointTime {
+                    let dt = max(now - prev.time, 0.004)
+                    speed = hypot(value.location.x - prev.point.x, value.location.y - prev.point.y) / CGFloat(dt)
+                } else {
+                    speed = 120
+                }
+                lastPointTime = (value.location, now)
                 activeStroke.append(value.location)
-                onLiveStroke?(normalizedPoints(from: activeStroke, in: size))
+                onStrokePoint?(value.location, speed)
+                onLiveStroke?(currentStroke(in: size))
             }
             .onEnded { _ in
                 guard !activeStroke.isEmpty else { return }
-                let normalized = normalizedPoints(from: activeStroke, in: size)
-                strokes.append(
-                    CanvasStroke(
-                        points: normalized,
-                        color: brush,
-                        customColor: CanvasRGBA(color: paintColor),
-                        style: style,
-                        width: width,
-                        isNormalized: true
-                    )
-                )
+                let lastPoint = activeStroke.last
+                strokes.append(currentStroke(in: size))
                 activeStroke.removeAll()
-                onEnd()
+                lastPointTime = nil
+                onEnd(lastPoint)
             }
     }
 }
@@ -8407,12 +9943,14 @@ private struct LiveControlButton: View {
 private struct CanvasElementActionBar: View {
     let title: String
     let canEditText: Bool
+    var canReplacePhoto: Bool = false
     var canDuplicate: Bool = false
     let isDeleting: Bool
     let layers: [CanvasLayerEntry]
     let selection: CanvasSelection
     let onSelect: (CanvasSelection) -> Void
     let onEditText: () -> Void
+    var onReplacePhoto: (() -> Void)? = nil
     let onEdit: () -> Void
     var onDuplicate: (() -> Void)? = nil
     let onLayerMove: (CanvasLayerMove) -> Void
@@ -8448,6 +9986,19 @@ private struct CanvasElementActionBar: View {
                         .contentShape(Rectangle())
                 }
                 .accessibilityLabel("编辑文字")
+            }
+            if canReplacePhoto, let onReplacePhoto {
+                Button {
+                    Haptics.light()
+                    onReplacePhoto()
+                } label: {
+                    Image(systemName: "camera")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(CanvasPalette.obsidianInk)
+                        .frame(width: 38, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .accessibilityLabel("换一张菜品图")
             }
             Button {
                 Haptics.light()
@@ -8613,6 +10164,17 @@ enum LaunchCanvasTemplate: String, CaseIterable, Identifiable {
     }
 }
 
+struct LaunchCreatorMeta: Codable, Equatable {
+    let householdId: UInt
+    let creatorId: UInt
+    let creatorNickname: String
+    let canEdit: Bool
+    let hasCustom: Bool
+    let motion: String
+    let holdSpeed: String
+    let updatedAt: Date?
+}
+
 struct LaunchCanvasDocumentPayload {
     fileprivate let document: CanvasDocument
 
@@ -8627,6 +10189,13 @@ enum LaunchCanvasStore {
             .appendingPathComponent("launch_canvas_document_v1.json")
     }
 
+    private static var creatorDocumentURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("launch_canvas_creator_v1.json")
+    }
+
+    private static let creatorMetaKey = "launch.curtain.creator.meta.v1"
+
     private static var todayStampText: String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -8638,12 +10207,88 @@ enum LaunchCanvasStore {
         FileManager.default.fileExists(atPath: documentURL.path)
     }
 
-    static func loadOrDefaultPayload() -> LaunchCanvasDocumentPayload {
+    static func loadCreatorMeta() -> LaunchCreatorMeta? {
+        guard let data = UserDefaults.standard.data(forKey: creatorMetaKey) else { return nil }
+        return try? JSONDecoder().decode(LaunchCreatorMeta.self, from: data)
+    }
+
+    static func loadCreatorPayload() -> LaunchCanvasDocumentPayload? {
+        guard let meta = loadCreatorMeta(), meta.hasCustom,
+              let data = try? Data(contentsOf: creatorDocumentURL),
+              let doc = try? JSONDecoder().decode(CanvasDocument.self, from: data) else {
+            return nil
+        }
+        return LaunchCanvasDocumentPayload(document: doc)
+    }
+
+    static func saveCreatorCache(_ response: HouseholdLaunchCanvasResponse, hydratedDocument: CanvasDocument? = nil) {
+        let meta = LaunchCreatorMeta(
+            householdId: response.householdId,
+            creatorId: response.creatorId,
+            creatorNickname: response.creatorNickname,
+            canEdit: response.canEdit,
+            hasCustom: response.hasCustom,
+            motion: response.motion,
+            holdSpeed: response.holdSpeed,
+            updatedAt: response.updatedAt
+        )
+        if let metaData = try? JSONEncoder().encode(meta) {
+            UserDefaults.standard.set(metaData, forKey: creatorMetaKey)
+        }
+        if response.hasCustom, let doc = hydratedDocument ?? response.document {
+            do {
+                try FileManager.default.createDirectory(
+                    at: creatorDocumentURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                let data = try JSONEncoder().encode(doc)
+                try data.write(to: creatorDocumentURL, options: .atomic)
+            } catch {
+                // Keep prior creator launch cache if disk write fails.
+            }
+        } else {
+            try? FileManager.default.removeItem(at: creatorDocumentURL)
+        }
+    }
+
+    static func clearCreatorCache() {
+        UserDefaults.standard.removeObject(forKey: creatorMetaKey)
+        try? FileManager.default.removeItem(at: creatorDocumentURL)
+    }
+
+    static func loadPersonalPayloadOrDefault() -> LaunchCanvasDocumentPayload {
         if let data = try? Data(contentsOf: documentURL),
            let doc = try? JSONDecoder().decode(CanvasDocument.self, from: data) {
             return LaunchCanvasDocumentPayload(document: doc)
         }
         return makeTemplatePayload(.morningTable)
+    }
+
+    static func loadActiveLaunchPlayback(config: LaunchCurtainConfig) -> (payload: LaunchCanvasDocumentPayload, effectiveConfig: LaunchCurtainConfig) {
+        if config.source == .householdCreator,
+           let meta = loadCreatorMeta(),
+           meta.hasCustom,
+           let creatorPayload = loadCreatorPayload() {
+            var effective = config
+            if let motion = LaunchCurtainMotion(rawValue: meta.motion == "polaroidDrop" ? "softReveal" : meta.motion) {
+                effective.motion = motion
+            }
+            if let speed = LaunchHoldSpeed(rawValue: meta.holdSpeed) {
+                effective.holdSpeed = speed
+            }
+            return (creatorPayload, effective)
+        }
+        if config.source == .personal {
+            return (loadPersonalPayloadOrDefault(), config)
+        }
+        if hasSavedDocument() {
+            return (loadPersonalPayloadOrDefault(), config)
+        }
+        return (makeTemplatePayload(.morningTable), config)
+    }
+
+    static func loadOrDefaultPayload() -> LaunchCanvasDocumentPayload {
+        loadActiveLaunchPlayback(config: LaunchCurtainStore.load()).payload
     }
 
     static func save(_ payload: LaunchCanvasDocumentPayload) {
@@ -8880,18 +10525,10 @@ enum LaunchCanvasStore {
 struct LaunchCanvasPlaybackView: View {
     var payload: LaunchCanvasDocumentPayload? = nil
     var isLiveActive: Bool = true
-    var inPolaroidFrame: Bool = false
     var isExiting: Bool = false
     var motionScale: CGFloat = 1.0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var dateStampText: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "M.dd · EEEE"
-        return f.string(from: Date())
-    }
 
     var body: some View {
         let doc = (payload ?? LaunchCanvasStore.loadOrDefaultPayload()).document
@@ -8918,56 +10555,7 @@ struct LaunchCanvasPlaybackView: View {
 
     @ViewBuilder
     private func playbackContent(doc: CanvasDocument, size: CGSize, time: TimeInterval, live: Bool) -> some View {
-        let bg = CanvasBackground(rawValue: doc.background) ?? .morningTable
-        if inPolaroidFrame {
-            GeometryReader { proxy in
-                ZStack {
-                    ZStack {
-                        CanvasMediaBackground(
-                            source: bg,
-                            blur: max(doc.blur, 14),
-                            customData: doc.customBackgroundData,
-                            customURL: doc.customBackgroundURL
-                        )
-                            .scaleEffect(1.06)
-                        CanvasMoodFilterOverlay(filter: doc.moodFilter)
-                        Color(bg.isLightSurface ? .white : .black)
-                            .opacity(bg.isLightSurface ? 0.22 : 0.30)
-                    }
-                    .frame(width: proxy.size.width, height: proxy.size.height)
-                    .clipped()
-
-                    VStack(spacing: 0) {
-                        aspectFilledArtwork(doc: doc, docSize: size, time: time, live: live, fillsSafeArea: false)
-                            .frame(width: 244, height: 324)
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            .padding(.top, 12)
-                            .padding(.horizontal, 12)
-
-                        Text(dateStampText)
-                            .font(.custom("Noteworthy-Bold", size: 15))
-                            .foregroundStyle(Color(red: 0.34, green: 0.32, blue: 0.30))
-                            .padding(.vertical, 16)
-                    }
-                    .frame(width: 268)
-                    .background(
-                        Color(red: 0.985, green: 0.975, blue: 0.955),
-                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    )
-                    .shadow(color: Color.black.opacity(0.32), radius: 26, y: 14)
-                    .rotationEffect(.degrees(isLiveActive ? -2.5 : -6.5))
-                    .scaleEffect(isExiting ? 0.94 : (isLiveActive ? 1.0 : 0.86))
-                    .offset(y: isExiting ? -34 : (isLiveActive ? 0 : -28))
-                    .opacity(isLiveActive ? 1 : 0)
-                    .animation(reduceMotion ? nil : .spring(response: 0.62, dampingFraction: 0.78), value: isLiveActive)
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.36), value: isExiting)
-                }
-                .frame(width: proxy.size.width, height: proxy.size.height)
-            }
-            .ignoresSafeArea()
-        } else {
-            aspectFilledArtwork(doc: doc, docSize: size, time: time, live: live, fillsSafeArea: true)
-        }
+        aspectFilledArtwork(doc: doc, docSize: size, time: time, live: live)
     }
 
     @ViewBuilder
@@ -8975,38 +10563,92 @@ struct LaunchCanvasPlaybackView: View {
         doc: CanvasDocument,
         docSize: CGSize,
         time: TimeInterval,
-        live: Bool,
-        fillsSafeArea: Bool
+        live: Bool
     ) -> some View {
-        let artwork = GeometryReader { proxy in
+        GeometryReader { proxy in
             let scale = max(proxy.size.width / max(docSize.width, 1), proxy.size.height / max(docSize.height, 1))
             CanvasDocumentArtwork(document: doc, size: docSize, time: time, isLiveActive: live)
                 .frame(width: docSize.width, height: docSize.height)
-                .scaleEffect(scale * (fillsSafeArea ? motionScale : 1.0))
+                .scaleEffect(scale * motionScale)
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .clipped()
         }
-        if fillsSafeArea {
-            artwork.ignoresSafeArea()
-        } else {
-            artwork
-        }
+        .ignoresSafeArea()
     }
 }
 
 private struct LaunchStudioOptionsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var config: LaunchCurtainConfig
+    let creatorMeta: LaunchCreatorMeta?
+    let isHouseholdCreator: Bool
+    let onSelectSource: (LaunchCurtainSource) -> Void
     let onSelectTemplate: (LaunchCanvasTemplate) -> Void
     let onPreview: () -> Void
     let onResetDefault: () -> Void
 
     private let obsidian = Color(red: 0.067, green: 0.067, blue: 0.075)
+    private var isReadOnlyCreator: Bool {
+        config.source == .householdCreator && !isHouseholdCreator
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: AppSpacing.lg) {
+                    SectionCard {
+                        FieldLabel("开屏动画来源")
+                        VStack(spacing: 8) {
+                            ForEach(LaunchCurtainSource.allCases) { item in
+                                let isChosen = config.source == item
+                                let subtext: String = {
+                                    if item == .householdCreator {
+                                        if isHouseholdCreator {
+                                            return creatorMeta?.hasCustom == true ? "你已发布给全家人使用，保存会同步更新" : "由你设计并分享给家庭成员使用"
+                                        }
+                                        if let meta = creatorMeta {
+                                            return meta.hasCustom ? "使用「\(meta.creatorNickname)」设计的共享开屏" : "「\(meta.creatorNickname)」暂未发布，当前展示默认样式"
+                                        }
+                                        return "同步使用家庭创建者发布的开屏动画"
+                                    }
+                                    return "只在本机保存你亲手创作的开屏与出场节奏"
+                                }()
+                                Button {
+                                    Haptics.light()
+                                    onSelectSource(item)
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: item == .householdCreator ? "house.fill" : "paintbrush.fill")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundStyle(isChosen ? .white : obsidian)
+                                            .frame(width: 32, height: 32)
+                                            .background(isChosen ? obsidian : Color.appBackground, in: Circle())
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(item.title)
+                                                .font(AppFont.headline(14.5))
+                                                .foregroundStyle(Color.inkPrimary)
+                                            Text(subtext)
+                                                .font(AppFont.caption(11))
+                                                .foregroundStyle(Color.inkMuted)
+                                                .lineLimit(2)
+                                        }
+                                        Spacer()
+                                        Image(systemName: isChosen ? "checkmark.circle.fill" : "circle")
+                                            .font(.system(size: 18))
+                                            .foregroundStyle(isChosen ? obsidian : Color.inkMuted.opacity(0.45))
+                                    }
+                                    .padding(10)
+                                    .background(Color.appBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                            .strokeBorder(isChosen ? obsidian : Color.dividerLine.opacity(0.75), lineWidth: isChosen ? 1.4 : 0.7)
+                                    }
+                                }
+                                .buttonStyle(SoftPressStyle())
+                            }
+                        }
+                    }
+
                     SectionCard {
                         Toggle(isOn: $config.enabled) {
                             VStack(alignment: .leading, spacing: 2) {
@@ -9020,114 +10662,124 @@ private struct LaunchStudioOptionsSheet: View {
                         }
                         .tint(obsidian)
 
-                        Divider().background(Color.dividerLine.opacity(0.6))
+                        if !isReadOnlyCreator {
+                            Divider().background(Color.dividerLine.opacity(0.6))
 
-                        FieldLabel("出场动效")
-                        LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-                            ForEach(LaunchCurtainMotion.allCases) { item in
-                                let isChosen = config.motion == item
-                                Button {
-                                    Haptics.light()
-                                    config.motion = item
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        Image(systemName: item.icon)
-                                            .font(.system(size: 13, weight: .semibold))
-                                        Text(item.title)
-                                            .font(.system(size: 13, weight: isChosen ? .semibold : .medium, design: .rounded))
-                                    }
-                                    .foregroundStyle(isChosen ? .white : Color.inkPrimary)
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 40)
-                                    .background(isChosen ? obsidian : Color.appBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                    .overlay {
-                                        if !isChosen {
-                                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                .strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
-                                        }
-                                    }
-                                }
-                                .buttonStyle(SoftPressStyle())
-                            }
-                        }
-
-                        FieldLabel("停留节奏")
-                        HStack(spacing: 8) {
-                            ForEach(LaunchHoldSpeed.allCases) { speed in
-                                let isChosen = config.holdSpeed == speed
-                                Button {
-                                    Haptics.light()
-                                    config.holdSpeed = speed
-                                } label: {
-                                    VStack(spacing: 1) {
-                                        Text(speed.title)
-                                            .font(.system(size: 13, weight: isChosen ? .semibold : .medium, design: .rounded))
-                                        Text(speed.subtitle)
-                                            .font(.system(size: 10, design: .monospaced))
-                                            .opacity(0.76)
-                                    }
-                                    .foregroundStyle(isChosen ? .white : Color.inkPrimary)
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 42)
-                                    .background(isChosen ? obsidian : Color.appBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                    .overlay {
-                                        if !isChosen {
-                                            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                                .strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
-                                        }
-                                    }
-                                }
-                                .buttonStyle(SoftPressStyle())
-                            }
-                        }
-                    }
-
-                    SectionCard {
-                        FieldLabel("套用开屏灵感模板")
-                        Text("套用后仍可自由移动、增删文字贴纸与涂鸦，并支持撤销")
-                            .font(AppFont.caption(11))
-                            .foregroundStyle(Color.inkMuted)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
-                                ForEach(LaunchCanvasTemplate.allCases) { template in
+                            FieldLabel("出场动效")
+                            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                                ForEach(LaunchCurtainMotion.allCases) { item in
+                                    let isChosen = config.motion == item
                                     Button {
-                                        onSelectTemplate(template)
-                                        dismiss()
+                                        Haptics.selection()
+                                        config.motion = item
+                                        CanvasSoundEngine.shared.playEffectSparkle()
                                     } label: {
-                                        VStack(alignment: .leading, spacing: 6) {
-                                            ZStack {
-                                                CanvasMediaBackground(source: template.previewBackground, blur: 0, customData: nil)
-                                                    .frame(width: 112, height: 80)
-                                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                                if let asset = template.previewAccentAsset {
-                                                    Image(asset)
-                                                        .resizable()
-                                                        .scaledToFit()
-                                                        .frame(width: 34, height: 34)
-                                                        .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
-                                                }
-                                            }
-                                            Text(template.title)
-                                                .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                                                .foregroundStyle(Color.inkPrimary)
-                                            Text(template.subtitle)
-                                                .font(.system(size: 10.5))
-                                                .foregroundStyle(Color.inkMuted)
-                                                .lineLimit(1)
+                                        HStack(spacing: 6) {
+                                            Image(systemName: item.icon)
+                                                .font(.system(size: 13, weight: .semibold))
+                                            Text(item.title)
+                                                .font(.system(size: 13, weight: isChosen ? .semibold : .medium, design: .rounded))
                                         }
-                                        .padding(8)
-                                        .frame(width: 128, alignment: .leading)
-                                        .background(Color.appBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                        .foregroundStyle(isChosen ? .white : Color.inkPrimary)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 40)
+                                        .background(isChosen ? obsidian : Color.appBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                         .overlay {
-                                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                                .strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
+                                            if !isChosen {
+                                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                    .strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
+                                            }
                                         }
                                     }
                                     .buttonStyle(SoftPressStyle())
                                 }
                             }
-                            .padding(.vertical, 2)
+
+                            FieldLabel("停留节奏")
+                            HStack(spacing: 8) {
+                                ForEach(LaunchHoldSpeed.allCases) { speed in
+                                    let isChosen = config.holdSpeed == speed
+                                    Button {
+                                        Haptics.light()
+                                        config.holdSpeed = speed
+                                    } label: {
+                                        VStack(spacing: 1) {
+                                            Text(speed.title)
+                                                .font(.system(size: 13, weight: isChosen ? .semibold : .medium, design: .rounded))
+                                            Text(speed.subtitle)
+                                                .font(.system(size: 10, design: .monospaced))
+                                                .opacity(0.76)
+                                        }
+                                        .foregroundStyle(isChosen ? .white : Color.inkPrimary)
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: 42)
+                                        .background(isChosen ? obsidian : Color.appBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                        .overlay {
+                                            if !isChosen {
+                                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                                    .strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
+                                            }
+                                        }
+                                    }
+                                    .buttonStyle(SoftPressStyle())
+                                }
+                            }
+                        } else {
+                            Divider().background(Color.dividerLine.opacity(0.6))
+                            Text("当前动效与画布由「\(creatorMeta?.creatorNickname ?? "家庭创建者")」统一设置，切换到「使用自己 DIY 的」后可自由创作")
+                                .font(AppFont.caption(11.5))
+                                .foregroundStyle(Color.inkMuted)
+                        }
+                    }
+
+                    if !isReadOnlyCreator {
+                        SectionCard {
+                            FieldLabel("套用开屏灵感模板")
+                            Text("套用后仍可自由移动、增删文字贴纸与涂鸦，并支持撤销")
+                                .font(AppFont.caption(11))
+                                .foregroundStyle(Color.inkMuted)
+
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 10) {
+                                    ForEach(LaunchCanvasTemplate.allCases) { template in
+                                        Button {
+                                            onSelectTemplate(template)
+                                            dismiss()
+                                        } label: {
+                                            VStack(alignment: .leading, spacing: 6) {
+                                                ZStack {
+                                                    CanvasMediaBackground(source: template.previewBackground, blur: 0, customData: nil)
+                                                        .frame(width: 112, height: 80)
+                                                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                                    if let asset = template.previewAccentAsset {
+                                                        Image(asset)
+                                                            .resizable()
+                                                            .scaledToFit()
+                                                            .frame(width: 34, height: 34)
+                                                            .shadow(color: .black.opacity(0.2), radius: 4, y: 2)
+                                                    }
+                                                }
+                                                Text(template.title)
+                                                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                                                    .foregroundStyle(Color.inkPrimary)
+                                                Text(template.subtitle)
+                                                    .font(.system(size: 10.5))
+                                                    .foregroundStyle(Color.inkMuted)
+                                                    .lineLimit(1)
+                                            }
+                                            .padding(8)
+                                            .frame(width: 128, alignment: .leading)
+                                            .background(Color.appBackground, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                            .overlay {
+                                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                                    .strokeBorder(Color.dividerLine.opacity(0.75), lineWidth: 0.7)
+                                            }
+                                        }
+                                        .buttonStyle(SoftPressStyle())
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                            }
                         }
                     }
                 }
@@ -9138,11 +10790,14 @@ private struct LaunchStudioOptionsSheet: View {
             .background(Color.appBackground.ignoresSafeArea())
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: AppSpacing.md) {
-                    SecondaryButton(title: "恢复默认", icon: "arrow.counterclockwise") {
-                        onResetDefault()
-                        dismiss()
+                    if !isReadOnlyCreator {
+                        SecondaryButton(title: "恢复默认", icon: "arrow.counterclockwise") {
+                            onResetDefault()
+                            dismiss()
+                        }
                     }
                     PrimaryButton(title: "试看完整开屏", icon: "play.fill") {
+                        CanvasSoundEngine.shared.playBackgroundWhoosh()
                         onPreview()
                     }
                 }
@@ -9153,7 +10808,7 @@ private struct LaunchStudioOptionsSheet: View {
                     Divider().overlay(Color.dividerLine.opacity(0.6))
                 }
             }
-            .navigationTitle("开屏动效与模板")
+            .navigationTitle("开屏来源、动效与模板")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -9177,7 +10832,7 @@ struct LaunchCanvasStudioView: View {
             pendingReviewMealId: nil,
             onAddDish: {},
             onReview: { _ in },
-            onConfirm: {},
+            onConfirm: { false },
             onShoppingList: {},
             onDining: {},
             onRetry: {},

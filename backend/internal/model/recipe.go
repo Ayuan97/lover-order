@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -79,10 +80,11 @@ type Recipe struct {
 	ID          uint           `json:"id" gorm:"primaryKey"`
 	Name        string         `json:"name" gorm:"size:64;not null;comment:菜名"`
 	Description string         `json:"description" gorm:"size:255;comment:简介"`
-	CoverImage  string         `json:"cover_image" gorm:"size:512;comment:封面图"`
-	CutoutImage string         `json:"cutout_image" gorm:"size:512;comment:画布透明贴图"`
-	Images      JSON           `json:"images" gorm:"type:json;comment:图集"`
-	CategoryID  *uint          `json:"category_id" gorm:"index;comment:分类"`
+	CoverImage   string         `json:"cover_image" gorm:"size:512;comment:封面图"`
+	CutoutImage  string         `json:"cutout_image" gorm:"size:512;comment:画布透明贴图"`
+	Images       JSON           `json:"images" gorm:"type:json;comment:图集"`
+	PhotoGallery JSON           `json:"photo_gallery" gorm:"type:json;comment:历次实拍与抠图图库"`
+	CategoryID   *uint          `json:"category_id" gorm:"index;comment:分类"`
 	CookingTime int            `json:"cooking_time" gorm:"default:0;comment:制作时间 分钟"`
 	Difficulty  string         `json:"difficulty" gorm:"type:enum('easy','medium','hard');default:'easy';comment:难度"`
 	Servings    int            `json:"servings" gorm:"default:2;comment:几人份"`
@@ -110,6 +112,88 @@ type Recipe struct {
 // TableName 菜谱表名
 func (Recipe) TableName() string {
 	return "recipes"
+}
+
+// RecipePhotoItem 菜谱历次实拍图库项（原图与画布透明抠图成对保存）
+type RecipePhotoItem struct {
+	Image       string `json:"image"`
+	CutoutImage string `json:"cutout_image,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
+}
+
+// PhotoGalleryItems 取历次实拍与抠图图库
+func (r *Recipe) PhotoGalleryItems() []RecipePhotoItem {
+	if len(r.PhotoGallery) == 0 {
+		return []RecipePhotoItem{}
+	}
+	var items []RecipePhotoItem
+	if err := json.Unmarshal(r.PhotoGallery, &items); err != nil {
+		return []RecipePhotoItem{}
+	}
+	return items
+}
+
+// SetPhotoGallery 写历次实拍与抠图图库
+func (r *Recipe) SetPhotoGallery(items []RecipePhotoItem) error {
+	data, err := json.Marshal(items)
+	if err != nil {
+		return err
+	}
+	r.PhotoGallery = JSON(data)
+	return nil
+}
+
+// UpsertGalleryPhoto 把一次实拍的原图与透明抠图存入图库，并同步维护 images 列表。
+func (r *Recipe) UpsertGalleryPhoto(image, cutoutImage, createdAt string) error {
+	img := strings.TrimSpace(image)
+	cutout := strings.TrimSpace(cutoutImage)
+	if img == "" && cutout == "" {
+		return nil
+	}
+	if img == "" {
+		img = cutout
+	}
+
+	items := r.PhotoGalleryItems()
+	found := false
+	for i := range items {
+		if items[i].Image == img {
+			if cutout != "" {
+				items[i].CutoutImage = cutout
+			}
+			if items[i].CreatedAt == "" && createdAt != "" {
+				items[i].CreatedAt = createdAt
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		items = append(items, RecipePhotoItem{
+			Image:       img,
+			CutoutImage: cutout,
+			CreatedAt:   createdAt,
+		})
+	}
+	if err := r.SetPhotoGallery(items); err != nil {
+		return err
+	}
+
+	existingImages := r.ImagesSlice()
+	hasImage := false
+	for _, existing := range existingImages {
+		if existing == img {
+			hasImage = true
+			break
+		}
+	}
+	if !hasImage {
+		existingImages = append(existingImages, img)
+		if err := r.SetImages(existingImages); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ImagesSlice 把 JSON 列转成字符串切片

@@ -10,21 +10,62 @@ struct PhotoPickerField: View {
     var cutoutImageURL: Binding<String>?
     var isProcessing: Binding<Bool> = .constant(false)
 
+    private enum ActiveCover: Identifiable {
+        case camera
+        case preview(PhotoGalleryPresentation)
+
+        var id: String {
+            switch self {
+            case .camera: return "camera"
+            case .preview(let p): return "preview-\(p.id.uuidString)"
+            }
+        }
+    }
+
     @State private var pickerItem: PhotosPickerItem?
     @State private var isUploading: Bool = false
     @State private var errorMessage: String?
-    @State private var showCamera = false
+    @State private var activeCover: ActiveCover?
     @State private var processingMessage = "正在保存照片"
 
     var body: some View {
         VStack(alignment: .leading, spacing: AppSpacing.sm) {
-            PhotosPicker(selection: $pickerItem, matching: .images) {
-                ZStack {
-                    if !imageURL.isEmpty {
+            if !imageURL.isEmpty {
+                Button {
+                    Haptics.light()
+                    activeCover = .preview(PhotoGalleryPresentation(urls: [imageURL]))
+                } label: {
+                    ZStack {
                         AsyncImageView(url: imageURL, name: label)
+                            .frame(maxWidth: .infinity)
                             .frame(height: height)
                             .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
-                    } else {
+                            .overlay(alignment: .bottomTrailing) {
+                                if !isUploading {
+                                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                                        .font(.system(size: 11.5, weight: .semibold))
+                                        .foregroundStyle(.white)
+                                        .frame(width: 28, height: 28)
+                                        .background(Color.black.opacity(0.48), in: Circle())
+                                        .overlay {
+                                            Circle().strokeBorder(Color.white.opacity(0.28), lineWidth: 0.6)
+                                        }
+                                        .padding(8)
+                                        .allowsHitTesting(false)
+                                }
+                            }
+                        if isUploading {
+                            uploadingOverlay
+                        }
+                    }
+                }
+                .contentShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+                .buttonStyle(.plain)
+                .disabled(isUploading)
+                .accessibilityLabel("查看大图")
+            } else {
+                PhotosPicker(selection: $pickerItem, matching: .images) {
+                    ZStack {
                         VStack(spacing: AppSpacing.sm) {
                             Image(systemName: "photo.on.rectangle")
                                 .font(.system(size: 28, weight: .light))
@@ -41,25 +82,23 @@ struct PhotoPickerField: View {
                             RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous)
                                 .stroke(Color.brandGreen.opacity(0.2), style: StrokeStyle(lineWidth: 1, dash: [4]))
                         )
-                    }
-                    if isUploading {
-                        ZStack {
-                            Color.black.opacity(0.25)
-                            VStack(spacing: 8) {
-                                ProgressView().tint(.white)
-                                Text(processingMessage).font(AppFont.caption()).foregroundStyle(.white)
-                            }
+                        if isUploading {
+                            uploadingOverlay
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
                     }
                 }
+                .buttonStyle(.plain)
+                .disabled(isUploading)
             }
-            .buttonStyle(.plain)
-            .disabled(isUploading)
 
-            HStack {
+            HStack(spacing: AppSpacing.md) {
+                if !imageURL.isEmpty {
+                    PhotosPicker(selection: $pickerItem, matching: .images) {
+                        Label("换照片", systemImage: "photo.on.rectangle")
+                    }
+                }
                 Button {
-                    showCamera = true
+                    activeCover = .camera
                 } label: {
                     Label("拍照", systemImage: "camera")
                 }
@@ -81,16 +120,37 @@ struct PhotoPickerField: View {
 
             if let cutoutImageURL, !imageURL.isEmpty, !isUploading {
                 if !cutoutImageURL.wrappedValue.isEmpty {
-                    HStack(spacing: AppSpacing.md) {
-                        AsyncImage(url: APIConfig.imageURL(cutoutImageURL.wrappedValue)) { image in
-                            image.resizable().scaledToFit()
-                        } placeholder: { ProgressView() }
-                        .frame(width: 72, height: 72)
-                        .background(Color.paperGreen, in: RoundedRectangle(cornerRadius: AppRadius.sm))
-                        Text("画布贴图已生成")
-                            .font(AppFont.caption())
-                            .foregroundStyle(Color.inkSecondary)
+                    Button {
+                        Haptics.light()
+                        activeCover = .preview(
+                            PhotoGalleryPresentation(
+                                urls: [cutoutImageURL.wrappedValue],
+                                caption: "画布透明贴图",
+                                isTransparent: true
+                            )
+                        )
+                    } label: {
+                        HStack(spacing: AppSpacing.md) {
+                            Color.paperGreen
+                                .frame(width: 72, height: 72)
+                                .overlay {
+                                    AsyncImageView(url: cutoutImageURL.wrappedValue, name: "画布贴图", fitContent: true)
+                                }
+                                .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("画布贴图已生成")
+                                    .font(AppFont.caption())
+                                    .foregroundStyle(Color.inkSecondary)
+                                Text("轻点查看大图")
+                                    .font(AppFont.caption(11))
+                                    .foregroundStyle(Color.inkMuted)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(SoftPressStyle())
+                    .accessibilityLabel("查看画布贴图大图")
                 } else {
                     Button("重新生成画布贴图") { Task { await regenerateCutout() } }
                         .font(AppFont.caption())
@@ -108,30 +168,48 @@ struct PhotoPickerField: View {
             guard let item else { return }
             Task { await loadAndUpload(item) }
         }
-        .fullScreenCover(isPresented: $showCamera) {
-            CameraCaptureView(mode: cutoutImageURL == nil ? .photo : .dish) { photo in
-                try await upload(photo)
+        .fullScreenCover(item: $activeCover) { cover in
+            switch cover {
+            case .camera:
+                CameraCaptureView(mode: cutoutImageURL == nil ? .photo : .dish) { photo in
+                    try await upload(photo)
+                }
+                .ignoresSafeArea()
+            case .preview(let presentation):
+                PhotoGalleryViewer(slides: presentation.slides, initialIndex: presentation.initialIndex)
             }
-            .ignoresSafeArea()
         }
+    }
+
+    private var uploadingOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.25)
+            VStack(spacing: 8) {
+                ProgressView().tint(.white)
+                Text(processingMessage).font(AppFont.caption()).foregroundStyle(.white)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
     }
 
     @MainActor
     private func loadAndUpload(_ item: PhotosPickerItem) async {
         guard !isUploading else { return }
         setProcessing(true)
-        defer { setProcessing(false) }
+        defer {
+            setProcessing(false)
+            pickerItem = nil
+        }
         errorMessage = nil
         do {
             guard let data = try await item.loadTransferable(type: Data.self),
                   let image = UIImage(data: data) else {
-                errorMessage = "图片为空"
+                errorMessage = "图片为空或无法读取，请换一张重试"
                 return
             }
             try await savePhoto(data: data)
             if cutoutImageURL != nil { await generateCutout(from: image) }
         } catch { errorMessage = error.localizedDescription }
-        pickerItem = nil
     }
 
     @MainActor
@@ -205,8 +283,9 @@ struct PhotoPickerField: View {
         guard let img = UIImage(data: data) else { return data }
         let maxSide: CGFloat = 1600
         let size = img.size
+        guard size.width > 0, size.height > 0 else { return data }
         let scale = min(1.0, maxSide / max(size.width, size.height))
-        let target = CGSize(width: size.width * scale, height: size.height * scale)
+        let target = CGSize(width: max(1, size.width * scale), height: max(1, size.height * scale))
 
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1

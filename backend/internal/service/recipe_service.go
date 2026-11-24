@@ -3,8 +3,11 @@ package service
 import (
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"lover-order-backend/internal/model"
 )
 
@@ -33,6 +36,19 @@ type RecipeInput struct {
 	Tags        []string         `json:"tags"`
 	MoodTags    []string         `json:"mood_tags"`
 	SceneTags   []string         `json:"scene_tags"`
+}
+
+type RecipeUpdateInput struct {
+	RecipeInput
+	ExpectedUpdatedAt *time.Time `json:"expected_updated_at" binding:"required"`
+}
+
+var ErrRecipeEditConflict = errors.New("这道菜谱已更新，当前修改还在表单里。请查看最新菜谱后再编辑")
+
+// RecipeCoverInput 设置菜谱默认封面入参
+type RecipeCoverInput struct {
+	Image       string `json:"image"`
+	CutoutImage string `json:"cutout_image"`
 }
 
 // ListQuery 列表筛选
@@ -172,42 +188,61 @@ func (s *RecipeService) Create(householdID, userID uint, in RecipeInput) (*model
 	if err := model.DB.Create(r).Error; err != nil {
 		return nil, fmt.Errorf("创建菜谱失败：%w", err)
 	}
+	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", userID)
 	return r, nil
 }
 
 // Update 更新菜谱
-func (s *RecipeService) Update(householdID, id uint, in RecipeInput) (*model.Recipe, error) {
+func (s *RecipeService) Update(householdID, id uint, in RecipeUpdateInput) (*model.Recipe, error) {
 	var r model.Recipe
-	if err := model.DB.Where("id = ? AND household_id = ?", id, householdID).First(&r).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.New("菜谱不存在")
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND household_id = ?", id, householdID).First(&r).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("菜谱不存在")
+			}
+			return err
 		}
+		if !r.UpdatedAt.Equal(*in.ExpectedUpdatedAt) {
+			return ErrRecipeEditConflict
+		}
+
+		r.Name = in.Name
+		r.Description = in.Description
+		if r.CoverImage != in.CoverImage {
+			r.CutoutImage = ""
+		}
+		r.CoverImage = in.CoverImage
+		if in.CutoutImage != nil {
+			r.CutoutImage = *in.CutoutImage
+		}
+		r.CategoryID = in.CategoryID
+		r.CookingTime = in.CookingTime
+		if in.Difficulty != "" {
+			r.Difficulty = in.Difficulty
+		}
+		if in.Servings > 0 {
+			r.Servings = in.Servings
+		}
+		r.Tips = in.Tips
+		if err := applyRecipeJSON(&r, in.RecipeInput); err != nil {
+			return err
+		}
+
+		// 两次保存落在同一毫秒时也要推进更新时间，避免旧表单通过版本检查。
+		nextTime := time.Now().Truncate(time.Millisecond)
+		if !nextTime.After(r.UpdatedAt) {
+			nextTime = r.UpdatedAt.Add(time.Millisecond)
+		}
+		if err := tx.Session(&gorm.Session{NowFunc: func() time.Time { return nextTime }}).Save(&r).Error; err != nil {
+			return err
+		}
+		return tx.First(&r, id).Error
+	})
+	if err != nil {
 		return nil, err
 	}
-	r.Name = in.Name
-	r.Description = in.Description
-	if r.CoverImage != in.CoverImage {
-		r.CutoutImage = ""
-	}
-	r.CoverImage = in.CoverImage
-	if in.CutoutImage != nil {
-		r.CutoutImage = *in.CutoutImage
-	}
-	r.CategoryID = in.CategoryID
-	r.CookingTime = in.CookingTime
-	if in.Difficulty != "" {
-		r.Difficulty = in.Difficulty
-	}
-	if in.Servings > 0 {
-		r.Servings = in.Servings
-	}
-	r.Tips = in.Tips
-	if err := applyRecipeJSON(&r, in); err != nil {
-		return nil, err
-	}
-	if err := model.DB.Save(&r).Error; err != nil {
-		return nil, err
-	}
+	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", 0)
 	return &r, nil
 }
 
@@ -220,6 +255,7 @@ func (s *RecipeService) Delete(householdID, id uint) error {
 	if res.RowsAffected == 0 {
 		return errors.New("菜谱不存在")
 	}
+	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", 0)
 	return nil
 }
 
@@ -244,6 +280,43 @@ func (s *RecipeService) ToggleFavorite(userID, householdID, recipeID uint) (bool
 		return false, err
 	}
 	return false, nil
+}
+
+// SetCover 把某次实拍设成菜谱默认封面（保留原主图到历次实拍图库中，避免丢失）
+func (s *RecipeService) SetCover(householdID, actorUserID, id uint, in RecipeCoverInput) (*model.Recipe, error) {
+	image := strings.TrimSpace(in.Image)
+	cutout := strings.TrimSpace(in.CutoutImage)
+	if image == "" {
+		return nil, errors.New("图片地址不能为空")
+	}
+
+	var r model.Recipe
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND household_id = ?", id, householdID).
+			First(&r).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("菜谱不存在")
+			}
+			return err
+		}
+		if r.CoverImage != "" {
+			if err := r.UpsertGalleryPhoto(r.CoverImage, r.CutoutImage, r.CreatedAt.Format("2006-01-02")); err != nil {
+				return err
+			}
+		}
+		if err := r.UpsertGalleryPhoto(image, cutout, time.Now().Format("2006-01-02")); err != nil {
+			return err
+		}
+		r.CoverImage = image
+		r.CutoutImage = cutout
+		return tx.Save(&r).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", actorUserID)
+	return &r, nil
 }
 
 func applyRecipeJSON(r *model.Recipe, in RecipeInput) error {

@@ -47,6 +47,78 @@ enum APIConfig {
     }
 }
 
+// 单飞 Token 刷新器：并发 401 共享同一轮 auth/refresh 请求，避免重复刷新或误清登录态
+private actor TokenRefresher {
+    private struct RefreshBody: Encodable {
+        let refreshToken: String
+        enum CodingKeys: String, CodingKey { case refreshToken = "refresh_token" }
+    }
+
+    private struct RefreshPayload: Decodable {
+        let accessToken: String
+        enum CodingKeys: String, CodingKey { case accessToken = "access_token" }
+    }
+
+    private var activeTask: Task<Bool, Never>?
+
+    func refreshIfNeeded(
+        failedAccessToken: String?,
+        session: URLSession,
+        decoder: JSONDecoder,
+        encoder: JSONEncoder
+    ) async -> Bool {
+        let currentAccess = await MainActor.run { TokenStorage.shared.access }
+        if let failedAccessToken,
+           let currentAccess,
+           !currentAccess.isEmpty,
+           currentAccess != failedAccessToken {
+            return true
+        }
+        if let existing = activeTask {
+            return await existing.value
+        }
+        let task = Task<Bool, Never> {
+            let refreshToken = await MainActor.run { TokenStorage.shared.refresh }
+            guard let refreshToken, !refreshToken.isEmpty else {
+                return false
+            }
+            guard let url = URLComponents(
+                url: APIConfig.baseURL.appendingPathComponent("auth/refresh"),
+                resolvingAgainstBaseURL: false
+            )?.url else {
+                return false
+            }
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? encoder.encode(RefreshBody(refreshToken: refreshToken))
+
+            guard let (data, response) = try? await session.data(for: request),
+                  let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  let wrapped = try? decoder.decode(APIResponse<RefreshPayload>.self, from: data),
+                  wrapped.code == 0,
+                  let payload = wrapped.data,
+                  !payload.accessToken.isEmpty else {
+                return false
+            }
+
+            return await MainActor.run {
+                guard let currentRefresh = TokenStorage.shared.refresh,
+                      currentRefresh == refreshToken else {
+                    return false
+                }
+                TokenStorage.shared.access = payload.accessToken
+                return true
+            }
+        }
+        activeTask = task
+        let ok = await task.value
+        activeTask = nil
+        return ok
+    }
+}
+
 // 统一 HTTP 客户端 只支持 POST / GET 与后端约定一致
 final class APIClient {
     static let shared = APIClient()
@@ -54,6 +126,7 @@ final class APIClient {
     private let session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
+    private let refresher = TokenRefresher()
 
     static func makeDecoder() -> JSONDecoder {
         let dec = JSONDecoder()
@@ -98,11 +171,21 @@ final class APIClient {
         try await send(method: "POST", path: path, query: [:], body: Optional<EmptyBody>.none)
     }
 
+    func refreshAccessTokenIfNeeded(failedAccessToken: String? = nil) async -> Bool {
+        await refresher.refreshIfNeeded(
+            failedAccessToken: failedAccessToken,
+            session: session,
+            decoder: decoder,
+            encoder: encoder
+        )
+    }
+
     private func send<B: Encodable, R: Decodable>(
         method: String,
         path: String,
         query: [String: String],
-        body: B?
+        body: B?,
+        allowRefresh: Bool = true
     ) async throws -> R {
         var components = URLComponents(
             url: APIConfig.baseURL.appendingPathComponent(path),
@@ -139,6 +222,11 @@ final class APIClient {
         }
 
         if http.statusCode == 401 && hadAuthToken {
+            if allowRefresh && path != "auth/refresh" {
+                if await refreshAccessTokenIfNeeded(failedAccessToken: token) {
+                    return try await send(method: method, path: path, query: query, body: body, allowRefresh: false)
+                }
+            }
             TokenStorage.shared.clear()
             AppNotifications.sessionExpired()
             throw APIError.unauthorized

@@ -33,9 +33,9 @@ struct MealNowView: View {
                 onConfirm: {
                     if vm.dishCount == 0 && vm.meal?.status == .planning {
                         showAddDish = true
-                    } else {
-                        Task { await confirmAction() }
+                        return false
                     }
+                    return await confirmAction()
                 },
                 onShoppingList: { showShoppingList = true },
                 onDining: { showDiningHost = true },
@@ -45,16 +45,65 @@ struct MealNowView: View {
                         sharePosterMeal = meal
                     }
                 },
-                onRemoteMealSync: {
-                    Task {
-                        await vm.syncMeal(
-                            scene: householdScene,
-                            mood: appState.currentMood,
-                            selfUserId: appState.currentUser?.id
-                        )
-                        await checkDining()
+                onRemoteMealSync: { reason in
+                    switch reason {
+                    case "recipes_changed":
+                        AppNotifications.recipesChanged()
+                    case "categories_changed":
+                        AppNotifications.categoriesChanged()
+                    case "canvas_connected":
+                        AppNotifications.recipesChanged()
+                        AppNotifications.categoriesChanged()
+                        Task {
+                            await vm.syncMeal(
+                                scene: householdScene,
+                                mood: appState.currentMood,
+                                selfUserId: appState.currentUser?.id
+                            )
+                        }
+                    case "canvas_disconnected":
+                        Task {
+                            if await appState.refreshProfile(), appState.currentUser?.hasHousehold == false {
+                                await appState.refreshHousehold()
+                            }
+                        }
+                    case "household_changed":
+                        Task {
+                            _ = await appState.refreshProfile()
+                            await appState.refreshHousehold()
+                            AppNotifications.householdChanged()
+                        }
+                    case "history_changed":
+                        AppNotifications.historyChanged()
+                    case "sticker_favorites_changed":
+                        AppNotifications.stickerFavoritesChanged()
+                    case "shopping_changed":
+                        AppNotifications.shoppingChanged()
+                    case "launch_canvas_changed":
+                        Task {
+                            await appState.refreshHouseholdLaunchCanvas()
+                        }
+                    default:
+                        Task {
+                            if reason == "network_recovered", await appState.refreshProfile(),
+                               appState.currentUser?.hasHousehold == false {
+                                await appState.refreshHousehold()
+                                return
+                            }
+                            await vm.syncMeal(
+                                scene: householdScene,
+                                mood: appState.currentMood,
+                                selfUserId: appState.currentUser?.id
+                            )
+                            await checkDining()
+                            if reason == "completed" {
+                                AppNotifications.historyChanged()
+                                AppNotifications.householdChanged()
+                            }
+                        }
                     }
-                }
+                },
+                isSheetPresented: showAddDish
             )
             .environmentObject(appState)
             .background(Color.appBackground.ignoresSafeArea())
@@ -92,7 +141,29 @@ struct MealNowView: View {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
-                Task { await vm.load(scene: householdScene, mood: appState.currentMood) }
+                Task { await vm.refreshIdeas(scene: householdScene, mood: appState.currentMood) }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                Task {
+                    await vm.syncMeal(
+                        scene: householdScene,
+                        mood: appState.currentMood,
+                        selfUserId: appState.currentUser?.id
+                    )
+                    await checkDining()
+                }
+            }
+            .onChange(of: appState.activeTab) { _, tab in
+                guard tab == 0 else { return }
+                Task {
+                    await vm.syncMeal(
+                        scene: householdScene,
+                        mood: appState.currentMood,
+                        selfUserId: appState.currentUser?.id
+                    )
+                    await checkDining()
+                }
             }
             .navigationBarHidden(true)
             .sheet(isPresented: $showAddDish) {
@@ -828,33 +899,34 @@ struct MealNowView: View {
         }
     }
 
-    private func confirmAction() async {
+    @discardableResult
+    private func confirmAction() async -> Bool {
         guard let meal = vm.meal else {
             vm.errorMessage = vm.loadFailed ? "没连上 下拉再试一次" : "再等一小会儿"
-            return
+            return false
         }
-        guard !vm.isActing else { return }
+        guard !vm.isActing else { return false }
         switch meal.status {
         case .planning:
             if vm.dishes.isEmpty {
                 vm.errorMessage = "还没点菜呢"
-                return
+                return false
             }
-            await vm.confirm()
+            return await vm.confirm()
         case .confirmed:
             if vm.dishes.isEmpty {
                 vm.errorMessage = "菜都没了 先留一道再收工"
-                return
+                return false
             }
-            await vm.complete()
-            if vm.meal?.status == .completed, let completedId = vm.meal?.id {
-                vm.noteNeedsReview(completedId)
-                reviewMealId = completedId
-                clearFinishedMeal()
-                showReview = true
-            }
+            guard await vm.complete() else { return false }
+            vm.noteNeedsReview(meal.id)
+            reviewMealId = meal.id
+            clearFinishedMeal()
+            showReview = true
+            return true
         case .completed, .cancelled:
             await vm.load(scene: householdScene, mood: appState.currentMood)
+            return false
         }
     }
 
@@ -1290,6 +1362,7 @@ struct AsyncImageView: View {
                 loadedImage = cached
                 return
             }
+            loadedImage = nil
             if let fetched = await RemoteImageCache.shared.load(url: u) {
                 loadedImage = fetched
             } else if !Task.isCancelled {

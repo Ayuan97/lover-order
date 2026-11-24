@@ -1,4 +1,5 @@
 import Foundation
+import Network
 
 struct MealInput: Encodable {
     var title: String?
@@ -27,6 +28,20 @@ struct DishInput: Encodable {
         case name
         case image
         case note
+    }
+}
+
+struct DishImageUpdateInput: Encodable {
+    var image: String
+    var cutoutImage: String?
+    var saveToGallery: Bool = true
+    var setAsCover: Bool = false
+
+    enum CodingKeys: String, CodingKey {
+        case image
+        case cutoutImage = "cutout_image"
+        case saveToGallery = "save_to_gallery"
+        case setAsCover = "set_as_cover"
     }
 }
 
@@ -93,6 +108,19 @@ final class MealService {
         try await api.get("meals/\(mealId)/shopping-list")
     }
 
+    func updateShoppingChecked(mealId: UInt, checkedItems: [String]) async throws -> [String] {
+        struct Body: Encodable {
+            let checkedItems: [String]
+            enum CodingKeys: String, CodingKey { case checkedItems = "checked_items" }
+        }
+        struct Result: Decodable {
+            let checkedItems: [String]
+            enum CodingKeys: String, CodingKey { case checkedItems = "checked_items" }
+        }
+        let res: Result = try await api.post("meals/\(mealId)/shopping-list/check", body: Body(checkedItems: checkedItems))
+        return res.checkedItems
+    }
+
     func detail(id: UInt) async throws -> MealSession {
         try await api.get("meals/\(id)")
     }
@@ -138,6 +166,15 @@ final class MealService {
     func removeDish(mealId: UInt, dishId: UInt) async throws {
         let _: EmptyResponse = try await api.post("meals/\(mealId)/dishes/\(dishId)/remove")
         AppNotifications.mealChanged()
+    }
+
+    func updateDishImage(mealId: UInt, dishId: UInt, _ req: DishImageUpdateInput) async throws -> MealDish {
+        let d: MealDish = try await api.post("meals/\(mealId)/dishes/\(dishId)/image", body: req)
+        AppNotifications.mealChanged()
+        if req.saveToGallery || req.setAsCover {
+            AppNotifications.recipesChanged()
+        }
+        return d
     }
 
     func review(mealId: UInt, _ req: ReviewInput) async throws -> MealReview {
@@ -197,6 +234,43 @@ private struct CanvasSaveRequest: Encodable {
     }
 }
 
+struct CanvasElementPatch: Codable {
+    let id: UUID
+    var mealDishID: UInt? = nil
+    var position: CanvasPoint? = nil
+    var scale: CGFloat? = nil
+    var rotationDegrees: Double? = nil
+    var layer: Int? = nil
+    var effect: CanvasEffect? = nil
+    var style: CanvasStickerStyle? = nil
+    var text: String? = nil
+    var font: CanvasTextFont? = nil
+    var color: CanvasTextColor? = nil
+    var textStyle: CanvasTextStyle? = nil
+    var textEffect: CanvasTextEffect? = nil
+
+    func apply(to sticker: inout CanvasSticker) {
+        if let position { sticker.position = position }
+        if let scale { sticker.scale = scale }
+        if let rotationDegrees { sticker.rotationDegrees = rotationDegrees }
+        if let layer { sticker.layer = layer }
+        if let effect { sticker.effect = effect }
+        if let style { sticker.style = style }
+    }
+
+    func apply(to note: inout CanvasNote) {
+        if let position { note.position = position }
+        if let scale { note.scale = scale }
+        if let rotationDegrees { note.rotationDegrees = rotationDegrees }
+        if let layer { note.layer = layer }
+        if let text { note.text = text }
+        if let font { note.font = font }
+        if let color { note.color = color }
+        if let textStyle { note.textStyle = textStyle }
+        if let textEffect { note.textEffect = textEffect }
+    }
+}
+
 struct CanvasOpPayload: Codable {
     var sticker: CanvasSticker? = nil
     var note: CanvasNote? = nil
@@ -210,8 +284,14 @@ struct CanvasOpPayload: Codable {
     var clearCustomBackgroundURL: Bool? = nil
     var stickers: [CanvasSticker]? = nil
     var notes: [CanvasNote]? = nil
+    var stickerIds: [String]? = nil
+    var noteIds: [String]? = nil
+    var strokeIds: [String]? = nil
+    var stickerPatches: [CanvasElementPatch]? = nil
+    var notePatches: [CanvasElementPatch]? = nil
     var document: CanvasDocument? = nil
     var onlyIfEmpty: Bool? = nil
+    var seedOpIds: [String]? = nil
 
     enum CodingKeys: String, CodingKey {
         case sticker, note, stroke, id
@@ -221,7 +301,13 @@ struct CanvasOpPayload: Codable {
         case customBackgroundURL = "custom_background_url"
         case clearCustomBackgroundURL = "clear_custom_background_url"
         case stickers, notes, document
+        case stickerIds = "sticker_ids"
+        case noteIds = "note_ids"
+        case strokeIds = "stroke_ids"
+        case stickerPatches = "sticker_patches"
+        case notePatches = "note_patches"
         case onlyIfEmpty = "only_if_empty"
+        case seedOpIds = "seed_op_ids"
     }
 
     var uuidValue: UUID? {
@@ -252,29 +338,26 @@ struct CanvasOpPayload: Codable {
         CanvasOpPayload(id: id?.uuidString)
     }
 
-    static func updateBackground(
-        background: String,
-        blur: Double,
-        moodFilter: String,
-        customBackgroundURL: String?,
-        clearCustomBackgroundURL: Bool = false
-    ) -> CanvasOpPayload {
-        CanvasOpPayload(
-            background: background,
-            blur: blur,
-            moodFilter: moodFilter,
-            customBackgroundURL: customBackgroundURL,
-            clearCustomBackgroundURL: clearCustomBackgroundURL ? true : nil
-        )
-    }
-
     static func batch(stickers: [CanvasSticker]?, notes: [CanvasNote]?) -> CanvasOpPayload {
         CanvasOpPayload(stickers: stickers, notes: notes)
     }
 
-    static func replaceDocument(_ doc: CanvasDocument, onlyIfEmpty: Bool = false) -> CanvasOpPayload {
-        CanvasOpPayload(document: doc.networkSanitized(), onlyIfEmpty: onlyIfEmpty ? true : nil)
+    static func batchUpsert(stickers: [CanvasSticker]? = nil, notes: [CanvasNote]? = nil) -> CanvasOpPayload {
+        CanvasOpPayload(stickers: stickers, notes: notes)
     }
+
+    static func batchDelete(
+        stickerIds: [UUID]? = nil,
+        noteIds: [UUID]? = nil,
+        strokeIds: [UUID]? = nil
+    ) -> CanvasOpPayload {
+        CanvasOpPayload(
+            stickerIds: stickerIds?.map(\.uuidString),
+            noteIds: noteIds?.map(\.uuidString),
+            strokeIds: strokeIds?.map(\.uuidString)
+        )
+    }
+
 }
 
 struct CanvasWelcomeMessage: Decodable {
@@ -332,6 +415,8 @@ struct CanvasSnapshotBroadcastMessage: Decodable {
     let revision: Int64
     let actor: CanvasRemoteActor?
     let clientId: String
+    let opId: String?
+    let seedOpIds: [String]?
     let document: CanvasDocument?
 
     enum CodingKeys: String, CodingKey {
@@ -339,6 +424,8 @@ struct CanvasSnapshotBroadcastMessage: Decodable {
         case mealId = "meal_id"
         case revision, actor
         case clientId = "client_id"
+        case opId = "op_id"
+        case seedOpIds = "seed_op_ids"
         case document
     }
 }
@@ -386,6 +473,13 @@ struct CanvasMealSyncMessage: Decodable {
 private struct CanvasWSEnvelopeType: Decodable {
     let type: String
     let message: String?
+    let revision: Int64?
+}
+
+struct QueuedCanvasOp: Codable {
+    let opId: String
+    let kind: String
+    let payload: CanvasOpPayload
 }
 
 private struct OutboundCanvasOpMessage: Encodable {
@@ -437,99 +531,203 @@ final class CanvasRealtimeSession: ObservableObject {
     var onSnapshot: ((CanvasSnapshotBroadcastMessage) -> Void)?
     var onOpApplied: ((CanvasAppliedOpMessage) -> Void)?
     var onMealSync: ((CanvasMealSyncMessage) -> Void)?
+    var onNetworkRecovered: (() -> Void)?
+    var onConnectionLost: (() -> Void)?
     var onError: ((String) -> Void)?
+
+    private enum OutboundQueueItem {
+        case op(text: String)
+        case livePreview(text: String, isClear: Bool)
+    }
 
     private let decoder = APIClient.makeDecoder()
     private let encoder = APIClient.makeEncoder()
     private var activeMealId: UInt?
+    private var opStorageKey: String?
     private var shouldStayConnected = false
     private var socketTask: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
     private var pingTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private var staleCleanupTask: Task<Void, Never>?
+    private var probeWatchdogTask: Task<Void, Never>?
+    private var sendLoopTask: Task<Void, Never>?
+    private var pathMonitor: NWPathMonitor?
+    private var lastNetworkState: (satisfied: Bool, interfaceKey: String)?
     private var reconnectAttempt = 0
     private var lastPreviewSentAt: Date = .distantPast
-    private var pendingOps: [(kind: String, payload: CanvasOpPayload)] = []
+    private var lastInboundAt: Date = .distantPast
+    private var lastResyncRequestedAt: Date = .distantPast
+    private var pendingOps: [QueuedCanvasOp] = []
+    private var seedOpId: String?
+    private var outboundQueue: [OutboundQueueItem] = []
 
-    func connect(mealId: UInt) {
-        if activeMealId == mealId && shouldStayConnected && socketTask != nil {
+    func connect(mealId: UInt, userId: UInt) {
+        let storageKey = "meal.canvas.pending.\(userId).\(mealId)"
+        if opStorageKey == storageKey && shouldStayConnected && socketTask != nil {
             return
         }
         disconnect()
         activeMealId = mealId
+        opStorageKey = storageKey
+        if let data = UserDefaults.standard.data(forKey: storageKey) {
+            do {
+                pendingOps = try decoder.decode([QueuedCanvasOp].self, from: data)
+            } catch {
+                onError?("读取未同步的画布改动失败")
+            }
+        }
         shouldStayConnected = true
         reconnectAttempt = 0
+        startNetworkMonitor(mealId: mealId, userId: userId)
         openSocket(mealId: mealId)
         startStaleCleanupLoop()
     }
 
-    func ensureConnected(mealId: UInt) {
-        if activeMealId == mealId && shouldStayConnected {
-            if !isConnected && reconnectTask == nil && socketTask == nil {
-                openSocket(mealId: mealId)
+    func ensureConnected(mealId: UInt, userId: UInt, probeIfConnected: Bool = false) {
+        guard opStorageKey == "meal.canvas.pending.\(userId).\(mealId)", shouldStayConnected else {
+            connect(mealId: mealId, userId: userId)
+            return
+        }
+        if let pendingReconnect = reconnectTask {
+            pendingReconnect.cancel()
+            reconnectTask = nil
+            reconnectAttempt = 0
+        }
+        guard let task = socketTask else {
+            openSocket(mealId: mealId)
+            return
+        }
+        if probeIfConnected {
+            if isConnected {
+                probeSocketHealth(task: task, mealId: mealId)
+            } else {
+                // 挂在半路上的连接在回前台/切页时立刻重置重连，不走退避等待
+                handleSocketClosed(task: task, mealId: mealId, immediate: true)
             }
-        } else {
-            connect(mealId: mealId)
         }
     }
 
     func disconnect() {
         shouldStayConnected = false
         activeMealId = nil
+        opStorageKey = nil
+        currentRevision = 0
+        lastInboundAt = .distantPast
+        lastResyncRequestedAt = .distantPast
+        stopNetworkMonitor()
         reconnectTask?.cancel(); reconnectTask = nil
         pingTask?.cancel(); pingTask = nil
         receiveTask?.cancel(); receiveTask = nil
         staleCleanupTask?.cancel(); staleCleanupTask = nil
+        probeWatchdogTask?.cancel(); probeWatchdogTask = nil
+        sendLoopTask?.cancel(); sendLoopTask = nil
         socketTask?.cancel(with: .normalClosure, reason: nil)
         socketTask = nil
         isConnected = false
         onlineUsers = []
         remotePreviews = [:]
         pendingOps.removeAll()
+        seedOpId = nil
+        outboundQueue.removeAll()
     }
 
     func sendOp(kind: String, payload: CanvasOpPayload) {
         guard activeMealId != nil else { return }
+        let op = QueuedCanvasOp(opId: UUID().uuidString, kind: kind, payload: payload)
+        pendingOps.append(op)
+        savePendingOps()
+        if seedOpId == nil {
+            queueForSocket(op)
+        }
+    }
+
+    func seedCanvas(_ document: CanvasDocument) {
+        let op = QueuedCanvasOp(
+            opId: UUID().uuidString,
+            kind: "replace_document",
+            payload: CanvasOpPayload(document: document.networkSanitized(), onlyIfEmpty: true, seedOpIds: pendingOps.map(\.opId))
+        )
+        seedOpId = op.opId
+        queueForSocket(op)
+    }
+
+    private func queueForSocket(_ op: QueuedCanvasOp) {
+        guard isConnected, socketTask != nil else { return }
         let msg = OutboundCanvasOpMessage(
             clientId: clientID,
-            opId: UUID().uuidString,
-            kind: kind,
-            payload: payload
+            opId: op.opId,
+            kind: op.kind,
+            payload: op.payload
         )
-        guard isConnected, let task = socketTask,
-              let data = try? encoder.encode(msg),
-              let text = String(data: data, encoding: .utf8) else {
-            enqueuePendingOp(kind: kind, payload: payload)
-            return
+        do {
+            let data = try encoder.encode(msg)
+            outboundQueue.append(.op(text: String(decoding: data, as: UTF8.self)))
+            ensureSendLoopRunning()
+        } catch {
+            onError?("准备同步画布改动失败")
         }
-        let mealId = activeMealId
-        Task { [weak self] in
+    }
+
+    func resendPendingOps() {
+        for op in pendingOps {
+            queueForSocket(op)
+        }
+    }
+
+    func allUnconfirmedOps() -> [QueuedCanvasOp] {
+        pendingOps
+    }
+
+    func waitForCanvasSave(mealId: UInt) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(5)
+        while activeMealId == mealId {
+            if currentRevision > 0 && seedOpId == nil && pendingOps.isEmpty {
+                return true
+            }
+            guard shouldStayConnected, clock.now < deadline else { return false }
             do {
-                try await task.send(.string(text))
+                try await Task.sleep(for: .milliseconds(100))
             } catch {
-                guard let self else { return }
-                self.enqueuePendingOp(kind: kind, payload: payload)
-                if let mealId {
-                    self.handleSocketClosed(task: task, mealId: mealId)
-                }
+                return false
+            }
+        }
+        return false
+    }
+
+    private func savePendingOps() {
+        guard let opStorageKey else { return }
+        if pendingOps.isEmpty {
+            UserDefaults.standard.removeObject(forKey: opStorageKey)
+        } else {
+            do {
+                UserDefaults.standard.set(try encoder.encode(pendingOps), forKey: opStorageKey)
+            } catch {
+                onError?("保存未同步的画布改动失败")
             }
         }
     }
 
-    func drainPendingOps() -> [(kind: String, payload: CanvasOpPayload)] {
-        let ops = pendingOps
-        pendingOps.removeAll()
-        return ops
+    private func acknowledgeOps(_ opId: String?, seedOpIds: [String] = [], clientId: String) {
+        guard clientId == clientID, let opId else { return }
+        let confirmed = Set(seedOpIds + [opId])
+        let previousCount = pendingOps.count
+        pendingOps.removeAll { confirmed.contains($0.opId) }
+        if pendingOps.count != previousCount { savePendingOps() }
     }
 
-    private func enqueuePendingOp(kind: String, payload: CanvasOpPayload) {
-        if kind == "replace_document" && payload.onlyIfEmpty == true {
-            return
-        }
-        pendingOps.append((kind: kind, payload: payload))
-        if pendingOps.count > 100 {
-            pendingOps.removeFirst(pendingOps.count - 100)
+    func requestResync() {
+        guard isConnected, let task = socketTask, let mealId = activeMealId else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastResyncRequestedAt) >= 1.0 else { return }
+        lastResyncRequestedAt = now
+        Task { @MainActor [weak self] in
+            do {
+                try await task.send(.string("{\"type\":\"resync\"}"))
+            } catch {
+                self?.handleSocketClosed(task: task, mealId: mealId, immediate: true)
+            }
         }
     }
 
@@ -541,9 +739,10 @@ final class CanvasRealtimeSession: ObservableObject {
         rotationDegrees: Double? = nil,
         activeStroke: CanvasStroke? = nil
     ) {
-        guard isConnected, let task = socketTask else { return }
+        guard isConnected, socketTask != nil else { return }
+        let isClear = (targetKind == "clear")
         let now = Date()
-        if targetKind != "clear" && now.timeIntervalSince(lastPreviewSentAt) < 0.06 {
+        if !isClear && now.timeIntervalSince(lastPreviewSentAt) < 0.06 {
             return
         }
         lastPreviewSentAt = now
@@ -558,8 +757,63 @@ final class CanvasRealtimeSession: ObservableObject {
         )
         guard let data = try? encoder.encode(msg),
               let text = String(data: data, encoding: .utf8) else { return }
-        Task {
-            try? await task.send(.string(text))
+        if !isClear, let last = outboundQueue.last, case .livePreview(_, false) = last {
+            outboundQueue[outboundQueue.count - 1] = .livePreview(text: text, isClear: false)
+        } else {
+            outboundQueue.append(.livePreview(text: text, isClear: isClear))
+        }
+        ensureSendLoopRunning()
+    }
+
+    private func ensureSendLoopRunning() {
+        guard sendLoopTask == nil else { return }
+        sendLoopTask = Task { @MainActor [weak self] in
+            defer {
+                if !Task.isCancelled { self?.sendLoopTask = nil }
+            }
+            while let self, !Task.isCancelled, !self.outboundQueue.isEmpty {
+                guard self.isConnected, let task = self.socketTask, let mealId = self.activeMealId else {
+                    break
+                }
+                let item = self.outboundQueue.removeFirst()
+                let text: String
+                switch item {
+                case .op(let t):
+                    text = t
+                case .livePreview(let t, _):
+                    text = t
+                }
+                do {
+                    try await task.send(.string(text))
+                } catch {
+                    self.handleSocketClosed(task: task, mealId: mealId)
+                    break
+                }
+            }
+        }
+    }
+
+    private func probeSocketHealth(task: URLSessionWebSocketTask, mealId: UInt) {
+        let probeStartedAt = Date()
+        probeWatchdogTask?.cancel()
+        probeWatchdogTask = Task { @MainActor [weak self] in
+            do {
+                let rev = self?.currentRevision ?? 0
+                try await task.send(.string("{\"type\":\"ping\",\"revision\":\(rev)}"))
+            } catch {
+                self?.handleSocketClosed(task: task, mealId: mealId, immediate: true)
+                return
+            }
+            try? await Task.sleep(for: .seconds(1.5))
+            guard let self, !Task.isCancelled,
+                  self.socketTask === task, self.shouldStayConnected, self.activeMealId == mealId else {
+                return
+            }
+            if self.lastInboundAt < probeStartedAt {
+                print("[CanvasWS] ping watchdog expired on foreground resume, reconnecting meal=\(mealId)")
+                task.cancel(with: .goingAway, reason: nil)
+                self.handleSocketClosed(task: task, mealId: mealId, immediate: true)
+            }
         }
     }
 
@@ -615,7 +869,8 @@ final class CanvasRealtimeSession: ObservableObject {
                     return
                 }
                 do {
-                    try await task.send(.string("{\"type\":\"ping\"}"))
+                    let rev = self.currentRevision
+                    try await task.send(.string("{\"type\":\"ping\",\"revision\":\(rev)}"))
                 } catch {
                     self.handleSocketClosed(task: task, mealId: mealId)
                     return
@@ -636,27 +891,83 @@ final class CanvasRealtimeSession: ObservableObject {
         }
     }
 
-    private func handleSocketClosed(task: URLSessionWebSocketTask, mealId: UInt) {
+    private func startNetworkMonitor(mealId: UInt, userId: UInt) {
+        stopNetworkMonitor()
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self, weak monitor] path in
+            let satisfied = path.status == .satisfied
+            let interfaceKey: String = {
+                if path.usesInterfaceType(.wifi) { return "wifi" }
+                if path.usesInterfaceType(.cellular) { return "cellular" }
+                if path.usesInterfaceType(.wiredEthernet) { return "wired" }
+                return "other"
+            }()
+            Task { @MainActor [weak self, weak monitor] in
+                guard let self, let monitor, self.pathMonitor === monitor,
+                      self.shouldStayConnected, TokenStorage.shared.isLoggedIn else { return }
+                let prev = self.lastNetworkState
+                self.lastNetworkState = (satisfied, interfaceKey)
+                guard let prev, satisfied, !prev.satisfied || prev.interfaceKey != interfaceKey else {
+                    return
+                }
+                self.reconnectAttempt = 0
+                self.ensureConnected(mealId: mealId, userId: userId, probeIfConnected: true)
+                self.onNetworkRecovered?()
+            }
+        }
+        pathMonitor = monitor
+        monitor.start(queue: DispatchQueue(label: "com.loverorder.canvas.netmon"))
+    }
+
+    private func stopNetworkMonitor() {
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        lastNetworkState = nil
+    }
+
+    private func handleSocketClosed(task: URLSessionWebSocketTask, mealId: UInt, immediate: Bool = false) {
         guard socketTask === task else { return }
         socketTask = nil
+        task.cancel(with: .goingAway, reason: nil)
         pingTask?.cancel(); pingTask = nil
         receiveTask?.cancel(); receiveTask = nil
+        probeWatchdogTask?.cancel(); probeWatchdogTask = nil
+        sendLoopTask?.cancel(); sendLoopTask = nil
+
+        outboundQueue.removeAll()
+        seedOpId = nil
+        let wasConnected = isConnected
         isConnected = false
         remotePreviews = [:]
+        if wasConnected { onConnectionLost?() }
 
         guard shouldStayConnected, activeMealId == mealId, TokenStorage.shared.isLoggedIn else { return }
-        scheduleReconnect(mealId: mealId)
+        if immediate {
+            reconnectTask?.cancel()
+            reconnectTask = nil
+            reconnectAttempt = 0
+            openSocket(mealId: mealId)
+        } else {
+            scheduleReconnect(mealId: mealId)
+        }
     }
 
     private func scheduleReconnect(mealId: UInt) {
         reconnectTask?.cancel()
         let delays = [1, 2, 4, 8]
-        let delaySeconds = delays[min(reconnectAttempt, delays.count - 1)]
+        let attempt = reconnectAttempt
+        let delaySeconds = delays[min(attempt, delays.count - 1)]
         reconnectAttempt += 1
         reconnectTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delaySeconds))
             guard let self, !Task.isCancelled, self.shouldStayConnected, self.activeMealId == mealId else {
                 return
+            }
+            if attempt == 2 {
+                _ = await APIClient.shared.refreshAccessTokenIfNeeded()
+                guard !Task.isCancelled, self.shouldStayConnected, self.activeMealId == mealId else {
+                    return
+                }
             }
             self.reconnectTask = nil
             self.openSocket(mealId: mealId)
@@ -664,38 +975,93 @@ final class CanvasRealtimeSession: ObservableObject {
     }
 
     private func handleInboundData(_ data: Data) {
-        guard let env = try? decoder.decode(CanvasWSEnvelopeType.self, from: data) else { return }
+        lastInboundAt = Date()
+        probeWatchdogTask?.cancel()
+        probeWatchdogTask = nil
+
+        let env: CanvasWSEnvelopeType
+        do {
+            env = try decoder.decode(CanvasWSEnvelopeType.self, from: data)
+        } catch {
+            print("[CanvasWS] decode envelope failed: \(error)")
+            return
+        }
+
         switch env.type {
+        case "pong":
+            if let serverRev = env.revision, serverRev > currentRevision {
+                requestResync()
+            }
         case "welcome":
-            guard let msg = try? decoder.decode(CanvasWelcomeMessage.self, from: data) else { return }
-            isConnected = true
-            reconnectAttempt = 0
-            currentRevision = msg.revision
-            onlineUsers = msg.onlineUsers ?? []
-            onWelcome?(msg)
+            do {
+                let msg = try decoder.decode(CanvasWelcomeMessage.self, from: data)
+                isConnected = true
+                reconnectAttempt = 0
+                currentRevision = msg.revision
+                onlineUsers = msg.onlineUsers ?? []
+                onWelcome?(msg)
+            } catch {
+                print("[CanvasWS] decode welcome failed: \(error)")
+                onError?("画布同步解析失败，请稍后重试")
+            }
         case "presence":
-            guard let msg = try? decoder.decode(CanvasPresenceMessage.self, from: data) else { return }
-            onlineUsers = msg.onlineUsers
+            do {
+                let msg = try decoder.decode(CanvasPresenceMessage.self, from: data)
+                onlineUsers = msg.onlineUsers
+            } catch {
+                print("[CanvasWS] decode presence failed: \(error)")
+            }
         case "op_applied":
-            guard let msg = try? decoder.decode(CanvasAppliedOpMessage.self, from: data) else { return }
-            currentRevision = max(currentRevision, msg.revision)
-            onOpApplied?(msg)
+            do {
+                let msg = try decoder.decode(CanvasAppliedOpMessage.self, from: data)
+                acknowledgeOps(msg.opId, clientId: msg.clientId)
+                guard msg.revision >= currentRevision else { return }
+                if msg.revision > currentRevision + 1 {
+                    requestResync()
+                    return
+                }
+                currentRevision = msg.revision
+                onOpApplied?(msg)
+            } catch {
+                print("[CanvasWS] decode op_applied failed: \(error)")
+                requestResync()
+            }
         case "snapshot":
-            guard let msg = try? decoder.decode(CanvasSnapshotBroadcastMessage.self, from: data) else { return }
-            currentRevision = max(currentRevision, msg.revision)
-            onSnapshot?(msg)
+            do {
+                let msg = try decoder.decode(CanvasSnapshotBroadcastMessage.self, from: data)
+                acknowledgeOps(msg.opId, seedOpIds: msg.seedOpIds ?? [], clientId: msg.clientId)
+                if msg.revision >= currentRevision {
+                    currentRevision = msg.revision
+                    onSnapshot?(msg)
+                }
+                if msg.clientId == clientID, let seedOpId, msg.opId == seedOpId {
+                    self.seedOpId = nil
+                    resendPendingOps()
+                }
+            } catch {
+                print("[CanvasWS] decode snapshot failed: \(error)")
+                requestResync()
+            }
         case "live_preview":
-            guard var msg = try? decoder.decode(CanvasRemoteLivePreview.self, from: data),
-                  msg.clientId != clientID else { return }
-            if msg.targetKind == "clear" {
-                remotePreviews.removeValue(forKey: msg.clientId)
-            } else {
-                msg.receivedAt = Date()
-                remotePreviews[msg.clientId] = msg
+            do {
+                var msg = try decoder.decode(CanvasRemoteLivePreview.self, from: data)
+                guard msg.clientId != clientID else { return }
+                if msg.targetKind == "clear" {
+                    remotePreviews.removeValue(forKey: msg.clientId)
+                } else {
+                    msg.receivedAt = Date()
+                    remotePreviews[msg.clientId] = msg
+                }
+            } catch {
+                print("[CanvasWS] decode live_preview failed: \(error)")
             }
         case "meal_sync":
-            guard let msg = try? decoder.decode(CanvasMealSyncMessage.self, from: data) else { return }
-            onMealSync?(msg)
+            do {
+                let msg = try decoder.decode(CanvasMealSyncMessage.self, from: data)
+                onMealSync?(msg)
+            } catch {
+                print("[CanvasWS] decode meal_sync failed: \(error)")
+            }
         case "error":
             if let message = env.message, !message.isEmpty {
                 onError?(message)

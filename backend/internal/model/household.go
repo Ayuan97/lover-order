@@ -36,3 +36,20 @@ func (h *Household) MemberCount() int64 {
 		Count(&count)
 	return count
 }
+
+// HouseholdLaunchCanvas 家庭共享开屏动画画布（由家庭创建者发布，所有成员可选择使用或自行 DIY）
+type HouseholdLaunchCanvas struct {
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	HouseholdID uint      `json:"household_id" gorm:"not null;uniqueIndex"`
+	Document    JSON      `json:"document" gorm:"type:longtext"`
+	Motion      string    `json:"motion" gorm:"size:32;default:'fadeZoom'"`
+	HoldSpeed   string    `json:"hold_speed" gorm:"size:32;default:'standard'"`
+	UpdatedBy   uint      `json:"updated_by" gorm:"default:0"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// TableName 家庭共享开屏画布表名
+func (HouseholdLaunchCanvas) TableName() string {
+	return "household_launch_canvases"
+}

@@ -125,6 +125,7 @@ func (h *MealHandler) AddDish(c *gin.Context) {
 // RemoveDish 移除一道菜
 func (h *MealHandler) RemoveDish(c *gin.Context) {
 	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
 	mealID, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		Fail(c, CodeBadRequest, "id 不合法")
@@ -135,11 +136,38 @@ func (h *MealHandler) RemoveDish(c *gin.Context) {
 		Fail(c, CodeBadRequest, "dish_id 不合法")
 		return
 	}
-	if err := h.svc.RemoveDish(hid, uint(mealID), uint(dishID)); err != nil {
+	if err := h.svc.RemoveDish(hid, uid, uint(mealID), uint(dishID)); err != nil {
 		Fail(c, CodeBadRequest, err.Error())
 		return
 	}
 	OK(c, nil)
+}
+
+// UpdateDishImage 替换这一顿某道菜的图片
+func (h *MealHandler) UpdateDishImage(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
+	mealID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		Fail(c, CodeBadRequest, "id 不合法")
+		return
+	}
+	dishID, err := strconv.ParseUint(c.Param("dish_id"), 10, 64)
+	if err != nil {
+		Fail(c, CodeBadRequest, "dish_id 不合法")
+		return
+	}
+	var in service.DishImageUpdateInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		Fail(c, CodeBadRequest, "参数有误")
+		return
+	}
+	dish, err := h.svc.UpdateDishImage(hid, uid, uint(mealID), uint(dishID), in)
+	if err != nil {
+		Fail(c, CodeBadRequest, err.Error())
+		return
+	}
+	OK(c, dish)
 }
 
 // Confirm 定下这一顿
@@ -205,6 +233,30 @@ func (h *MealHandler) ShoppingList(c *gin.Context) {
 		return
 	}
 	OK(c, list)
+}
+
+// UpdateShoppingChecked 保存买菜清单勾选状态（家庭共享实时同步）
+func (h *MealHandler) UpdateShoppingChecked(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		Fail(c, CodeBadRequest, "id 不合法")
+		return
+	}
+	var in struct {
+		CheckedItems []string `json:"checked_items"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		Fail(c, CodeBadRequest, "参数有误")
+		return
+	}
+	checked, err := h.svc.UpdateShoppingChecked(hid, uid, uint(id), in.CheckedItems)
+	if err != nil {
+		Fail(c, CodeBadRequest, err.Error())
+		return
+	}
+	OK(c, gin.H{"checked_items": checked})
 }
 
 // Stats 一个家的累积统计

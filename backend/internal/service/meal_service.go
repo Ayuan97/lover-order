@@ -1,8 +1,10 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -33,6 +35,14 @@ type DishInput struct {
 	Name     string `json:"name"`
 	Image    string `json:"image"`
 	Note     string `json:"note"`
+}
+
+// DishImageUpdateInput 替换一顿中某道菜的实拍图入参
+type DishImageUpdateInput struct {
+	Image         string `json:"image"`
+	CutoutImage   string `json:"cutout_image"`
+	SaveToGallery bool   `json:"save_to_gallery"`
+	SetAsCover    bool   `json:"set_as_cover"`
 }
 
 // ReviewInput 评价一顿入参
@@ -82,7 +92,7 @@ func (s *MealService) Current(householdID, userID uint, scene, mood string) (*mo
 	var m model.MealSession
 	err := model.DB.Where("household_id = ? AND scene = ? AND status IN ?",
 		householdID, scene, []string{model.MealStatusPlanning, model.MealStatusConfirmed}).
-		Preload("Dishes.Adder").Order("id DESC").First(&m).Error
+		Preload("Dishes.Adder").Preload("Participants.User").Preload("Creator").Order("id DESC").First(&m).Error
 	if err == nil {
 		return &m, nil
 	}
@@ -105,7 +115,7 @@ func (s *MealService) Current(householdID, userID uint, scene, mood string) (*mo
 
 		err := model.DB.Where("household_id = ? AND scene = ? AND status IN ?",
 			householdID, scene, []string{model.MealStatusPlanning, model.MealStatusConfirmed}).
-			Preload("Dishes.Adder").Order("id DESC").First(&m).Error
+			Preload("Dishes.Adder").Preload("Participants.User").Preload("Creator").Order("id DESC").First(&m).Error
 		if err == nil {
 			return nil
 		}
@@ -159,6 +169,7 @@ func (s *MealService) Create(householdID, userID uint, in MealInput) (*model.Mea
 	if err := model.DB.Create(m).Error; err != nil {
 		return nil, fmt.Errorf("创建一顿失败：%w", err)
 	}
+	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "history_changed", userID)
 	return m, nil
 }
 
@@ -189,22 +200,60 @@ func (s *MealService) Update(householdID, id uint, in MealInput) (*model.MealSes
 	if err := model.DB.Save(m).Error; err != nil {
 		return nil, err
 	}
+	GlobalCanvasHub().BroadcastMealSync(m.ID, "meal_updated", 0)
 	return m, nil
 }
 
-// Confirm 定下这一顿
+// Confirm 定下这一顿（此时才计入各菜谱的“做过几次”）
 func (s *MealService) Confirm(householdID, actorUserID, id uint) (*model.MealSession, error) {
-	m, err := s.load(householdID, id)
+	var m model.MealSession
+	countedAny := false
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND household_id = ?", id, householdID).
+			Preload("Dishes").First(&m).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("这一顿不存在")
+			}
+			return err
+		}
+		if err := errIfCannotConfirm(m.Status, len(m.Dishes)); err != nil {
+			return err
+		}
+		now := time.Now()
+		m.Status = model.MealStatusConfirmed
+		m.ConfirmedAt = &now
+		if err := tx.Model(&model.MealSession{}).Where("id = ?", m.ID).Updates(map[string]any{
+			"status":       m.Status,
+			"confirmed_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		for i := range m.Dishes {
+			d := &m.Dishes[i]
+			if d.RecipeID == nil || d.Counted {
+				continue
+			}
+			res := tx.Model(&model.Recipe{}).
+				Where("id = ? AND household_id = ?", *d.RecipeID, householdID).
+				Updates(map[string]any{
+					"use_count":    gorm.Expr("use_count + ?", 1),
+					"last_used_at": now,
+				})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected > 0 {
+				if err := tx.Model(&model.MealDish{}).Where("id = ?", d.ID).Update("counted", true).Error; err != nil {
+					return err
+				}
+				d.Counted = true
+				countedAny = true
+			}
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, err
-	}
-	if err := errIfCannotConfirm(m.Status, len(m.Dishes)); err != nil {
-		return nil, err
-	}
-	now := time.Now()
-	m.Status = model.MealStatusConfirmed
-	m.ConfirmedAt = &now
-	if err := model.DB.Save(m).Error; err != nil {
 		return nil, err
 	}
 	dishNames := make([]string, 0, len(m.Dishes))
@@ -213,7 +262,13 @@ func (s *MealService) Confirm(householdID, actorUserID, id uint) (*model.MealSes
 	}
 	NewNotificationService().NotifyMealConfirmed(householdID, actorUserID, m.ID, dishNames)
 	GlobalCanvasHub().BroadcastMealSync(m.ID, "confirmed", actorUserID)
-	return m, nil
+	if countedAny {
+		GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", actorUserID)
+	}
+	if full, getErr := s.Get(householdID, m.ID); getErr == nil {
+		return full, nil
+	}
+	return &m, nil
 }
 
 // Complete 标记吃完
@@ -239,73 +294,153 @@ func (s *MealService) Complete(householdID, actorUserID, id uint) (*model.MealSe
 	}
 	NewNotificationService().NotifyMealCompleted(householdID, actorUserID, m.ID, m.Title)
 	GlobalCanvasHub().BroadcastMealSync(m.ID, "completed", actorUserID)
+	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "history_changed", actorUserID)
 	GlobalCanvasHub().EvictGuests(m.ID)
 	return m, nil
 }
 
-// Cancel 取消
+// Cancel 取消（已定下的取消时回退对应菜谱的做过次数）
 func (s *MealService) Cancel(householdID, id uint) error {
-	m, err := s.load(householdID, id)
+	decrementedAny := false
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		var m model.MealSession
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND household_id = ?", id, householdID).
+			Preload("Dishes").First(&m).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("这一顿不存在")
+			}
+			return err
+		}
+		if m.Status == model.MealStatusCompleted {
+			return errors.New("已完成的一顿无法取消")
+		}
+		if m.Status == model.MealStatusCancelled {
+			return nil
+		}
+		if err := tx.Model(&model.MealSession{}).Where("id = ?", m.ID).Updates(map[string]any{
+			"status":          model.MealStatusCancelled,
+			"room_code":       "",
+			"room_expires_at": nil,
+		}).Error; err != nil {
+			return err
+		}
+		for _, d := range m.Dishes {
+			if !d.Counted || d.RecipeID == nil {
+				continue
+			}
+			if err := tx.Model(&model.Recipe{}).
+				Where("id = ? AND household_id = ?", *d.RecipeID, householdID).
+				Update("use_count", gorm.Expr("CASE WHEN use_count > 0 THEN use_count - 1 ELSE 0 END")).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&model.MealDish{}).Where("id = ?", d.ID).Update("counted", false).Error; err != nil {
+				return err
+			}
+			decrementedAny = true
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-	if m.Status == model.MealStatusCompleted {
-		return errors.New("已完成的一顿无法取消")
+	GlobalCanvasHub().BroadcastMealSync(id, "cancelled", 0)
+	GlobalCanvasHub().EvictGuests(id)
+	if decrementedAny {
+		GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", 0)
 	}
-	m.Status = model.MealStatusCancelled
-	m.RoomCode = ""
-	m.RoomExpiresAt = nil
-	if err := model.DB.Save(m).Error; err != nil {
-		return err
-	}
-	GlobalCanvasHub().BroadcastMealSync(m.ID, "cancelled", 0)
-	GlobalCanvasHub().EvictGuests(m.ID)
 	return nil
 }
 
-// AddDish 加入一道菜
+// AddDish 加入一道菜（仅在已定下后加菜才直接计入“做过几次”）
 func (s *MealService) AddDish(householdID, userID, id uint, in DishInput) (*model.MealDish, error) {
-	m, err := s.load(householdID, id)
+	var dish *model.MealDish
+	added := false
+	countedNow := false
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		var m model.MealSession
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND household_id = ?", id, householdID).
+			First(&m).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("这一顿不存在")
+			}
+			return err
+		}
+		if m.Status != model.MealStatusPlanning && m.Status != model.MealStatusConfirmed {
+			return errors.New("这一顿已结束 无法再添加")
+		}
+
+		if in.RecipeID != nil {
+			var existing model.MealDish
+			err := tx.Where("meal_session_id = ? AND recipe_id = ?", id, *in.RecipeID).First(&existing).Error
+			if err == nil {
+				dish = &existing
+				return nil
+			}
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+
+		dish = &model.MealDish{
+			MealSessionID: m.ID,
+			RecipeID:      in.RecipeID,
+			RecipeName:    in.Name,
+			RecipeImage:   in.Image,
+			Note:          in.Note,
+			AddedBy:       userID,
+		}
+		if in.RecipeID != nil {
+			var r model.Recipe
+			if err := tx.Where("id = ? AND household_id = ?", *in.RecipeID, householdID).First(&r).Error; err == nil {
+				dish.RecipeName = r.Name
+				dish.RecipeImage = r.CoverImage
+				dish.RecipeCutoutImage = r.CutoutImage
+			} else {
+				// 菜谱删了也不挡复刻往顿:退回用调用方带的快照 只断开关联
+				dish.RecipeID = nil
+			}
+		}
+		if dish.RecipeName == "" {
+			return errors.New("菜品名称不能为空")
+		}
+		if m.Status == model.MealStatusConfirmed && dish.RecipeID != nil {
+			dish.Counted = true
+			countedNow = true
+			now := time.Now()
+			if err := tx.Model(&model.Recipe{}).
+				Where("id = ? AND household_id = ?", *dish.RecipeID, householdID).
+				Updates(map[string]any{
+					"use_count":    gorm.Expr("use_count + ?", 1),
+					"last_used_at": now,
+				}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Create(dish).Error; err != nil {
+			return err
+		}
+		added = true
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if m.Status != model.MealStatusPlanning && m.Status != model.MealStatusConfirmed {
-		return nil, errors.New("这一顿已结束 无法再添加")
+	if !added {
+		return dish, nil
 	}
-
-	dish := &model.MealDish{
-		MealSessionID: m.ID,
-		RecipeID:      in.RecipeID,
-		RecipeName:    in.Name,
-		RecipeImage:   in.Image,
-		Note:          in.Note,
-		AddedBy:       userID,
+	NewNotificationService().NotifyMealDishAdded(householdID, userID, id, dish.RecipeName)
+	GlobalCanvasHub().BroadcastMealSync(id, "dish_added", userID)
+	if countedNow {
+		GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", userID)
 	}
-	if in.RecipeID != nil {
-		var r model.Recipe
-		if err := model.DB.Where("id = ? AND household_id = ?", *in.RecipeID, householdID).First(&r).Error; err == nil {
-			dish.RecipeName = r.Name
-			dish.RecipeImage = r.CoverImage
-			dish.RecipeCutoutImage = r.CutoutImage
-			_ = r.MarkUsed()
-		} else {
-			// 菜谱删了也不挡复刻往顿:退回用调用方带的快照 只断开关联
-			dish.RecipeID = nil
-		}
-	}
-	if dish.RecipeName == "" {
-		return nil, errors.New("菜品名称不能为空")
-	}
-	if err := model.DB.Create(dish).Error; err != nil {
-		return nil, err
-	}
-	NewNotificationService().NotifyMealDishAdded(householdID, userID, m.ID, dish.RecipeName)
-	GlobalCanvasHub().BroadcastMealSync(m.ID, "dish_added", userID)
 	return dish, nil
 }
 
 // RemoveDish 移除一道菜
-func (s *MealService) RemoveDish(householdID, mealID, dishID uint) error {
+func (s *MealService) RemoveDish(householdID, actorUserID, mealID, dishID uint) error {
+	decremented := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		var m model.MealSession
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -324,12 +459,30 @@ func (s *MealService) RemoveDish(householdID, mealID, dishID uint) error {
 		if err := errIfCannotRemoveDish(status, len(m.Dishes)); err != nil {
 			return err
 		}
+		var target *model.MealDish
+		for i := range m.Dishes {
+			if m.Dishes[i].ID == dishID {
+				target = &m.Dishes[i]
+				break
+			}
+		}
+		if target == nil {
+			return errors.New("这道菜不存在")
+		}
 		res := tx.Where("id = ? AND meal_session_id = ?", dishID, mealID).Delete(&model.MealDish{})
 		if res.Error != nil {
 			return res.Error
 		}
 		if res.RowsAffected == 0 {
 			return errors.New("这道菜不存在")
+		}
+		if target.Counted && target.RecipeID != nil {
+			if err := tx.Model(&model.Recipe{}).
+				Where("id = ? AND household_id = ?", *target.RecipeID, householdID).
+				Update("use_count", gorm.Expr("CASE WHEN use_count > 0 THEN use_count - 1 ELSE 0 END")).Error; err != nil {
+				return err
+			}
+			decremented = true
 		}
 		if status != m.Status {
 			return tx.Model(&m).Updates(map[string]any{"status": status, "confirmed_at": nil}).Error
@@ -338,8 +491,108 @@ func (s *MealService) RemoveDish(householdID, mealID, dishID uint) error {
 	}); err != nil {
 		return err
 	}
-	GlobalCanvasHub().BroadcastMealSync(mealID, "dish_removed", 0)
+	GlobalCanvasHub().DeleteDishSticker(mealID, dishID, actorUserID)
+	GlobalCanvasHub().BroadcastMealSync(mealID, "dish_removed", actorUserID)
+	if decremented {
+		GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", actorUserID)
+	}
 	return nil
+}
+
+// UpdateDishImage 替换这一顿某道菜的图片（可选收入菜谱历次实拍库及设为默认封面），并同步画布贴图
+func (s *MealService) UpdateDishImage(householdID, actorUserID, mealID, dishID uint, in DishImageUpdateInput) (*model.MealDish, error) {
+	image := strings.TrimSpace(in.Image)
+	cutout := strings.TrimSpace(in.CutoutImage)
+	if image == "" && cutout == "" {
+		return nil, errors.New("图片地址不能为空")
+	}
+	if image == "" {
+		image = cutout
+	}
+
+	var dish model.MealDish
+	var mealStatus string
+	recipeUpdated := false
+
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		var m model.MealSession
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND household_id = ?", mealID, householdID).
+			First(&m).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("这一顿不存在")
+			}
+			return err
+		}
+		if m.Status == model.MealStatusCancelled {
+			return errors.New("已取消的一顿无法修改菜图")
+		}
+		mealStatus = m.Status
+
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND meal_session_id = ?", dishID, mealID).
+			First(&dish).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("这道菜不存在")
+			}
+			return err
+		}
+
+		dish.RecipeImage = image
+		dish.RecipeCutoutImage = cutout
+		if err := tx.Model(&model.MealDish{}).Where("id = ? AND meal_session_id = ?", dishID, mealID).Updates(map[string]any{
+			"recipe_image":        image,
+			"recipe_cutout_image": cutout,
+		}).Error; err != nil {
+			return err
+		}
+
+		if dish.RecipeID != nil && (in.SaveToGallery || in.SetAsCover) {
+			var r model.Recipe
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id = ? AND household_id = ?", *dish.RecipeID, householdID).
+				First(&r).Error; err == nil {
+				if r.CoverImage != "" {
+					if err := r.UpsertGalleryPhoto(r.CoverImage, r.CutoutImage, r.CreatedAt.Format("2006-01-02")); err != nil {
+						return err
+					}
+				}
+				if err := r.UpsertGalleryPhoto(image, cutout, time.Now().Format("2006-01-02")); err != nil {
+					return err
+				}
+				if in.SetAsCover {
+					r.CoverImage = image
+					r.CutoutImage = cutout
+				}
+				if err := tx.Save(&r).Error; err != nil {
+					return err
+				}
+				recipeUpdated = true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	_ = model.DB.Preload("Adder").First(&dish, dish.ID).Error
+
+	displayImg := image
+	isCutout := false
+	if cutout != "" {
+		displayImg = cutout
+		isCutout = true
+	}
+	GlobalCanvasHub().UpdateDishStickerImage(mealID, dishID, displayImg, isCutout, actorUserID)
+	GlobalCanvasHub().BroadcastMealSync(mealID, "dish_updated", actorUserID)
+	if recipeUpdated {
+		GlobalCanvasHub().BroadcastHouseholdSync(householdID, "recipes_changed", actorUserID)
+	}
+	if mealStatus == model.MealStatusCompleted {
+		GlobalCanvasHub().BroadcastHouseholdSync(householdID, "history_changed", actorUserID)
+	}
+	return &dish, nil
 }
 
 // AddReview 一顿吃完后留下评价
@@ -415,6 +668,7 @@ func (s *MealService) AddReview(householdID, userID, mealID uint, in ReviewInput
 		return nil, err
 	}
 	NewNotificationService().NotifyMealReviewed(householdID, userID, m.ID, in.Rating, in.Comment, len(in.Photos))
+	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "history_changed", userID)
 	return review, nil
 }
 
@@ -459,8 +713,56 @@ type ShoppingItem struct {
 
 // ShoppingList 一顿的食材清单
 type ShoppingList struct {
-	MealID uint           `json:"meal_id"`
-	Items  []ShoppingItem `json:"items"`
+	MealID       uint           `json:"meal_id"`
+	Items        []ShoppingItem `json:"items"`
+	CheckedItems []string       `json:"checked_items"`
+}
+
+func decodeCheckedShoppingItems(raw model.JSON) []string {
+	if len(raw) == 0 {
+		return []string{}
+	}
+	var items []string
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return []string{}
+	}
+	return normalizeCheckedShoppingItems(items)
+}
+
+func normalizeCheckedShoppingItems(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	out := make([]string, 0, len(items))
+	for _, raw := range items {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	return out
+}
+
+// UpdateShoppingChecked 保存并广播同一顿买菜清单的勾选状态，供家人实时共享
+func (s *MealService) UpdateShoppingChecked(householdID, actorUserID, mealID uint, items []string) ([]string, error) {
+	if _, err := s.load(householdID, mealID); err != nil {
+		return nil, err
+	}
+	normalized := normalizeCheckedShoppingItems(items)
+	encoded, err := jsonMarshal(normalized)
+	if err != nil {
+		return nil, err
+	}
+	if err := model.DB.Model(&model.MealSession{}).
+		Where("id = ? AND household_id = ?", mealID, householdID).
+		Update("checked_shopping_items", encoded).Error; err != nil {
+		return nil, err
+	}
+	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "shopping_changed", actorUserID)
+	return normalized, nil
 }
 
 // ShoppingList 聚合一顿里所有菜的食材
@@ -507,7 +809,11 @@ func (s *MealService) ShoppingList(householdID, mealID uint) (*ShoppingList, err
 		}
 	}
 
-	return &ShoppingList{MealID: mealID, Items: items}, nil
+	return &ShoppingList{
+		MealID:       mealID,
+		Items:        items,
+		CheckedItems: decodeCheckedShoppingItems(m.CheckedShoppingItems),
+	}, nil
 }
 
 // HouseholdStats 一个家的累积统计

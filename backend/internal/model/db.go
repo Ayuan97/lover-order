@@ -74,6 +74,7 @@ func AutoMigrate() error {
 
 	tables := []any{
 		&Household{},
+		&HouseholdLaunchCanvas{},
 		&User{},
 		&HouseholdInvite{},
 		&RecipeCategory{},

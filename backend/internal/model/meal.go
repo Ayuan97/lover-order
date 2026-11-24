@@ -38,8 +38,9 @@ type MealSession struct {
 	ConfirmedAt   *time.Time     `json:"confirmed_at" gorm:"comment:定下来的时间"`
 	CompletedAt   *time.Time     `json:"completed_at" gorm:"comment:吃完时间"`
 	Status        string         `json:"status" gorm:"type:enum('planning','confirmed','completed','cancelled');default:'planning';index"`
-	Note          string         `json:"note" gorm:"size:255;comment:备注"`
-	RoomCode      string         `json:"room_code" gorm:"size:8;index;comment:聚餐房间号 开启聚餐时生成"`
+	Note                 string         `json:"note" gorm:"size:255;comment:备注"`
+	CheckedShoppingItems JSON           `json:"-" gorm:"type:json;comment:已勾选食材名列表"`
+	RoomCode             string         `json:"room_code" gorm:"size:8;index;comment:聚餐房间号 开启聚餐时生成"`
 	RoomExpiresAt *time.Time     `json:"room_expires_at" gorm:"comment:聚餐房间失效时间"`
 	HouseholdID   uint           `json:"household_id" gorm:"not null;index"`
 	CreatedBy     uint           `json:"created_by" gorm:"not null;index"`
@@ -68,6 +69,7 @@ type MealDish struct {
 	RecipeCutoutImage string    `json:"recipe_cutout_image" gorm:"size:512;comment:画布透明贴图快照"`
 	Note              string    `json:"note" gorm:"size:255;comment:备注 如换换口味"`
 	SortOrder         int       `json:"sort_order" gorm:"default:0"`
+	Counted           bool      `json:"-" gorm:"default:false;comment:是否已计入菜谱做过次数"`
 	AddedBy           uint      `json:"added_by" gorm:"not null;index"`
 	CreatedAt         time.Time `json:"created_at"`
 

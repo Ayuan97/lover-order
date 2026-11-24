@@ -30,6 +30,7 @@ struct RecipeEditView: View {
     @State private var sceneTags: Set<String> = []
 
     @State private var categories: [RecipeCategory] = []
+    @State private var categoriesLoadID = 0
     @State private var categoryId: UInt?
     @State private var showNewCategory: Bool = false
     @State private var newCategoryName: String = ""
@@ -77,8 +78,11 @@ struct RecipeEditView: View {
                 bottomBar
             }
             .task {
-                await loadCategories()
                 primeFromMode()
+                await loadCategories()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .categoriesChanged)) { _ in
+                Task { await loadCategories() }
             }
             .navigationTitle(isEdit ? "编辑菜谱" : "新建菜谱")
             .navigationBarTitleDisplayMode(.inline)
@@ -441,8 +445,15 @@ struct RecipeEditView: View {
     }
 
     private func loadCategories() async {
+        categoriesLoadID += 1
+        let loadID = categoriesLoadID
         do {
-            categories = try await CategoryService.shared.list()
+            let latest = try await CategoryService.shared.list()
+            guard loadID == categoriesLoadID else { return }
+            categories = latest
+            if let categoryId, !categories.contains(where: { $0.id == categoryId }) {
+                self.categoryId = nil
+            }
         } catch {}
     }
 
@@ -455,9 +466,9 @@ struct RecipeEditView: View {
             let created = try await CategoryService.shared.create(
                 CategoryInput(name: name, icon: newCategoryIcon.isEmpty ? nil : newCategoryIcon, color: nil, sortOrder: categories.count)
             )
-            AppNotifications.categoriesChanged()
-            await loadCategories()
+            categoriesLoadID += 1
             categoryId = created.id
+            AppNotifications.categoriesChanged()
             newCategoryName = ""
             newCategoryIcon = ""
             showNewCategory = false
@@ -516,6 +527,7 @@ struct RecipeEditView: View {
             case .create:
                 saved = try await RecipeService.shared.create(input)
             case .edit(let original):
+                input.expectedUpdatedAt = original.updatedAt
                 saved = try await RecipeService.shared.update(id: original.id, req: input)
             }
             AppNotifications.recipesChanged()

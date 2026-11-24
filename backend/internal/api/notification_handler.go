@@ -50,9 +50,18 @@ func (h *NotificationHandler) UnregisterDevice(c *gin.Context) {
 // List 获取通知事件与未读统计
 func (h *NotificationHandler) List(c *gin.Context) {
 	uid, _ := middleware.CurrentUserID(c)
-	afterID, _ := strconv.ParseUint(c.DefaultQuery("after_id", "0"), 10, 64)
+	var afterID *uint
+	if raw, ok := c.GetQuery("after_id"); ok {
+		id, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			Fail(c, CodeBadRequest, "通知 id 不合法")
+			return
+		}
+		value := uint(id)
+		afterID = &value
+	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "30"))
-	res, err := h.svc.ListEvents(uid, uint(afterID), limit)
+	res, err := h.svc.ListEvents(uid, afterID, limit)
 	if err != nil {
 		Fail(c, CodeInternalError, err.Error())
 		return

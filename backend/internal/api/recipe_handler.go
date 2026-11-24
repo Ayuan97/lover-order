@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -91,12 +92,16 @@ func (h *RecipeHandler) Update(c *gin.Context) {
 		Fail(c, CodeBadRequest, "id 不合法")
 		return
 	}
-	var in service.RecipeInput
+	var in service.RecipeUpdateInput
 	if err := c.ShouldBindJSON(&in); err != nil {
 		Fail(c, CodeBadRequest, "参数有误")
 		return
 	}
 	r, err := h.svc.Update(hid, uint(id), in)
+	if errors.Is(err, service.ErrRecipeEditConflict) {
+		Fail(c, CodeConflict, err.Error())
+		return
+	}
 	if err != nil {
 		Fail(c, CodeInternalError, err.Error())
 		return
@@ -134,4 +139,26 @@ func (h *RecipeHandler) ToggleFavorite(c *gin.Context) {
 		return
 	}
 	OK(c, gin.H{"favored": favored})
+}
+
+// SetCover 把某张实拍设为菜谱默认封面
+func (h *RecipeHandler) SetCover(c *gin.Context) {
+	hid, _ := middleware.CurrentHouseholdID(c)
+	uid, _ := middleware.CurrentUserID(c)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		Fail(c, CodeBadRequest, "id 不合法")
+		return
+	}
+	var in service.RecipeCoverInput
+	if err := c.ShouldBindJSON(&in); err != nil {
+		Fail(c, CodeBadRequest, "参数有误")
+		return
+	}
+	r, err := h.svc.SetCover(hid, uid, uint(id), in)
+	if err != nil {
+		Fail(c, CodeBadRequest, err.Error())
+		return
+	}
+	OK(c, r)
 }

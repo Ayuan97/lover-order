@@ -22,6 +22,7 @@ final class AppState: ObservableObject {
     @Published var activeTab: Int = 0
     @Published var isProfileHeroVisible: Bool = true
     @Published private var hiddenTabBarTokens: Set<UUID> = []
+    private var lastForegroundSyncAt: Date = .distantPast
 
     // MARK: - 程序外深链与未读消息状态
     struct DeepLinkedHistoryMeal: Identifiable {
@@ -37,9 +38,11 @@ final class AppState: ObservableObject {
     @Published var pendingDeepLink: AppDeepLink?
     @Published var deepLinkedHistoryMeal: DeepLinkedHistoryMeal?
     @Published var deepLinkedDiningRoom: DeepLinkedDiningRoom?
+    @Published var deepLinkedGuestMeal: MealSession?
     @Published var pendingJoinHomeCode: String?
     @Published var deepLinkToast: String?
     @Published var unreadNotificationCount: Int = 0
+    private var mealLinkTask: Task<Void, Never>?
 
     var prefersDarkStatusBar: Bool {
         (isMealTabActive && !canvasIsLightSurface) || (activeTab == 3 && isProfileHeroVisible && !hidesFloatingTabBar)
@@ -89,12 +92,18 @@ final class AppState: ObservableObject {
     }
 
     private func routeDeepLink(_ link: AppDeepLink) {
+        mealLinkTask?.cancel()
+        deepLinkedGuestMeal = nil
         switch link {
-        case .meal:
+        case .meal(let mealId):
             deepLinkedHistoryMeal = nil
             deepLinkedDiningRoom = nil
-            switchToMealTab()
-            AppNotifications.mealChanged()
+            if let mealId {
+                mealLinkTask = Task { await openLinkedMeal(mealId) }
+            } else {
+                switchToMealTab()
+                AppNotifications.mealChanged()
+            }
         case .history(let mealId):
             guard currentUser?.hasHousehold == true || household != nil else {
                 deepLinkToast = "先创建或加入一个家，就能看这顿饭记录了"
@@ -119,6 +128,49 @@ final class AppState: ObservableObject {
                 switchToProfileTab()
                 Task { await refreshHousehold() }
             }
+        }
+    }
+
+    private func openLinkedMeal(_ mealId: UInt) async {
+        if currentUser?.hasHousehold == true || household != nil {
+            do {
+                let meal = try await MealService.shared.detail(id: mealId)
+                guard !Task.isCancelled else { return }
+                switch meal.status {
+                case .completed:
+                    deepLinkedHistoryMeal = DeepLinkedHistoryMeal(mealId: mealId)
+                case .planning, .confirmed:
+                    let current = try await MealService.shared.current(scene: .household, mood: currentMood)
+                    guard !Task.isCancelled else { return }
+                    if current.id == mealId {
+                        switchToMealTab()
+                        AppNotifications.mealChanged()
+                    } else {
+                        deepLinkToast = "这顿饭已不是当前画布"
+                    }
+                case .cancelled:
+                    deepLinkToast = "这顿饭已经取消啦"
+                }
+                return
+            } catch APIError.server(404, _) {
+                // 这顿可能是作为来客参加的，按房间参与关系查询。
+            } catch {
+                if !Task.isCancelled { deepLinkToast = error.localizedDescription }
+                return
+            }
+        }
+
+        guard !Task.isCancelled else { return }
+        do {
+            let guestMeal = try await DiningService.shared.current(mealId: mealId)
+            guard !Task.isCancelled else { return }
+            if let guestMeal {
+                deepLinkedGuestMeal = guestMeal
+            } else {
+                deepLinkToast = "这顿饭已结束或你已离开房间"
+            }
+        } catch {
+            if !Task.isCancelled { deepLinkToast = error.localizedDescription }
         }
     }
 
@@ -158,6 +210,7 @@ final class AppState: ObservableObject {
             } else {
                 household = nil
                 householdLoadFailed = false
+                LaunchCanvasStore.clearCreatorCache()
             }
         } catch let error as APIError {
             switch error {
@@ -193,6 +246,7 @@ final class AppState: ObservableObject {
     }
 
     func didLogout() async {
+        mealLinkTask?.cancel()
         await NotificationManager.shared.handleLogout()
         try? await AuthService.shared.logout()
         TokenStorage.shared.clear()
@@ -204,12 +258,35 @@ final class AppState: ObservableObject {
         pendingDeepLink = nil
         deepLinkedHistoryMeal = nil
         deepLinkedDiningRoom = nil
+        deepLinkedGuestMeal = nil
         pendingJoinHomeCode = nil
         unreadNotificationCount = 0
+        LaunchCanvasStore.clearCreatorCache()
     }
 
     func refreshHousehold() async {
-        await loadHousehold(markFailure: currentUser?.hasHousehold == true)
+        if currentUser?.hasHousehold == true {
+            await loadHousehold(markFailure: true)
+        } else {
+            household = nil
+            householdLoadFailed = false
+            LaunchCanvasStore.clearCreatorCache()
+        }
+    }
+
+    func refreshOnForegroundResume() async {
+        let now = Date()
+        guard now.timeIntervalSince(lastForegroundSyncAt) >= 15 else { return }
+        lastForegroundSyncAt = now
+        let ok = await refreshProfile()
+        guard ok else { return }
+        if currentUser?.hasHousehold == true || household != nil {
+            await refreshHousehold()
+        } else {
+            household = nil
+            householdLoadFailed = false
+            LaunchCanvasStore.clearCreatorCache()
+        }
     }
 
     // 拉家信息；失败时保留旧 household，并在应有家时打失败标
@@ -218,10 +295,44 @@ final class AppState: ObservableObject {
             let h = try await HouseholdService.shared.info()
             household = h
             householdLoadFailed = false
+            Task { await self.refreshHouseholdLaunchCanvas() }
         } catch {
             if markFailure {
                 householdLoadFailed = true
             }
+        }
+    }
+
+    func refreshHouseholdLaunchCanvas() async {
+        guard currentUser?.hasHousehold == true || household != nil else {
+            LaunchCanvasStore.clearCreatorCache()
+            return
+        }
+        do {
+            let resp = try await HouseholdService.shared.fetchLaunchCanvas()
+            var finalDoc = resp.document
+            if var doc = finalDoc {
+                // 预拉创建者的自定义背景与贴纸图并落入本地缓存，保证下次冷启动开屏首帧即显
+                if let bgURL = APIConfig.imageURL(doc.customBackgroundURL) {
+                    if let (data, httpResp) = try? await URLSession.shared.data(from: bgURL),
+                       (httpResp as? HTTPURLResponse)?.statusCode == 200,
+                       let img = UIImage(data: data),
+                       let preview = img.canvasPreviewData {
+                        doc.customBackgroundData = preview
+                    }
+                    _ = await RemoteImageCache.shared.load(url: bgURL)
+                }
+                for sticker in doc.stickers {
+                    if let u = APIConfig.imageURL(sticker.image) {
+                        _ = await RemoteImageCache.shared.load(url: u)
+                    }
+                }
+                finalDoc = doc
+            }
+            LaunchCanvasStore.saveCreatorCache(resp, hydratedDocument: finalDoc)
+            AppNotifications.launchCanvasChanged()
+        } catch {
+            // 静默兜底，不打断正常首页进入
         }
     }
 
@@ -244,6 +355,7 @@ final class AppState: ObservableObject {
             u.householdId = h.id
             currentUser = u
         }
+        Task { await self.refreshHouseholdLaunchCanvas() }
     }
 
     // 同步资料 + 家 引导页半状态重试用
@@ -255,6 +367,7 @@ final class AppState: ObservableObject {
         } else {
             household = nil
             householdLoadFailed = false
+            LaunchCanvasStore.clearCreatorCache()
         }
         return ok
     }

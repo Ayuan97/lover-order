@@ -3,6 +3,7 @@ import SwiftUI
 // 访客端聚餐：直接进入同一张自由画布实时协同，保留收起与退出，不含主人流程控制
 struct DiningGuestView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @State var meal: MealSession
     @Environment(\.dismiss) private var dismiss
 
@@ -29,7 +30,7 @@ struct DiningGuestView: View {
                     pendingReviewMealId: nil,
                     onAddDish: { showPicker = true },
                     onReview: { _ in },
-                    onConfirm: {},
+                    onConfirm: { false },
                     onShoppingList: {},
                     onDining: {},
                     onRetry: { await refresh() },
@@ -41,12 +42,18 @@ struct DiningGuestView: View {
                     onDeleteDish: { dish in
                         await removeDishFromCanvas(dish)
                     },
-                    onRemoteMealSync: {
-                        Task { await refresh() }
+                    onRemoteMealSync: { reason in
+                        if reason == "recipes_changed" || reason == "canvas_connected" {
+                            AppNotifications.recipesChanged()
+                        }
+                        if reason != "recipes_changed" {
+                            Task { await refresh() }
+                        }
                     },
                     onGuestLightSurfaceChange: { isLight in
                         canvasIsLightSurface = isLight
-                    }
+                    },
+                    isSheetPresented: showPicker
                 )
             }
         }
@@ -70,9 +77,14 @@ struct DiningGuestView: View {
             await refresh()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(4))
+                guard scenePhase == .active else { continue }
                 await refresh()
                 if ended { break }
             }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+            Task { await refresh() }
         }
         .sheet(isPresented: $showPicker, onDismiss: { Task { await refresh() } }) {
             DiningDishPicker(
@@ -126,9 +138,13 @@ struct DiningGuestView: View {
 
     private func refresh() async {
         do {
-            if let m = try await DiningService.shared.current() {
+            if let m = try await DiningService.shared.current(mealId: meal.id) {
+                let changed = m.syncSignature != meal.syncSignature
                 meal = m
                 canvasVM.meal = m
+                if changed {
+                    AppNotifications.mealChanged()
+                }
             } else {
                 showPicker = false
                 showLeaveConfirm = false

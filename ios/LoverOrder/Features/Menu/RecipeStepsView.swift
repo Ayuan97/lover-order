@@ -7,6 +7,7 @@ struct RecipeStepsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var tabBarToken = UUID()
+    @State private var previewGallery: PhotoGalleryPresentation?
 
     var body: some View {
         ScrollView {
@@ -33,13 +34,30 @@ struct RecipeStepsView: View {
         }
         .navigationTitle("做法 · \(recipe.name)")
         .navigationBarTitleDisplayMode(.inline)
+        .fullScreenCover(item: $previewGallery) { presentation in
+            PhotoGalleryViewer(slides: presentation.slides, initialIndex: presentation.initialIndex)
+        }
     }
 
     private var headerCard: some View {
         HStack(spacing: AppSpacing.md) {
-            AsyncImageView(url: recipe.coverImage, name: recipe.name)
-                .frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+            let slides = coverSlides
+            if !slides.isEmpty {
+                Button {
+                    Haptics.light()
+                    previewGallery = PhotoGalleryPresentation(slides: slides, initialIndex: 0)
+                } label: {
+                    AsyncImageView(url: recipe.coverImage, name: recipe.name)
+                        .frame(width: 64, height: 64)
+                        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+                }
+                .buttonStyle(SoftPressStyle())
+                .accessibilityLabel("查看菜品大图")
+            } else {
+                AsyncImageView(url: recipe.coverImage, name: recipe.name)
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.md, style: .continuous))
+            }
             VStack(alignment: .leading, spacing: 4) {
                 Text(recipe.name)
                     .font(AppFont.title(20))
@@ -146,10 +164,18 @@ struct RecipeStepsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             if let image = step.image, !image.isEmpty {
-                AsyncImageView(url: image, name: "步骤 \(step.index)")
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 180)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Button {
+                    Haptics.light()
+                    openStepPhoto(for: step)
+                } label: {
+                    AsyncImageView(url: image, name: "步骤 \(step.index)")
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 180)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(SoftPressStyle())
+                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .accessibilityLabel("查看步骤 \(step.index) 大图")
             }
         }
         .padding(AppSpacing.lg)
@@ -194,5 +220,45 @@ struct RecipeStepsView: View {
         .overlay(alignment: .top) {
             Divider().overlay(Color.dividerLine.opacity(0.6))
         }
+    }
+
+    private var coverSlides: [PhotoGallerySlide] {
+        let choices = recipe.photoChoices
+        if !choices.isEmpty {
+            return choices.enumerated().map { offset, choice in
+                PhotoGallerySlide(
+                    id: "\(offset)-\(choice.image)",
+                    url: choice.image,
+                    caption: recipe.name
+                )
+            }
+        }
+        if let cover = recipe.coverImage?.trimmingCharacters(in: .whitespacesAndNewlines), !cover.isEmpty {
+            return [PhotoGallerySlide(url: cover, caption: recipe.name)]
+        }
+        return []
+    }
+
+    private func openStepPhoto(for targetStep: CookingStep) {
+        let stepSlides = (recipe.steps ?? []).compactMap { step -> (id: UUID, slide: PhotoGallerySlide)? in
+            guard let raw = step.image?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !raw.isEmpty else {
+                return nil
+            }
+            return (
+                id: step.id,
+                slide: PhotoGallerySlide(
+                    id: "\(step.id.uuidString)-\(raw)",
+                    url: raw,
+                    caption: "步骤 \(step.index)"
+                )
+            )
+        }
+        guard !stepSlides.isEmpty else { return }
+        let initialIndex = stepSlides.firstIndex { $0.id == targetStep.id } ?? 0
+        previewGallery = PhotoGalleryPresentation(
+            slides: stepSlides.map(\.slide),
+            initialIndex: initialIndex
+        )
     }
 }

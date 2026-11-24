@@ -366,6 +366,11 @@ func (s *UserService) UpdateProfile(userID uint, in UpdateProfileInput) (*model.
 	if err != nil {
 		return nil, err
 	}
+	user.HasPassword = user.PasswordHash != ""
+	GlobalCanvasHub().RefreshUserActor(userID)
+	if user.HouseholdID != nil {
+		GlobalCanvasHub().BroadcastHouseholdSync(*user.HouseholdID, "household_changed", userID)
+	}
 	return &user, nil
 }
 

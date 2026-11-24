@@ -36,6 +36,7 @@ struct RecipeInput: Encodable {
     var tags: [String]?
     var moodTags: [Mood]?
     var sceneTags: [String]?
+    var expectedUpdatedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case name
@@ -53,11 +54,22 @@ struct RecipeInput: Encodable {
         case tags
         case moodTags = "mood_tags"
         case sceneTags = "scene_tags"
+        case expectedUpdatedAt = "expected_updated_at"
     }
 }
 
 struct FavoriteResult: Decodable {
     let favored: Bool
+}
+
+struct RecipeCoverInput: Encodable {
+    var image: String
+    var cutoutImage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case image
+        case cutoutImage = "cutout_image"
+    }
 }
 
 final class RecipeService {
@@ -78,6 +90,15 @@ final class RecipeService {
 
     func update(id: UInt, req: RecipeInput) async throws -> Recipe {
         try await api.post("recipes/\(id)/update", body: req)
+    }
+
+    func setCover(id: UInt, image: String, cutoutImage: String?) async throws -> Recipe {
+        let r: Recipe = try await api.post(
+            "recipes/\(id)/cover",
+            body: RecipeCoverInput(image: image, cutoutImage: cutoutImage)
+        )
+        AppNotifications.recipesChanged()
+        return r
     }
 
     func delete(id: UInt) async throws {

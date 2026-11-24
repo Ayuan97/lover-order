@@ -108,6 +108,12 @@ struct DiningDishPicker: View {
             .task {
                 await loadAll()
             }
+            .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
+                Task { await refreshTableOnly() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
+                Task { await refreshRecipesOnly() }
+            }
             .toolbar(.hidden, for: .navigationBar)
             .toast($errorMessage)
             .tipToast($tipMessage)
@@ -376,18 +382,27 @@ struct DiningDishPicker: View {
     private func loadAll() async {
         isLoading = true
         defer { isLoading = false }
-        async let currentTask: MealSession? = try? await DiningService.shared.current()
         async let recipesTask: [Recipe] = try await DiningService.shared.recipes(mealId: mealId)
 
-        if let currentMeal = await currentTask, currentMeal.id == mealId {
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
-                tableDishes = currentMeal.dishes ?? tableDishes
-            }
-        }
+        await refreshTableOnly()
         do {
             recipes = try await recipesTask
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func refreshTableOnly() async {
+        if let currentMeal = try? await DiningService.shared.current(mealId: mealId) {
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
+                tableDishes = currentMeal.dishes ?? []
+            }
+        }
+    }
+
+    private func refreshRecipesOnly() async {
+        if let latest = try? await DiningService.shared.recipes(mealId: mealId) {
+            recipes = latest
         }
     }
 
@@ -408,7 +423,8 @@ struct DiningDishPicker: View {
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
                 tableDishes = updatedMeal.dishes ?? tableDishes
             }
-            Haptics.light()
+            CanvasSoundEngine.shared.playDishPick()
+            Haptics.medium()
             onChanged()
         } catch {
             errorMessage = error.localizedDescription
@@ -429,7 +445,8 @@ struct DiningDishPicker: View {
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
                 tableDishes = updatedMeal.dishes ?? tableDishes
             }
-            Haptics.light()
+            CanvasSoundEngine.shared.playDishPick()
+            Haptics.medium()
             onChanged()
         } catch {
             errorMessage = error.localizedDescription
@@ -445,7 +462,8 @@ struct DiningDishPicker: View {
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
                 tableDishes.removeAll { $0.id == dish.id }
             }
-            Haptics.light()
+            CanvasSoundEngine.shared.playDeletePoof()
+            Haptics.soft()
             onChanged()
         } catch {
             errorMessage = error.localizedDescription

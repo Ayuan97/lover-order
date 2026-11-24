@@ -21,9 +21,10 @@ final class DiningService {
     }
 
     // 访客当前参与中的聚餐 没有则 nil
-    func current() async throws -> MealSession? {
+    func current(mealId: UInt? = nil) async throws -> MealSession? {
+        let query = mealId.map { ["meal_id": "\($0)"] } ?? [:]
         do {
-            return try await api.get("dining/current")
+            return try await api.get("dining/current", query: query)
         } catch APIError.noData {
             return nil
         }

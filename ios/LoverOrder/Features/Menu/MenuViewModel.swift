@@ -31,6 +31,8 @@ final class MenuViewModel: ObservableObject {
 
     private var page = 1
     private var total = 0
+    private var recipesLoadID = 0
+    private var categoriesLoadID = 0
     var hasMore: Bool { recipes.count < total }
 
     private let recipeService = RecipeService.shared
@@ -44,9 +46,17 @@ final class MenuViewModel: ObservableObject {
     }
 
     func loadCategories() async {
+        categoriesLoadID += 1
+        let loadID = categoriesLoadID
         do {
-            categories = try await categoryService.list()
+            let latest = try await categoryService.list()
+            guard loadID == categoriesLoadID else { return }
+            categories = latest
+            if let selectedCategoryId, !categories.contains(where: { $0.id == selectedCategoryId }) {
+                await selectCategory(nil)
+            }
         } catch {
+            guard loadID == categoriesLoadID else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -72,15 +82,22 @@ final class MenuViewModel: ObservableObject {
     }
 
     func loadRecipes() async {
+        recipesLoadID += 1
+        let loadID = recipesLoadID
         isLoading = true
+        isLoadingMore = false
         loadFailed = false
-        defer { isLoading = false }
+        defer {
+            if loadID == recipesLoadID { isLoading = false }
+        }
         do {
-            page = 1
             let result = try await recipeService.list(buildQuery(page: 1))
+            guard loadID == recipesLoadID else { return }
+            page = 1
             total = result.total
             recipes = sortByFilter(result.items)
         } catch {
+            guard loadID == recipesLoadID else { return }
             loadFailed = true
             errorMessage = error.localizedDescription
         }
@@ -89,14 +106,19 @@ final class MenuViewModel: ObservableObject {
     // 菜谱攒多了 50 条装不下 滚到底自动加载下一页
     func loadMore() async {
         guard hasMore, !isLoadingMore, !isLoading else { return }
+        let loadID = recipesLoadID
         isLoadingMore = true
-        defer { isLoadingMore = false }
+        defer {
+            if loadID == recipesLoadID { isLoadingMore = false }
+        }
         do {
             let result = try await recipeService.list(buildQuery(page: page + 1))
+            guard loadID == recipesLoadID else { return }
             page += 1
             total = result.total
             recipes = sortByFilter(recipes + result.items)
         } catch {
+            guard loadID == recipesLoadID else { return }
             errorMessage = error.localizedDescription
         }
     }

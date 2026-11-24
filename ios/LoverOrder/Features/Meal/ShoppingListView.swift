@@ -6,17 +6,17 @@ struct ShoppingListView: View {
     var title: String = "购物清单"
 
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("shopping.checked") private var checkedRaw: String = ""
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var list: ShoppingList?
+    @State private var checkedNames: Set<String> = []
+    @State private var checkSyncVersion: Int = 0
     @State private var isLoading: Bool = false
     @State private var errorMessage: String?
     @State private var tipMessage: String?
 
     private var checkedSet: Set<String> {
-        get {
-            Set(checkedRaw.split(separator: "|").map(String.init))
-        }
+        checkedNames
     }
 
     var body: some View {
@@ -63,6 +63,19 @@ struct ShoppingListView: View {
             }
             .task {
                 await load()
+            }
+            .refreshable {
+                await load()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .shoppingChanged)) { _ in
+                Task { await load() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
+                Task { await load() }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .active else { return }
+                Task { await load() }
             }
             .toast($errorMessage)
             .tipToast($tipMessage)
@@ -228,32 +241,54 @@ struct ShoppingListView: View {
     }
 
     private func key(for item: ShoppingItem) -> String {
-        "\(mealId):\(item.name)"
+        item.name
     }
 
     private func toggle(_ item: ShoppingItem) {
-        var set = checkedSet
-        let k = key(for: item)
-        if set.contains(k) {
-            set.remove(k)
+        let name = item.name
+        if checkedNames.contains(name) {
+            checkedNames.remove(name)
         } else {
-            set.insert(k)
+            checkedNames.insert(name)
         }
-        checkedRaw = set.joined(separator: "|")
+        persistCheckedState()
     }
 
     private func clearChecked() {
-        var set = checkedSet
-        let prefix = "\(mealId):"
-        set = set.filter { !$0.hasPrefix(prefix) }
-        checkedRaw = set.joined(separator: "|")
+        guard !checkedNames.isEmpty else { return }
+        checkedNames.removeAll()
+        persistCheckedState()
+    }
+
+    private func persistCheckedState() {
+        checkSyncVersion += 1
+        let version = checkSyncVersion
+        let payload = checkedNames.sorted()
+        Task {
+            do {
+                let serverChecked = try await MealService.shared.updateShoppingChecked(
+                    mealId: mealId,
+                    checkedItems: payload
+                )
+                guard version == checkSyncVersion else { return }
+                checkedNames = Set(serverChecked)
+            } catch {
+                guard version == checkSyncVersion else { return }
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     private func load() async {
         isLoading = true
         defer { isLoading = false }
+        let versionBeforeFetch = checkSyncVersion
         do {
-            list = try await MealService.shared.shoppingList(mealId: mealId)
+            let loaded = try await MealService.shared.shoppingList(mealId: mealId)
+            list = loaded
+            if versionBeforeFetch == checkSyncVersion {
+                checkedNames = Set(loaded.checkedItems ?? [])
+            }
         } catch {
             errorMessage = error.localizedDescription
         }

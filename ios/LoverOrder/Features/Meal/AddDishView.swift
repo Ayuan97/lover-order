@@ -96,6 +96,9 @@ struct AddDishView: View {
             .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
                 Task { await loadPinned() }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
+                Task { await loadRecipes() }
+            }
             .toast($errorMessage)
             .tipToast($tipMessage)
         }
@@ -447,7 +450,8 @@ struct AddDishView: View {
             _ = try await MealService.shared.addDish(mealId: mealId, dish: DishInput(recipeId: recipe.id))
             await loadPinned()
             onChanged()
-            Haptics.light()
+            CanvasSoundEngine.shared.playDishPick()
+            Haptics.medium()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -466,7 +470,8 @@ struct AddDishView: View {
             customName = ""
             await loadPinned()
             onChanged()
-            Haptics.light()
+            CanvasSoundEngine.shared.playDishPick()
+            Haptics.medium()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -480,6 +485,8 @@ struct AddDishView: View {
             try await MealService.shared.removeDish(mealId: mealId, dishId: dish.id)
             await loadPinned()
             onChanged()
+            CanvasSoundEngine.shared.playDeletePoof()
+            Haptics.soft()
         } catch {
             errorMessage = error.localizedDescription
         }
