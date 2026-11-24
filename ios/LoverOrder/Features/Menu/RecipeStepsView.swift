@@ -32,6 +32,7 @@ struct RecipeStepsView: View {
         .onDisappear {
             appState.setTabBarHidden(false, token: tabBarToken)
         }
+        .toolbar(.visible, for: .navigationBar)
         .navigationTitle("做法 · \(recipe.name)")
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(item: $previewGallery) { presentation in

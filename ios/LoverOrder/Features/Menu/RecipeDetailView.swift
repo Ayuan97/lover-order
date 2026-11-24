@@ -23,45 +23,76 @@ struct RecipeDetailView: View {
     @State private var previewGallery: PhotoGalleryPresentation?
     @State private var recipeLoadID = 0
     @State private var mealLoadID = 0
+    @State private var activeMenuMode: DetailMenuMode?
+    @State private var categoryChipFrame: CGRect = .zero
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                heroGallery
-                if let recipe {
-                    VStack(alignment: .leading, spacing: AppSpacing.lg) {
-                        titleSection(recipe)
-                        ingredientsSection(recipe)
-                        stepsToggle(recipe)
-                        if let tips = recipe.tips, !tips.isEmpty { tipsSection(tips) }
-                        reviewsSection(recipe)
-                        Color.clear.frame(height: 16)
-                    }
-                    .padding(.horizontal, AppSpacing.lg)
-                    .padding(.top, 22)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        Color.appBackground,
-                        in: UnevenRoundedRectangle(
-                            topLeadingRadius: 26,
-                            bottomLeadingRadius: 0,
-                            bottomTrailingRadius: 0,
-                            topTrailingRadius: 26,
-                            style: .continuous
-                        )
-                    )
-                    .padding(.top, -22)
-                }
+    private enum DetailMenuMode: Equatable {
+        case moreActions(CGRect)
+        case categoryOnly(CGRect)
+
+        var anchor: CGRect {
+            switch self {
+            case .moreActions(let rect), .categoryOnly(let rect):
+                return rect
             }
         }
-        .ignoresSafeArea(edges: .top)
+
+        var isMoreButtonOpen: Bool {
+            if case .moreActions = self { return true }
+            return false
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    heroGallery
+                    if let recipe {
+                        VStack(alignment: .leading, spacing: AppSpacing.lg) {
+                            titleSection(recipe)
+                            ingredientsSection(recipe)
+                            stepsToggle(recipe)
+                            if let tips = recipe.tips, !tips.isEmpty { tipsSection(tips) }
+                            reviewsSection(recipe)
+                            Color.clear.frame(height: 16)
+                        }
+                        .padding(.horizontal, AppSpacing.lg)
+                        .padding(.top, 22)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            Color.appBackground,
+                            in: UnevenRoundedRectangle(
+                                topLeadingRadius: 26,
+                                bottomLeadingRadius: 0,
+                                bottomTrailingRadius: 0,
+                                topTrailingRadius: 26,
+                                style: .continuous
+                            )
+                        )
+                        .padding(.top, -22)
+                    }
+                }
+            }
+            .ignoresSafeArea(edges: .top)
+
+            floatingTopBar
+        }
         .background {
             Color.appBackground.ignoresSafeArea()
+        }
+        .background {
+            InteractivePopGestureEnabler()
         }
         .safeAreaInset(edge: .bottom) {
             if recipe != nil, meal != nil {
                 bottomBar
             }
+        }
+        .coordinateSpace(name: "recipeDetailMoreSpace")
+        .overlay {
+            detailMoreMenuOverlay
         }
         .onAppear {
             appState.setTabBarHidden(true, token: tabBarToken)
@@ -88,55 +119,7 @@ struct RecipeDetailView: View {
         .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
             Task { await loadMeal() }
         }
-        .toolbar(.visible, for: .navigationBar)
-        .navigationBarTitleDisplayMode(.inline)
-        .navigationTitle("")
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: AppSpacing.sm) {
-                    Button {
-                        Task { await toggleFavor() }
-                    } label: {
-                        Image(systemName: isFavored ? "heart.fill" : "heart")
-                            .foregroundStyle(isFavored ? Color.accentWarm : Color.inkPrimary)
-                    }
-                    .accessibilityLabel(isFavored ? "取消收藏" : "收藏菜谱")
-
-                    Button {
-                        editingRecipe = recipe
-                    } label: {
-                        Image(systemName: "square.and.pencil")
-                            .foregroundStyle(Color.inkPrimary)
-                    }
-                    .accessibilityLabel("编辑菜谱")
-
-                    Menu {
-                        Button {
-                            photoStudioRecipe = recipe
-                        } label: {
-                            Label("自定义主图与抠图", systemImage: "sparkles.rectangle.stack")
-                        }
-                        Button {
-                            editingRecipe = recipe
-                        } label: {
-                            Label("编辑菜谱内容", systemImage: "square.and.pencil")
-                        }
-                        categorySubmenu
-                        Divider()
-                        Button(role: .destructive) {
-                            confirmDelete = true
-                        } label: {
-                            Label("删除菜谱", systemImage: "trash")
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .foregroundStyle(Color.inkPrimary)
-                    }
-                    .accessibilityLabel("更多操作")
-                }
-                .disabled(recipe == nil)
-            }
-        }
+        .toolbar(.hidden, for: .navigationBar)
         .sheet(item: $editingRecipe) { openedRecipe in
             RecipeEditView(
                 mode: .edit(openedRecipe),
@@ -309,8 +292,11 @@ struct RecipeDetailView: View {
                     .foregroundStyle(Color.inkSecondary)
             }
             FlowLayout(spacing: 6) {
-                Menu {
-                    categoryMenuItems
+                Button {
+                    Haptics.light()
+                    withAnimation(reduceMotion ? nil : .spring(response: 0.26, dampingFraction: 0.82)) {
+                        activeMenuMode = .categoryOnly(categoryChipFrame)
+                    }
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "tag")
@@ -324,6 +310,15 @@ struct RecipeDetailView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
                     .background(Color.cardBackground, in: Capsule())
+                }
+                .buttonStyle(SoftPressStyle())
+                .background {
+                    GeometryReader { proxy in
+                        let rect = proxy.frame(in: .named("recipeDetailMoreSpace"))
+                        Color.clear
+                            .onAppear { categoryChipFrame = rect }
+                            .onChange(of: rect) { _, next in categoryChipFrame = next }
+                    }
                 }
                 if let time = r.cookingTime, time > 0 {
                     Label("\(time) 分钟", systemImage: "clock")
@@ -656,36 +651,117 @@ struct RecipeDetailView: View {
         }
     }
 
-    @ViewBuilder
-    private var categorySubmenu: some View {
-        Menu {
-            categoryMenuItems
-        } label: {
-            Label("移动到分类", systemImage: "tag")
+    private var floatingTopBar: some View {
+        HStack(spacing: 6) {
+            PaperGlassIconButton(
+                systemImage: "chevron.left",
+                fontSize: 15,
+                weight: .semibold,
+                accessibilityTitle: "返回"
+            ) {
+                closeDetailMenu()
+                dismiss()
+            }
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 4) {
+                PaperGlassIconButton(
+                    systemImage: isFavored ? "heart.fill" : "heart",
+                    tint: isFavored ? Color.accentWarm : Color.inkPrimary,
+                    fontSize: 15,
+                    weight: .semibold,
+                    isDisabled: recipe == nil,
+                    accessibilityTitle: isFavored ? "取消收藏" : "收藏菜谱"
+                ) {
+                    closeDetailMenu()
+                    Task { await toggleFavor() }
+                }
+
+                PaperGlassIconButton(
+                    systemImage: "square.and.pencil",
+                    fontSize: 14.5,
+                    weight: .semibold,
+                    isDisabled: recipe == nil,
+                    accessibilityTitle: "编辑菜谱"
+                ) {
+                    closeDetailMenu()
+                    editingRecipe = recipe
+                }
+
+                AppMoreButton(
+                    style: .paperGlass,
+                    isOpen: activeMenuMode?.isMoreButtonOpen == true,
+                    isDisabled: recipe == nil,
+                    coordinateSpaceName: "recipeDetailMoreSpace",
+                    accessibilityTitle: "更多操作"
+                ) { rect in
+                    if activeMenuMode?.isMoreButtonOpen == true {
+                        closeDetailMenu()
+                    } else {
+                        withAnimation(reduceMotion ? nil : .spring(response: 0.26, dampingFraction: 0.82)) {
+                            activeMenuMode = .moreActions(rect)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 4)
+    }
+
+    private func closeDetailMenu() {
+        guard activeMenuMode != nil else { return }
+        withAnimation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.88)) {
+            activeMenuMode = nil
         }
     }
 
-    @ViewBuilder
-    private var categoryMenuItems: some View {
-        Button {
-            Task { await changeCategory(to: nil) }
-        } label: {
-            if recipe?.categoryId == nil {
-                Label("未分类", systemImage: "checkmark")
-            } else {
-                Text("未分类")
-            }
-        }
-        ForEach(categories) { cat in
-            let title = (cat.icon?.isEmpty == false ? "\(cat.icon!) " : "") + cat.name
-            Button {
-                Task { await changeCategory(to: cat.id) }
-            } label: {
-                if recipe?.categoryId == cat.id {
-                    Label(title, systemImage: "checkmark")
-                } else {
-                    Text(title)
-                }
+    private var detailMoreMenuOverlay: some View {
+        let mode = activeMenuMode
+        let isPresentedBinding = Binding<Bool>(
+            get: { mode != nil && recipe != nil },
+            set: { if !$0 { closeDetailMenu() } }
+        )
+        let isCategoryDirect: Bool = {
+            if case .categoryOnly = mode { return true }
+            return false
+        }()
+        return AnchoredFloatingMenuOverlay(
+            isPresented: isPresentedBinding,
+            anchorRect: mode?.anchor ?? .zero,
+            menuWidth: 238,
+            topReserved: 12,
+            bottomReserved: meal != nil ? 96 : 24,
+            estimatedMenuHeight: 232,
+            scrimOpacity: 0.08
+        ) { maxCardHeight in
+            if let recipe {
+                RecipeFloatingMenuCard(
+                    recipe: recipe,
+                    categories: categories,
+                    maxCardHeight: maxCardHeight,
+                    showsRecipeHeader: false,
+                    showsBatchManage: false,
+                    initialPage: isCategoryDirect ? .categories : .actions,
+                    canReturnToActions: !isCategoryDirect,
+                    onEdit: {
+                        editingRecipe = recipe
+                    },
+                    onEditPhotos: {
+                        photoStudioRecipe = recipe
+                    },
+                    onSelectCategory: { catId, _ in
+                        Task { await changeCategory(to: catId) }
+                    },
+                    onDelete: {
+                        confirmDelete = true
+                    },
+                    onClose: {
+                        closeDetailMenu()
+                    }
+                )
+                .id(isCategoryDirect ? "cat-\(recipe.id)" : "more-\(recipe.id)")
             }
         }
     }

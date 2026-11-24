@@ -21,7 +21,10 @@ struct MenuView: View {
     @State private var confirmBatchDelete: Bool = false
 
     @State private var previewGallery: PhotoGalleryPresentation?
+    @State private var activeCardMenuRecipeId: UInt?
+    @State private var activeCardMenuAnchor: CGRect = .zero
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct CategorySheetPresentation: Identifiable {
         let id = UUID()
@@ -35,85 +38,8 @@ struct MenuView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: AppSpacing.lg) {
-                    header
-                    searchBar
-                    filterPanel
-                    grid_section
-                    if !isManaging {
-                        pinnedSection
-                    }
-                    Color.clear.frame(height: 150)
-                }
-                .padding(.horizontal, AppSpacing.lg)
-                .padding(.top, AppSpacing.md)
-            }
-            .background {
-                Color.appBackground.ignoresSafeArea()
-            }
-            .onAppear {
-                vm.restoreCacheIfNeeded(householdId: appState.currentUser?.householdId ?? appState.household?.id)
-            }
-            .refreshable {
-                await vm.refreshAll(
-                    householdId: appState.currentUser?.householdId ?? appState.household?.id,
-                    scene: .household,
-                    mood: appState.currentMood
-                )
-            }
-            .safeAreaInset(edge: .bottom) {
-                bottomBar
-            }
-            .onChange(of: appState.activeTab) { _, tab in
-                if tab == 1 {
-                    Task {
-                        await vm.refreshIfBootstrapped(
-                            householdId: appState.currentUser?.householdId ?? appState.household?.id,
-                            scene: .household,
-                            mood: appState.currentMood
-                        )
-                    }
-                } else if isManaging {
-                    exitManaging()
-                }
-            }
-            .onChange(of: scenePhase) { _, phase in
-                guard phase == .active, appState.activeTab == 1 else { return }
-                Task {
-                    await vm.refreshIfBootstrapped(
-                        householdId: appState.currentUser?.householdId ?? appState.household?.id,
-                        scene: .household,
-                        mood: appState.currentMood
-                    )
-                }
-            }
-            .task {
-                await vm.bootstrap(
-                    householdId: appState.currentUser?.householdId ?? appState.household?.id,
-                    scene: .household,
-                    mood: appState.currentMood
-                )
-            }
-            .task {
-                // 与首页同款轮询 另一台手机加的菜自动出现在"已加入这一顿"
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(4))
-                    guard scenePhase == .active else { continue }
-                    await vm.syncMeal(scene: .household, mood: appState.currentMood)
-                }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
-                Task { await vm.loadRecipes() }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .categoriesChanged)) { _ in
-                Task { await vm.loadCategories() }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
-                Task { await vm.loadCurrentMeal(scene: .household, mood: appState.currentMood) }
-            }
-            .toolbar(.hidden, for: .navigationBar)
-            .sheet(isPresented: $showCreateRecipe) {
+            menuScrollStage
+                .sheet(isPresented: $showCreateRecipe) {
                 RecipeEditView(mode: .create) { _ in
                     Task {
                         await vm.loadCategories()
@@ -237,6 +163,94 @@ struct MenuView: View {
             .toast($vm.errorMessage)
             .tipToast($vm.tipMessage)
         }
+    }
+
+    private var menuScrollStage: some View {
+        ScrollView {
+            VStack(spacing: AppSpacing.lg) {
+                header
+                searchBar
+                filterPanel
+                grid_section
+                if !isManaging {
+                    pinnedSection
+                }
+                Color.clear.frame(height: 150)
+            }
+            .padding(.horizontal, AppSpacing.lg)
+            .padding(.top, AppSpacing.md)
+        }
+        .background {
+            Color.appBackground.ignoresSafeArea()
+        }
+        .onAppear {
+            vm.restoreCacheIfNeeded(householdId: appState.currentUser?.householdId ?? appState.household?.id)
+        }
+        .refreshable {
+            await vm.refreshAll(
+                householdId: appState.currentUser?.householdId ?? appState.household?.id,
+                scene: .household,
+                mood: appState.currentMood
+            )
+        }
+        .safeAreaInset(edge: .bottom) {
+            bottomBar
+        }
+        .coordinateSpace(name: "menuMoreSpace")
+        .overlay {
+            cardMoreMenuOverlay
+        }
+        .onChange(of: appState.activeTab) { _, tab in
+            if tab != 1 && activeCardMenuRecipeId != nil {
+                activeCardMenuRecipeId = nil
+            }
+            if tab == 1 {
+                Task {
+                    await vm.refreshIfBootstrapped(
+                        householdId: appState.currentUser?.householdId ?? appState.household?.id,
+                        scene: .household,
+                        mood: appState.currentMood
+                    )
+                }
+            } else if isManaging {
+                exitManaging()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, appState.activeTab == 1 else { return }
+            Task {
+                await vm.refreshIfBootstrapped(
+                    householdId: appState.currentUser?.householdId ?? appState.household?.id,
+                    scene: .household,
+                    mood: appState.currentMood
+                )
+            }
+        }
+        .task {
+            await vm.bootstrap(
+                householdId: appState.currentUser?.householdId ?? appState.household?.id,
+                scene: .household,
+                mood: appState.currentMood
+            )
+        }
+        .task {
+            // 与首页同款轮询 另一台手机加的菜自动出现在"已加入这一顿"
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(4))
+                guard scenePhase == .active else { continue }
+                await vm.syncMeal(scene: .household, mood: appState.currentMood)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
+            Task { await vm.loadRecipes() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .categoriesChanged)) { _ in
+            Task { await vm.loadCategories() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
+            Task { await vm.loadCurrentMeal(scene: .household, mood: appState.currentMood) }
+        }
+        .toolbar(.hidden, for: .navigationBar)
     }
 
     private var header: some View {
@@ -449,6 +463,10 @@ struct MenuView: View {
                             canToggle: pinned == nil || canRemovePinnedDish,
                             isManaging: isManaging,
                             isSelected: isSelected,
+                            isMoreMenuOpen: activeCardMenuRecipeId == recipe.id,
+                            onToggleMoreMenu: { anchorRect in
+                                toggleCardMoreMenu(for: recipe.id, anchor: anchorRect)
+                            },
                             onToggleSelect: {
                                 toggleRecipeSelection(recipe.id)
                             },
@@ -735,6 +753,80 @@ struct MenuView: View {
         case .cancelled: return "已取消"
         }
     }
+
+    private func toggleCardMoreMenu(for recipeId: UInt, anchor: CGRect) {
+        if activeCardMenuRecipeId == recipeId {
+            closeCardMoreMenu()
+            return
+        }
+        activeCardMenuAnchor = anchor
+        withAnimation(reduceMotion ? nil : .spring(response: 0.26, dampingFraction: 0.82)) {
+            activeCardMenuRecipeId = recipeId
+        }
+    }
+
+    private func closeCardMoreMenu() {
+        guard activeCardMenuRecipeId != nil else { return }
+        withAnimation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.88)) {
+            activeCardMenuRecipeId = nil
+        }
+    }
+
+    private var cardMoreMenuOverlay: some View {
+        let activeRecipe = activeCardMenuRecipeId.flatMap { id in
+            vm.recipes.first(where: { $0.id == id })
+        }
+        let isPresentedBinding = Binding<Bool>(
+            get: { activeRecipe != nil },
+            set: { if !$0 { closeCardMoreMenu() } }
+        )
+        return AnchoredFloatingMenuOverlay(
+            isPresented: isPresentedBinding,
+            anchorRect: activeCardMenuAnchor,
+            menuWidth: 238,
+            topReserved: 12,
+            bottomReserved: vm.pinnedDishes.isEmpty ? 92 : 146,
+            estimatedMenuHeight: 256,
+            scrimOpacity: 0.08
+        ) { maxCardHeight in
+            if let target = activeRecipe {
+                RecipeFloatingMenuCard(
+                    recipe: target,
+                    categories: vm.categories,
+                    maxCardHeight: maxCardHeight,
+                    showsRecipeHeader: true,
+                    showsBatchManage: true,
+                    onEdit: {
+                        editingRecipe = target
+                    },
+                    onEditPhotos: {
+                        photoStudioRecipe = target
+                    },
+                    onSelectCategory: { catId, catName in
+                        Task {
+                            _ = await vm.moveRecipesToCategory(
+                                ids: [target.id],
+                                categoryId: catId,
+                                categoryName: catName
+                            )
+                        }
+                    },
+                    onStartBatch: {
+                        Haptics.light()
+                        isManaging = true
+                        selectedRecipeIds = [target.id]
+                    },
+                    onDelete: {
+                        pendingDeleteRecipe = target
+                    },
+                    onClose: {
+                        closeCardMoreMenu()
+                    }
+                )
+                .id(target.id)
+            }
+        }
+    }
 }
 
 // 批量移动分类选择弹层（支持直接新建分类并移入）
@@ -950,6 +1042,8 @@ private struct MenuRecipeCard: View {
     var canToggle: Bool = true
     var isManaging: Bool = false
     var isSelected: Bool = false
+    var isMoreMenuOpen: Bool = false
+    let onToggleMoreMenu: (CGRect) -> Void
     let onToggleSelect: () -> Void
     let onAdd: () -> Void
     let onEdit: () -> Void
@@ -993,24 +1087,17 @@ private struct MenuRecipeCard: View {
                     cardMenuItems
                 }
 
-                // 右上角单卡操作菜单（编辑 / 主图抠图 / 移到分类 / 删除）
-                Menu {
-                    cardMenuItems
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 28, height: 28)
-                        .background(Color.black.opacity(0.46), in: Circle())
-                        .overlay {
-                            Circle().strokeBorder(Color.white.opacity(0.28), lineWidth: 0.6)
-                        }
-                        .frame(width: 40, height: 40)
-                        .contentShape(Rectangle())
+                // 右上角单卡自定义操作按钮（编辑 / 主图抠图 / 移到分类 / 删除）
+                AppMoreButton(
+                    style: .photoBadge,
+                    isOpen: isMoreMenuOpen,
+                    coordinateSpaceName: "menuMoreSpace",
+                    accessibilityTitle: "管理\(recipe.name)"
+                ) { rect in
+                    onToggleMoreMenu(rect)
                 }
                 .padding(.top, 2)
                 .padding(.trailing, 2)
-                .accessibilityLabel("管理\(recipe.name)")
 
                 Button(action: onAdd) {
                     Image(systemName: alreadyAdded ? "checkmark" : "plus")

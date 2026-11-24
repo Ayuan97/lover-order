@@ -118,6 +118,8 @@ struct MealCanvasView: View {
     @State private var coverPrompt: (recipeId: UInt, dishName: String, image: String, cutoutImage: String?)?
     @State private var coverPromptTask: Task<Void, Never>?
     @State private var isSettingCover = false
+    @State private var showCanvasMoreMenu = false
+    @State private var canvasMoreAnchorRect: CGRect = .zero
     @FocusState private var textEditorFocused: Bool
 
     private static let todayDateFormatter: DateFormatter = {
@@ -314,6 +316,12 @@ struct MealCanvasView: View {
                 .opacity(isExporting ? 0 : 1)
                 .animation(reduceMotion ? nil : .spring(response: 0.30, dampingFraction: 0.84), value: coverPrompt?.image)
             }
+            .coordinateSpace(name: "canvasMoreSpace")
+            .overlay {
+                if !isExporting {
+                    canvasMoreMenuOverlay
+                }
+            }
             .overlay { launchPreviewOverlay }
             .overlay { liveExportOverlay }
     }
@@ -447,6 +455,9 @@ struct MealCanvasView: View {
                 }
             }
             .onChange(of: appState.activeTab) { _, tab in
+                if tab != 0 && showCanvasMoreMenu {
+                    showCanvasMoreMenu = false
+                }
                 guard !isLaunchStudio, !isGuestMode, tab == 0 else { return }
                 if let mealID = vm.meal?.id, let userID = appState.currentUser?.id {
                     realtime.ensureConnected(mealId: mealID, userId: userID, probeIfConnected: true)
@@ -690,6 +701,154 @@ struct MealCanvasView: View {
             appendUser(me)
         }
         return result
+    }
+
+    /// 空画布中心展示的本顿全部参与者（不设两人上限，支持家庭成员与来客临时身份共同展示）。
+    private var emptyCanvasParticipants: [AppUser] {
+        var latestByID: [UInt: AppUser] = [:]
+        for member in appState.household?.members ?? [] {
+            latestByID[member.id] = member
+        }
+        if let me = appState.currentUser {
+            latestByID[me.id] = me
+        }
+
+        func freshest(_ user: AppUser) -> AppUser {
+            guard let latest = latestByID[user.id] else { return user }
+            var merged = latest
+            if (merged.avatar ?? "").isEmpty, let existingAvatar = user.avatar, !existingAvatar.isEmpty {
+                merged.avatar = existingAvatar
+            }
+            return merged
+        }
+
+        var seen: Set<UInt> = []
+        var result: [AppUser] = []
+        func appendUser(_ user: AppUser) {
+            guard user.id != 0, seen.insert(user.id).inserted else { return }
+            result.append(freshest(user))
+        }
+
+        if isLaunchStudio {
+            if let me = appState.currentUser {
+                appendUser(me)
+            }
+            if launchConfig.source == .householdCreator {
+                for member in appState.household?.members ?? [] {
+                    appendUser(member)
+                }
+            }
+            return result
+        }
+
+        if !isGuestMode {
+            if let me = appState.currentUser {
+                appendUser(me)
+            }
+            for member in appState.household?.members ?? [] {
+                appendUser(member)
+            }
+        }
+        for participant in guestParticipants {
+            if let user = participant.user {
+                appendUser(user)
+            }
+        }
+        for participant in vm.meal?.participants ?? [] {
+            if let user = participant.user {
+                appendUser(user)
+            }
+        }
+        for actor in realtime.onlineUsers {
+            appendUser(actor.asAppUser)
+        }
+        if result.isEmpty, let me = appState.currentUser {
+            appendUser(me)
+        }
+        return result
+    }
+
+    @ViewBuilder
+    private var emptyCanvasCenterpiece: some View {
+        let isLight = background.isLightSurface
+        let allUsers = emptyCanvasParticipants
+        let maxVisible = allUsers.count > 4 ? 3 : min(allUsers.count, 4)
+        let visibleUsers = Array(allUsers.prefix(maxVisible))
+        let overflowCount = max(0, allUsers.count - maxVisible)
+        let avatarSize: CGFloat = allUsers.count <= 1 ? 60 : (allUsers.count == 2 ? 56 : 50)
+        let overlap: CGFloat = allUsers.count <= 2 ? -14 : -13
+        let badgeFill = isLight ? CanvasPalette.obsidianInk : Color.white
+        let badgeInk = isLight ? Color.white : CanvasPalette.obsidianInk
+
+        if visibleUsers.isEmpty {
+            Color.clear
+                .frame(width: 60, height: 60)
+                .background { adaptiveGlass(Circle()) }
+                .overlay {
+                    ProductIcon(kind: isLaunchStudio ? .effects : .meal, size: 24, weight: .regular)
+                        .foregroundStyle(headerInk)
+                }
+        } else {
+            ZStack(alignment: .bottomTrailing) {
+                HStack(spacing: overlap) {
+                    ForEach(Array(visibleUsers.enumerated()), id: \.element.id) { index, user in
+                        AvatarView(user: user, size: avatarSize, ring: false)
+                            .overlay {
+                                Circle().strokeBorder(Color.white, lineWidth: 2.8)
+                            }
+                            .overlay {
+                                Circle().strokeBorder(Color.black.opacity(0.08), lineWidth: 0.6)
+                            }
+                            .shadow(
+                                color: Color.black.opacity(isLight ? 0.12 : 0.26),
+                                radius: 10,
+                                y: 4
+                            )
+                            .offset(y: visibleUsers.count == 2 ? (index == 0 ? -1.5 : 1.5) : 0)
+                            .zIndex(Double(visibleUsers.count - index))
+                    }
+
+                    if overflowCount > 0 {
+                        ZStack {
+                            Circle()
+                                .fill(.ultraThinMaterial)
+                                .overlay {
+                                    Circle().fill(isLight ? Color.white.opacity(0.84) : Color.black.opacity(0.36))
+                                }
+                            Text("+\(overflowCount)")
+                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(headerInk)
+                        }
+                        .frame(width: avatarSize, height: avatarSize)
+                        .overlay {
+                            Circle().strokeBorder(Color.white, lineWidth: 2.8)
+                        }
+                        .shadow(color: Color.black.opacity(isLight ? 0.12 : 0.26), radius: 10, y: 4)
+                        .zIndex(0)
+                    }
+                }
+
+                ZStack {
+                    Circle()
+                        .fill(badgeFill)
+                    Image(systemName: isLaunchStudio ? "sparkles" : "plus")
+                        .font(.system(size: 11.5, weight: .bold))
+                        .foregroundStyle(badgeInk)
+                }
+                .frame(width: 25, height: 25)
+                .overlay {
+                    Circle().strokeBorder(
+                        isLight ? Color.white : Color.black.opacity(0.16),
+                        lineWidth: 2
+                    )
+                }
+                .shadow(color: Color.black.opacity(0.20), radius: 6, y: 2)
+                .offset(x: 5, y: 3)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+        }
     }
 
     private var livePillMenu: some View {
@@ -1009,45 +1168,20 @@ struct MealCanvasView: View {
                     }
                     .buttonStyle(CanvasPressStyle(scale: 0.96))
 
-                    Menu {
-                        Button("保存为实况照片", systemImage: "livephoto") {
-                            saveCanvasAsLivePhoto()
-                        }
-                        .disabled(isExporting || liveExportProgress != nil)
-                        Button("保存静态图片", systemImage: "square.and.arrow.down") {
-                            saveCanvasToPhotos()
-                        }
-                        if !isReadOnlyCreatorPreview {
-                            Button("全部轻盈动起来", systemImage: "sparkles") {
-                                activateAllLiveMotion()
-                            }
-                        }
-                        Button(
-                            soundEngine.isEnabled ? "关闭创作音效" : "开启创作音效",
-                            systemImage: soundEngine.isEnabled ? "speaker.wave.2" : "speaker.slash"
-                        ) {
-                            toggleSoundFX()
-                        }
-                        if !isReadOnlyCreatorPreview {
-                            Button("恢复默认开屏", systemImage: "arrow.counterclockwise") {
-                                resetLaunchStudioToDefault()
-                            }
-                            Button("清空画布元素", systemImage: "trash", role: .destructive) {
-                                clearLaunchCanvasAdditions()
-                            }
-                            .disabled(stickers.isEmpty && notes.isEmpty && strokes.isEmpty)
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(headerInk)
-                            .frame(width: 24, height: 24)
-                            .background { adaptiveGlass(Circle()) }
-                            .frame(minWidth: 30, minHeight: 30)
-                            .contentShape(Circle())
+                    AppMoreButton(
+                        style: .canvasGlass(
+                            isLightSurface: isLight,
+                            diameter: 26,
+                            hitWidth: 32,
+                            hitHeight: 30
+                        ),
+                        isOpen: showCanvasMoreMenu,
+                        isDisabled: isCanvasInteracting,
+                        coordinateSpaceName: "canvasMoreSpace",
+                        accessibilityTitle: "更多开屏创作选项"
+                    ) { rect in
+                        toggleCanvasMoreMenu(anchor: rect)
                     }
-                    .disabled(isCanvasInteracting)
-                    .accessibilityLabel("更多开屏创作选项")
                 }
             }
         }
@@ -1129,65 +1263,15 @@ struct MealCanvasView: View {
                     .accessibilityLabel(confirmTitle)
                 }
 
-                Menu {
-                    Button("更换背景", systemImage: "photo") {
-                        openEditor(.background)
-                    }
-                    Button("保存为实况照片", systemImage: "livephoto") {
-                        saveCanvasAsLivePhoto()
-                    }
-                    .disabled(isExporting || liveExportProgress != nil)
-                    Button("保存静态图片", systemImage: "square.and.arrow.down") {
-                        saveCanvasToPhotos()
-                    }
-                    if vm.meal?.status == .planning || vm.meal?.status == .confirmed {
-                        Button("从菜谱加菜", systemImage: "plus") {
-                            onAddDish()
-                        }
-                        .disabled(vm.isActing || isRemovingDish)
-                    }
-                    if !isGuestMode {
-                        if vm.dishCount > 0 || (vm.meal?.status != nil && vm.meal?.status != .planning) {
-                            Button(confirmTitle, systemImage: confirmIcon) {
-                                Haptics.light()
-                                actionBarConfirm()
-                            }
-                            .disabled(vm.isActing || isRemovingDish)
-                        }
-                        Button("买菜清单", systemImage: "cart") { onShoppingList() }
-                        Button(vm.hasActiveDiningRoom ? "聚餐点菜房（进行中）" : "邀请一起点", systemImage: "person.2") { onDining() }
-                        if onShareMeal != nil, vm.meal != nil {
-                            Button("分享这一顿", systemImage: "square.and.arrow.up") {
-                                saveDocument()
-                                Haptics.light()
-                                onShareMeal?()
-                            }
-                        }
-                        if let pendingReviewMealId {
-                            Button("补写记录", systemImage: "square.and.arrow.pencil") {
-                                onReview(pendingReviewMealId)
-                            }
-                        }
-                    }
-                    Button("撤销最后一笔", systemImage: "arrow.uturn.backward") {
-                        undoStroke()
-                    }
-                    .disabled(strokes.isEmpty)
-                    Button("清除文字和涂鸦", systemImage: "trash", role: .destructive) {
-                        clearCanvasAdditions()
-                    }
-                    .disabled(!hasCanvasAdditions)
-                } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(headerInk)
-                        .frame(width: 34, height: 34)
-                        .background { adaptiveGlass(Circle()) }
-                        .frame(width: 36, height: 44)
-                        .contentShape(Circle())
+                AppMoreButton(
+                    style: .canvasGlass(isLightSurface: isLight),
+                    isOpen: showCanvasMoreMenu,
+                    isDisabled: isCanvasInteracting,
+                    coordinateSpaceName: "canvasMoreSpace",
+                    accessibilityTitle: "这一顿的更多操作"
+                ) { rect in
+                    toggleCanvasMoreMenu(anchor: rect)
                 }
-                .disabled(isCanvasInteracting)
-                .accessibilityLabel("这一顿的更多操作")
 
                 if isGuestMode {
                     Button {
@@ -1326,21 +1410,17 @@ struct MealCanvasView: View {
                             onAddDish()
                         }
                     } label: {
-                        VStack(spacing: 12) {
-                            ZStack {
-                                Circle()
-                                    .frame(width: 60, height: 60)
-                                    .background { adaptiveGlass(Circle()) }
-                                ProductIcon(kind: isLaunchStudio ? .effects : .meal, size: 24, weight: .regular)
-                                    .foregroundStyle(headerInk)
-                            }
+                        VStack(spacing: 14) {
+                            emptyCanvasCenterpiece
                             VStack(spacing: 5) {
                                 Text(isLaunchStudio ? "自由创作你的开屏画面" : "今天想吃点什么？")
                                     .font(.system(size: 19, weight: .semibold, design: .rounded))
                                     .foregroundStyle(headerInk)
+                                    .shadow(color: background.isLightSurface ? .clear : Color.black.opacity(0.24), radius: 6, y: 1.5)
                                 Text(isLaunchStudio ? "点下方文字、贴纸、画笔或背景开始" : "点下方加菜，把想吃的摆上桌")
                                     .font(.system(size: 13, weight: .regular, design: .rounded))
                                     .foregroundStyle(headerMutedInk)
+                                    .shadow(color: background.isLightSurface ? .clear : Color.black.opacity(0.20), radius: 4, y: 1)
                             }
                         }
                         .padding(.horizontal, 28)
@@ -1675,7 +1755,12 @@ struct MealCanvasView: View {
                     .allowsHitTesting(false)
             }
         }
-        .onPreferenceChange(CanvasElementInteractionKey.self) { isCanvasInteracting = $0 }
+        .onPreferenceChange(CanvasElementInteractionKey.self) { interacting in
+            isCanvasInteracting = interacting
+            if interacting && showCanvasMoreMenu {
+                showCanvasMoreMenu = false
+            }
+        }
         .onPreferenceChange(CanvasAlignmentGuidesKey.self) { alignmentGuides = $0 }
     }
 
@@ -3721,7 +3806,254 @@ struct MealCanvasView: View {
         openEditor(.insert)
     }
 
+    private func toggleCanvasMoreMenu(anchor: CGRect) {
+        if showCanvasMoreMenu {
+            closeCanvasMoreMenu()
+            return
+        }
+        finishEditing()
+        selectedStickerID = nil
+        selectedNoteID = nil
+        toolsExpanded = false
+        canvasMoreAnchorRect = anchor
+        withAnimation(reduceMotion ? nil : .spring(response: 0.26, dampingFraction: 0.82)) {
+            showCanvasMoreMenu = true
+        }
+    }
+
+    private func closeCanvasMoreMenu() {
+        guard showCanvasMoreMenu else { return }
+        withAnimation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.88)) {
+            showCanvasMoreMenu = false
+        }
+    }
+
+    private func closeCanvasMoreMenuImmediately() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            showCanvasMoreMenu = false
+        }
+    }
+
+    private var canvasMoreMenuOverlay: some View {
+        let isLight = background.isLightSurface
+        return AnchoredFloatingMenuOverlay(
+            isPresented: $showCanvasMoreMenu,
+            anchorRect: canvasMoreAnchorRect,
+            menuWidth: 248,
+            topReserved: 12,
+            bottomReserved: (isLaunchStudio || isGuestMode) ? 24 : 92,
+            estimatedMenuHeight: isLaunchStudio ? 220 : 320,
+            scrimOpacity: isLight ? 0.06 : 0.18
+        ) { maxCardHeight in
+            if isLaunchStudio {
+                launchStudioMoreMenuContent(maxCardHeight: maxCardHeight)
+            } else {
+                mealCanvasMoreMenuContent(maxCardHeight: maxCardHeight)
+            }
+        }
+    }
+
+    private func launchStudioMoreMenuContent(maxCardHeight: CGFloat) -> some View {
+        var tiles: [FloatingMenuTileItem] = [
+            FloatingMenuTileItem(
+                id: "live",
+                title: "存实况",
+                systemImage: "livephoto",
+                isDisabled: isExporting || liveExportProgress != nil
+            ) {
+                closeCanvasMoreMenuImmediately()
+                saveCanvasAsLivePhoto()
+            },
+            FloatingMenuTileItem(
+                id: "photo",
+                title: "存图片",
+                systemImage: "square.and.arrow.down",
+                isDisabled: isExporting
+            ) {
+                closeCanvasMoreMenuImmediately()
+                saveCanvasToPhotos()
+            }
+        ]
+        if !isReadOnlyCreatorPreview {
+            tiles.append(
+                FloatingMenuTileItem(
+                    id: "motion",
+                    title: "动起来",
+                    systemImage: "sparkles"
+                ) {
+                    closeCanvasMoreMenu()
+                    activateAllLiveMotion()
+                }
+            )
+        }
+
+        let rows = VStack(alignment: .leading, spacing: 2) {
+            FloatingMenuRow(
+                title: soundEngine.isEnabled ? "关闭创作音效" : "开启创作音效",
+                systemImage: soundEngine.isEnabled ? "speaker.wave.2" : "speaker.slash"
+            ) {
+                closeCanvasMoreMenu()
+                toggleSoundFX()
+            }
+
+            if !isReadOnlyCreatorPreview {
+                FloatingMenuRow(
+                    title: "恢复默认开屏",
+                    systemImage: "arrow.counterclockwise"
+                ) {
+                    closeCanvasMoreMenu()
+                    resetLaunchStudioToDefault()
+                }
+
+                FloatingMenuDivider()
+
+                FloatingMenuRow(
+                    title: "清空画布元素",
+                    systemImage: "trash",
+                    role: .destructive,
+                    isDisabled: stickers.isEmpty && notes.isEmpty && strokes.isEmpty
+                ) {
+                    closeCanvasMoreMenu()
+                    clearLaunchCanvasAdditions()
+                }
+            }
+        }
+
+        return VStack(alignment: .leading, spacing: 4) {
+            FloatingMenuTileRow(items: tiles)
+            ViewThatFits(in: .vertical) {
+                rows
+                ScrollView(.vertical, showsIndicators: false) {
+                    rows
+                }
+                .frame(maxHeight: max(120, maxCardHeight - 72))
+            }
+        }
+    }
+
+    private func mealCanvasMoreMenuContent(maxCardHeight: CGFloat) -> some View {
+        let tiles: [FloatingMenuTileItem] = [
+            FloatingMenuTileItem(
+                id: "bg",
+                title: "更换背景",
+                systemImage: "photo"
+            ) {
+                closeCanvasMoreMenu()
+                openEditor(.background)
+            },
+            FloatingMenuTileItem(
+                id: "live",
+                title: "存实况",
+                systemImage: "livephoto",
+                isDisabled: isExporting || liveExportProgress != nil
+            ) {
+                closeCanvasMoreMenuImmediately()
+                saveCanvasAsLivePhoto()
+            },
+            FloatingMenuTileItem(
+                id: "photo",
+                title: "存图片",
+                systemImage: "square.and.arrow.down",
+                isDisabled: isExporting
+            ) {
+                closeCanvasMoreMenuImmediately()
+                saveCanvasToPhotos()
+            }
+        ]
+
+        let rows = VStack(alignment: .leading, spacing: 2) {
+            if vm.meal?.status == .planning || vm.meal?.status == .confirmed {
+                FloatingMenuRow(
+                    title: "从菜谱加菜",
+                    systemImage: "plus",
+                    isDisabled: vm.isActing || isRemovingDish
+                ) {
+                    closeCanvasMoreMenu()
+                    onAddDish()
+                }
+            }
+
+            if !isGuestMode {
+                if vm.dishCount > 0 || (vm.meal?.status != nil && vm.meal?.status != .planning) {
+                    FloatingMenuRow(
+                        title: confirmTitle,
+                        systemImage: confirmIcon,
+                        role: .prominent,
+                        isDisabled: vm.isActing || isRemovingDish
+                    ) {
+                        closeCanvasMoreMenu()
+                        actionBarConfirm()
+                    }
+                }
+
+                FloatingMenuRow(title: "买菜清单", systemImage: "cart") {
+                    closeCanvasMoreMenu()
+                    onShoppingList()
+                }
+
+                FloatingMenuRow(
+                    title: vm.hasActiveDiningRoom ? "聚餐点菜房" : "邀请一起点",
+                    systemImage: "person.2",
+                    badge: vm.hasActiveDiningRoom ? "进行中" : nil
+                ) {
+                    closeCanvasMoreMenu()
+                    onDining()
+                }
+
+                if onShareMeal != nil, vm.meal != nil {
+                    FloatingMenuRow(title: "分享这一顿", systemImage: "square.and.arrow.up") {
+                        closeCanvasMoreMenu()
+                        saveDocument()
+                        onShareMeal?()
+                    }
+                }
+
+                if let pendingReviewMealId {
+                    FloatingMenuRow(title: "补写记录", systemImage: "square.and.arrow.pencil") {
+                        closeCanvasMoreMenu()
+                        onReview(pendingReviewMealId)
+                    }
+                }
+            }
+
+            FloatingMenuDivider()
+
+            FloatingMenuRow(
+                title: "撤销最后一笔",
+                systemImage: "arrow.uturn.backward",
+                isDisabled: strokes.isEmpty
+            ) {
+                closeCanvasMoreMenu()
+                undoStroke()
+            }
+
+            FloatingMenuRow(
+                title: "清除文字和涂鸦",
+                systemImage: "trash",
+                role: .destructive,
+                isDisabled: !hasCanvasAdditions
+            ) {
+                closeCanvasMoreMenu()
+                clearCanvasAdditions()
+            }
+        }
+
+        return VStack(alignment: .leading, spacing: 4) {
+            FloatingMenuTileRow(items: tiles)
+            ViewThatFits(in: .vertical) {
+                rows
+                ScrollView(.vertical, showsIndicators: false) {
+                    rows
+                }
+                .frame(maxHeight: max(140, maxCardHeight - 74))
+            }
+        }
+    }
+
     private func openEditor(_ panel: CanvasEditorPanel) {
+        showCanvasMoreMenu = false
         finishSelecting()
         if panel == .emoji {
             stickerSource = .doodles
@@ -3767,6 +4099,7 @@ struct MealCanvasView: View {
     }
 
     private func startDrawing() {
+        showCanvasMoreMenu = false
         finishSelecting()
         Haptics.light()
         withAnimation(.spring(response: 0.34, dampingFraction: 0.80)) {
@@ -3779,6 +4112,7 @@ struct MealCanvasView: View {
     }
 
     private func finishEditing() {
+        showCanvasMoreMenu = false
         finishSelecting()
         closeEditor()
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
