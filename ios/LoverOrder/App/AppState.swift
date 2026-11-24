@@ -329,6 +329,7 @@ final class AppState: ObservableObject {
                 }
                 finalDoc = doc
             }
+            guard currentUser?.householdId == resp.householdId else { return }
             LaunchCanvasStore.saveCreatorCache(resp, hydratedDocument: finalDoc)
             AppNotifications.launchCanvasChanged()
         } catch {

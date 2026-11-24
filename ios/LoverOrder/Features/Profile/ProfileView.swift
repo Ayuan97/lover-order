@@ -717,12 +717,11 @@ struct ProfileView: View {
     private func leaveHousehold() async {
         do {
             try await HouseholdService.shared.leave()
-            appState.household = nil
-            appState.householdLoadFailed = false
             if var u = appState.currentUser {
                 u.householdId = nil
                 appState.currentUser = u
             }
+            await appState.refreshHousehold()
             let ok = await appState.refreshProfile()
             if !ok {
                 errorMessage = "退了，资料还没跟上 过会儿再进一下就好"

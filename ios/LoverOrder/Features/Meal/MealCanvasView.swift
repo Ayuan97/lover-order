@@ -35,6 +35,7 @@ struct MealCanvasView: View {
     @ObservedObject private var soundEngine = CanvasSoundEngine.shared
     @State private var background: CanvasBackground = .meadow
     @State private var blur: Double = 0.0
+    @State private var pendingBlur: Double?
     @State private var moodFilter: CanvasMoodFilter = .none
     @State private var customBackgroundData: Data?
     @State private var customBackgroundURL: String?
@@ -65,7 +66,6 @@ struct MealCanvasView: View {
     @State private var undoStack: [CanvasHistoryAction] = []
     @State private var redoStack: [CanvasHistoryAction] = []
     @State private var transformUndoStart: CanvasTransformHistory?
-    @State private var blurUndoStart: CGFloat?
     @State private var transformEditorHasChanges = false
     @State private var activeEditor: CanvasEditorPanel?
     @State private var insertMode: CanvasInsertItem?
@@ -102,7 +102,6 @@ struct MealCanvasView: View {
     @State private var hasLoadedStudio = false
     @State private var creatorMeta: LaunchCreatorMeta? = LaunchCanvasStore.loadCreatorMeta()
     @State private var isSavingLaunch = false
-    @State private var blurDirtyForSync = false
     @State private var recentlyAddedRemoteDishIDs: [UInt: Date] = [:]
     @State private var queuedDishStickerIDs: Set<UInt> = []
     @State private var fallbackCanvasFetchTask: Task<Void, Never>?
@@ -272,7 +271,7 @@ struct MealCanvasView: View {
                 ZStack {
                     CanvasMediaBackground(
                         source: background,
-                        blur: blur,
+                        blur: pendingBlur ?? blur,
                         customData: customBackgroundData,
                         customURL: customBackgroundURL
                     )
@@ -322,8 +321,8 @@ struct MealCanvasView: View {
             .sheet(isPresented: $isEditing, onDismiss: {
                 if activeEditor == .transform && transformEditorHasChanges {
                     commitTransformEditorSync()
-                } else if activeEditor == .background && blurDirtyForSync {
-                    broadcastBlurUpdate()
+                } else if activeEditor == .background {
+                    commitBlurEdit()
                 }
                 activeEditor = nil
                 textEditorFocused = false
@@ -458,7 +457,7 @@ struct MealCanvasView: View {
                 fallbackCanvasFetchTask?.cancel()
                 fallbackCanvasFetchTask = nil
                 hasReceivedWelcome = false
-                blurDirtyForSync = false
+                pendingBlur = nil
                 recentlyAddedRemoteDishIDs.removeAll()
                 queuedDishStickerIDs.removeAll()
                 selectedStickerID = nil
@@ -478,7 +477,6 @@ struct MealCanvasView: View {
                 undoStack.removeAll()
                 redoStack.removeAll()
                 transformUndoStart = nil
-                blurUndoStart = nil
                 justInsertedStickerIDs.removeAll()
                 justInsertedNoteIDs.removeAll()
                 pendingDishRevealIDs.removeAll()
@@ -568,8 +566,8 @@ struct MealCanvasView: View {
             .onChange(of: activeEditor) { oldPanel, _ in
                 if oldPanel == .transform && transformEditorHasChanges {
                     commitTransformEditorSync()
-                } else if oldPanel == .background && blurDirtyForSync {
-                    broadcastBlurUpdate()
+                } else if oldPanel == .background {
+                    commitBlurEdit()
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .stickerFavoritesChanged)) { _ in
@@ -2935,21 +2933,17 @@ struct MealCanvasView: View {
             }
 
             HStack(spacing: 8) {
+                let previewBlur = pendingBlur ?? blur
                 Text("背景虚化")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(CanvasPalette.muted)
-                Slider(value: Binding(get: { blur }, set: { value in
-                    guard blur != value else { return }
-                    if blurUndoStart == nil { blurUndoStart = blur }
-                    blur = value
-                    blurDirtyForSync = !isLaunchStudio
-                }), in: 0...10) { editing in
+                Slider(value: Binding(get: { pendingBlur ?? blur }, set: { pendingBlur = $0 }), in: 0...10) { editing in
                     if !editing {
-                        broadcastBlurUpdate()
+                        commitBlurEdit()
                     }
                 }
                 .tint(CanvasPalette.obsidianInk)
-                Text(blur < 0.5 ? "关" : "\(Int(blur.rounded()))")
+                Text(previewBlur < 0.5 ? "关" : "\(Int(previewBlur.rounded()))")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(CanvasPalette.obsidianInk)
                     .frame(width: 22)
@@ -2996,7 +2990,7 @@ struct MealCanvasView: View {
                 if let path {
                     saveDocument()
                     broadcastOp("update_background", payload: CanvasOpPayload(
-                        background: undoBefore.background == .custom ? nil : CanvasBackground.custom.rawValue,
+                        background: CanvasBackground.custom.rawValue,
                         customBackgroundURL: path
                     ))
                 }
@@ -3704,6 +3698,7 @@ struct MealCanvasView: View {
     }
 
     private func closeEditor() {
+        commitBlurEdit()
         withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
             isEditing = false
             insertMode = nil
@@ -3735,9 +3730,15 @@ struct MealCanvasView: View {
 
     private func actionBarConfirm() {
         guard let meal = vm.meal, !vm.isActing, !isRemovingDish, !isConfirmingCanvasAction else { return }
-        if meal.status == .confirmed, backgroundPhotoRequest != nil {
-            showCanvasTip("背景照片正在上传，请完成后再点「吃完了」")
-            return
+        if meal.status == .confirmed {
+            if backgroundPhotoRequest != nil {
+                showCanvasTip("背景照片正在上传，请完成后再点「吃完了」")
+                return
+            }
+            if isCreatingAlbumSticker {
+                showCanvasTip("相册贴纸正在制作，请完成后再点「吃完了」")
+                return
+            }
         }
         flushPendingEditorChanges(clearLivePreview: true)
         finishEditing()
@@ -4432,7 +4433,6 @@ struct MealCanvasView: View {
 
     private func flushPendingDishReveals() {
         let queue = pendingDishRevealIDs
-        pendingDishRevealIDs.removeAll()
         guard !queue.isEmpty else { return }
         dishRevealTask?.cancel()
         dishRevealTask = Task { @MainActor in
@@ -4443,6 +4443,7 @@ struct MealCanvasView: View {
                     try? await Task.sleep(for: .milliseconds(110))
                 }
                 guard !Task.isCancelled else { return }
+                pendingDishRevealIDs.removeAll { $0 == id }
                 withAnimation(reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.68)) {
                     _ = waitingRevealStickerIDs.remove(id)
                 }
@@ -4871,6 +4872,7 @@ struct MealCanvasView: View {
                             holdSpeed: holdSpeedRaw
                         )
                     )
+                    guard appState.currentUser?.householdId == resp.householdId else { return }
                     LaunchCanvasStore.saveCreatorCache(resp, hydratedDocument: snapshot)
                     creatorMeta = LaunchCanvasStore.loadCreatorMeta()
                     LaunchCurtainStore.save(launchConfig)
@@ -5137,9 +5139,7 @@ struct MealCanvasView: View {
 
     private func flushPendingEditorChanges(clearLivePreview: Bool = false) {
         guard !isLaunchStudio else { return }
-        if blurDirtyForSync {
-            broadcastBlurUpdate()
-        }
+        commitBlurEdit()
         if transformEditorHasChanges {
             commitTransformEditorSync()
         }
@@ -5317,13 +5317,12 @@ struct MealCanvasView: View {
         old == new ? nil : new
     }
 
-    private func broadcastBlurUpdate() {
-        blurDirtyForSync = false
-        guard let previousBlur = blurUndoStart else { return }
-        blurUndoStart = nil
-        guard previousBlur != blur else { return }
-        var before = currentCanvasSnapshot()
-        before.blur = previousBlur
+    private func commitBlurEdit() {
+        guard let pendingBlur else { return }
+        self.pendingBlur = nil
+        guard blur != pendingBlur else { return }
+        let before = currentCanvasSnapshot()
+        blur = pendingBlur
         recordUndoAction(from: before)
         broadcastOp("update_background", payload: CanvasOpPayload(blur: blur))
     }

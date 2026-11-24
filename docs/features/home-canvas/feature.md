@@ -63,7 +63,7 @@
 
 ## 消息提醒、饭点铃与外链直达
 
-应用在登录就绪后通过 `LoverAppDelegate` 与 `NotificationManager` 向系统请求通知权限，并将已取得的 APNs 设备令牌上报至 `POST /api/v1/devices/register`（登出调用 `unregister`）；后端在加菜、定下这一顿、标记吃完、发表评价、朋友入房点菜及家人入伙时异步写入 `notification_events` 通知流，并在 `apns.enabled` 启用及 `.p8` 密钥配置完整时经 HTTP/2 发送 ES256 APNs 推送（未配置密钥时记录 dryrun 日志）。客户端在活跃期定时拉取 `GET /api/v1/notifications` 更新通知中心。后端启用 APNs 时，业务通知横幅由 APNs 发送。未启用时，客户端结合本机通知开关为新到未读动态触发本地横幅；主界面“我的”底部导航栏角标与个人页左上角液态玻璃铃铛实时展示未读数量，常用工具首项提供 **消息动态与提醒**（`NotificationCenterSheet`），支持查看/全部已读、点击消息跳转至对应画布/历史详情/个人页、发送“演示提醒”，以及配置每日 **午饭前 / 晚饭前提醒**（`UNCalendarNotificationTrigger` 本地定时提醒）。应用已注册 `lo://` URL Scheme（`lo://home/`、`lo://room/`、`lo://meal/`、`lo://history/`、`lo://household`），收到通知点击或外部唤起时由 `RootView` 与 `AppState` 路由至对应页面（未完成登录引导前自动挂起并在登录后衔接）。
+应用在登录就绪后通过 `LoverAppDelegate` 与 `NotificationManager` 向系统请求通知权限，并将已取得的 APNs 设备令牌上报至 `POST /api/v1/devices/register`（登出调用 `unregister`）；后端在加菜、定下这一顿、标记吃完、发表评价、朋友入房点菜及家人入伙时异步写入 `notification_events` 通知流，并在 `apns.enabled` 启用及 `.p8` 密钥配置完整时经 HTTP/2 发送 ES256 APNs 推送（未配置密钥时记录 dryrun 日志）。客户端在活跃期定时拉取 `GET /api/v1/notifications` 更新通知中心。同一条业务通知按设备选定横幅来源。APNs 接手的通知由系统展示，设备未完成注册或 APNs 明确拒绝的通知由客户端结合本机通知开关，在活跃期为新到的未读动态触发本地横幅；主界面“我的”底部导航栏角标与个人页左上角液态玻璃铃铛实时展示未读数量，常用工具首项提供 **消息动态与提醒**（`NotificationCenterSheet`），支持查看/全部已读、点击消息跳转至对应画布/历史详情/个人页、发送“演示提醒”，以及配置每日 **午饭前 / 晚饭前提醒**（`UNCalendarNotificationTrigger` 本地定时提醒）。应用已注册 `lo://` URL Scheme（`lo://home/`、`lo://room/`、`lo://meal/`、`lo://history/`、`lo://household`），收到通知点击或外部唤起时由 `RootView` 与 `AppState` 路由至对应页面（未完成登录引导前自动挂起并在登录后衔接）。
 
 ## 历史、菜谱、加菜与个人页的当前承载
 

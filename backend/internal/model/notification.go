@@ -20,6 +20,7 @@ const (
 type DeviceToken struct {
 	ID          uint      `json:"id" gorm:"primaryKey"`
 	UserID      uint      `json:"user_id" gorm:"not null;index"`
+	DeviceID    string    `json:"-" gorm:"size:128"`
 	Token       string    `json:"token" gorm:"uniqueIndex;size:255;not null"`
 	Platform    string    `json:"platform" gorm:"size:16;default:'ios';not null"`
 	Environment string    `json:"environment" gorm:"size:16;default:'sandbox';not null"`
@@ -51,6 +52,8 @@ type NotificationEvent struct {
 	IsRead      bool       `json:"is_read" gorm:"default:false;index"`
 	ReadAt      *time.Time `json:"read_at"`
 	CreatedAt   time.Time  `json:"created_at" gorm:"index"`
+
+	APNsDeliveries map[string]string `json:"-" gorm:"type:json;serializer:json"`
 
 	Actor *User `json:"actor,omitempty" gorm:"foreignKey:ActorID"`
 }

@@ -158,16 +158,20 @@ struct AppNotificationEvent: Codable, Identifiable, Equatable {
 }
 
 struct NotificationListResult: Decodable {
+    enum APNsDelivery: String, Decodable {
+        case pending, remote
+    }
+
     let items: [AppNotificationEvent]
     let unreadCount: Int
     let latestId: UInt
-    let apnsConfigured: Bool
+    let apnsDeliveries: [String: APNsDelivery]
 
     enum CodingKeys: String, CodingKey {
         case items
         case unreadCount = "unread_count"
         case latestId = "latest_id"
-        case apnsConfigured = "apns_configured"
+        case apnsDeliveries = "apns_deliveries"
     }
 }
 
@@ -217,6 +221,7 @@ final class NotificationService {
 
     private struct RegisterBody: Encodable {
         let token: String
+        let deviceId: String
         let platform: String
         let environment: String
         let appVersion: String
@@ -224,6 +229,7 @@ final class NotificationService {
 
         enum CodingKeys: String, CodingKey {
             case token, platform, environment
+            case deviceId = "device_id"
             case appVersion = "app_version"
             case mutedKinds = "muted_kinds"
         }
@@ -234,6 +240,7 @@ final class NotificationService {
             "devices/register",
             body: RegisterBody(
                 token: token,
+                deviceId: DeviceIdentity.shared.deviceID,
                 platform: "ios",
                 environment: environment,
                 appVersion: appVersion,
@@ -251,7 +258,11 @@ final class NotificationService {
         if let afterId {
             q["after_id"] = "\(afterId)"
         }
-        return try await api.get("notifications", query: q)
+        return try await api.get(
+            "notifications",
+            query: q,
+            headers: ["X-Notification-Device-ID": DeviceIdentity.shared.deviceID]
+        )
     }
 
     func markRead(eventId: UInt = 0) async throws {
@@ -442,13 +453,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
             guard allowLocalBanner else { return }
 
             let baselineKey = Self.lastDeliveredPrefix + "\(userId)"
-            let storedID = UserDefaults.standard.object(forKey: baselineKey) as? Int
-            // 同一部署的业务横幅只走一个通道，已弹过的锁屏推送可以被系统清除。
-            if result.apnsConfigured {
-                UserDefaults.standard.set(max(storedID ?? 0, Int(result.latestId)), forKey: baselineKey)
-                return
-            }
-            guard let storedID else {
+            guard let storedID = UserDefaults.standard.object(forKey: baselineKey) as? Int else {
                 UserDefaults.standard.set(Int(result.latestId), forKey: baselineKey)
                 return
             }
@@ -464,7 +469,14 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
                     guard activeUserId == userId else { return }
                     if event.kind != "test", !event.isRead, prefs.shouldNotify(kind: event.kind),
                        !existingBannerIds.contains(event.id), !presentedBannerIds.contains(event.id) {
-                        try await scheduleLocalBanner(for: event)
+                        switch page.apnsDeliveries[String(event.id)] {
+                        case .pending:
+                            return
+                        case .remote:
+                            break
+                        case nil:
+                            try await scheduleLocalBanner(for: event)
+                        }
                     }
                     deliveredThrough = event.id
                 }

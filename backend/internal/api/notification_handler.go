@@ -61,7 +61,7 @@ func (h *NotificationHandler) List(c *gin.Context) {
 		afterID = &value
 	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "30"))
-	res, err := h.svc.ListEvents(uid, afterID, limit)
+	res, err := h.svc.ListEvents(uid, c.GetHeader("X-Notification-Device-ID"), afterID, limit)
 	if err != nil {
 		Fail(c, CodeInternalError, err.Error())
 		return

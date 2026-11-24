@@ -157,8 +157,8 @@ final class APIClient {
     }
 
     // GET 请求 查询参数走 query
-    func get<R: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> R {
-        try await send(method: "GET", path: path, query: query, body: Optional<EmptyBody>.none)
+    func get<R: Decodable>(_ path: String, query: [String: String] = [:], headers: [String: String] = [:]) async throws -> R {
+        try await send(method: "GET", path: path, query: query, body: Optional<EmptyBody>.none, headers: headers)
     }
 
     // POST 请求 JSON body
@@ -185,6 +185,7 @@ final class APIClient {
         path: String,
         query: [String: String],
         body: B?,
+        headers: [String: String] = [:],
         allowRefresh: Bool = true
     ) async throws -> R {
         var components = URLComponents(
@@ -201,6 +202,9 @@ final class APIClient {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        for (field, value) in headers {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
         let token = TokenStorage.shared.access
         let hadAuthToken = token != nil
         if let token {
@@ -224,7 +228,7 @@ final class APIClient {
         if http.statusCode == 401 && hadAuthToken {
             if allowRefresh && path != "auth/refresh" {
                 if await refreshAccessTokenIfNeeded(failedAccessToken: token) {
-                    return try await send(method: method, path: path, query: query, body: body, allowRefresh: false)
+                    return try await send(method: method, path: path, query: query, body: body, headers: headers, allowRefresh: false)
                 }
             }
             TokenStorage.shared.clear()

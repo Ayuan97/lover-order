@@ -176,7 +176,11 @@ struct DiningGuestView: View {
     }
 
     private func leave() async {
-        try? await DiningService.shared.leave(mealId: meal.id)
-        dismiss()
+        do {
+            try await DiningService.shared.leave(mealId: meal.id)
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }

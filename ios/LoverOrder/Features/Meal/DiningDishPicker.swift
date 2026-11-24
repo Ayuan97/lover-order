@@ -13,7 +13,8 @@ struct DiningDishPicker: View {
     @Namespace private var sortHighlight
 
     @State private var tableDishes: [MealDish]
-    @State private var recipes: [Recipe] = []
+    @State private var recipes: [Recipe]?
+    @State private var recipesLoadID = 0
     @State private var keyword = ""
     @State private var sortMode: DiningRecipeSort = .all
     @State private var isLoading = false
@@ -61,6 +62,7 @@ struct DiningDishPicker: View {
     }
 
     private var filteredRecipes: [Recipe] {
+        let recipes = recipes ?? []
         let base: [Recipe]
         if trimmedKeyword.isEmpty {
             base = recipes
@@ -106,13 +108,15 @@ struct DiningDishPicker: View {
                 bottomBar
             }
             .task {
-                await loadAll()
+                async let recipesRefresh: () = loadRecipes()
+                await refreshTableOnly()
+                await recipesRefresh
             }
             .onReceive(NotificationCenter.default.publisher(for: .mealChanged)) { _ in
                 Task { await refreshTableOnly() }
             }
             .onReceive(NotificationCenter.default.publisher(for: .recipesChanged)) { _ in
-                Task { await refreshRecipesOnly() }
+                Task { await loadRecipes() }
             }
             .toolbar(.hidden, for: .navigationBar)
             .toast($errorMessage)
@@ -379,19 +383,6 @@ struct DiningDishPicker: View {
         }
     }
 
-    private func loadAll() async {
-        isLoading = true
-        defer { isLoading = false }
-        async let recipesTask: [Recipe] = try await DiningService.shared.recipes(mealId: mealId)
-
-        await refreshTableOnly()
-        do {
-            recipes = try await recipesTask
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-    }
-
     private func refreshTableOnly() async {
         if let currentMeal = try? await DiningService.shared.current(mealId: mealId) {
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) {
@@ -400,9 +391,21 @@ struct DiningDishPicker: View {
         }
     }
 
-    private func refreshRecipesOnly() async {
-        if let latest = try? await DiningService.shared.recipes(mealId: mealId) {
+    @MainActor
+    private func loadRecipes() async {
+        recipesLoadID += 1
+        let loadID = recipesLoadID
+        isLoading = recipes == nil
+        defer {
+            if loadID == recipesLoadID { isLoading = false }
+        }
+        do {
+            let latest = try await DiningService.shared.recipes(mealId: mealId)
+            guard loadID == recipesLoadID else { return }
             recipes = latest
+        } catch {
+            guard loadID == recipesLoadID, recipes == nil else { return }
+            errorMessage = error.localizedDescription
         }
     }
 

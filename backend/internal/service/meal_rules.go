@@ -22,6 +22,9 @@ func errIfCannotConfirm(status string, dishCount int) error {
 }
 
 func errIfCannotComplete(status string, dishCount int) error {
+	if status == model.MealStatusCompleted {
+		return errors.New("这一顿已经记为吃完了")
+	}
 	if status != model.MealStatusConfirmed {
 		return errors.New("请先定下这一顿再标记吃完")
 	}

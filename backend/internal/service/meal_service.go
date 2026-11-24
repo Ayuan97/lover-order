@@ -273,30 +273,39 @@ func (s *MealService) Confirm(householdID, actorUserID, id uint) (*model.MealSes
 
 // Complete 标记吃完
 func (s *MealService) Complete(householdID, actorUserID, id uint) (*model.MealSession, error) {
-	m, err := s.load(householdID, id)
+	var m model.MealSession
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND household_id = ?", id, householdID).
+			Preload("Dishes").First(&m).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("这一顿不存在")
+			}
+			return err
+		}
+		if err := errIfCannotComplete(m.Status, len(m.Dishes)); err != nil {
+			return err
+		}
+		now := time.Now()
+		m.Status = model.MealStatusCompleted
+		m.CompletedAt = &now
+		// 进行中保留 household 供首页查询；开过房间的餐次吃完后归档为 dining。
+		if m.RoomExpiresAt != nil {
+			m.Scene = model.SceneDining
+		}
+		m.RoomCode = ""
+		m.RoomExpiresAt = nil
+		return tx.Model(&m).
+			Select("status", "completed_at", "scene", "room_code", "room_expires_at").Updates(&m).Error
+	})
 	if err != nil {
-		return nil, err
-	}
-	if err := errIfCannotComplete(m.Status, len(m.Dishes)); err != nil {
-		return nil, err
-	}
-	now := time.Now()
-	m.Status = model.MealStatusCompleted
-	m.CompletedAt = &now
-	// 进行中保留 household 供首页查询；开过房间的餐次吃完后归档为 dining。
-	if m.RoomExpiresAt != nil {
-		m.Scene = model.SceneDining
-	}
-	m.RoomCode = ""
-	m.RoomExpiresAt = nil
-	if err := model.DB.Save(m).Error; err != nil {
 		return nil, err
 	}
 	NewNotificationService().NotifyMealCompleted(householdID, actorUserID, m.ID, m.Title)
 	GlobalCanvasHub().BroadcastMealSync(m.ID, "completed", actorUserID)
 	GlobalCanvasHub().BroadcastHouseholdSync(householdID, "history_changed", actorUserID)
 	GlobalCanvasHub().EvictGuests(m.ID)
-	return m, nil
+	return &m, nil
 }
 
 // Cancel 取消（已定下的取消时回退对应菜谱的做过次数）

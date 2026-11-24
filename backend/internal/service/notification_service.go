@@ -34,6 +34,7 @@ func NewNotificationService() *NotificationService {
 // DeviceRegisterInput 设备推送令牌注册入参
 type DeviceRegisterInput struct {
 	Token       string   `json:"token" binding:"required"`
+	DeviceID    string   `json:"device_id" binding:"required,uuid"`
 	Platform    string   `json:"platform"`
 	Environment string   `json:"environment"`
 	AppVersion  string   `json:"app_version"`
@@ -45,7 +46,7 @@ type NotificationListResult struct {
 	Items          []model.NotificationEvent `json:"items"`
 	UnreadCount    int64                     `json:"unread_count"`
 	LatestID       uint                      `json:"latest_id"`
-	APNsConfigured bool                      `json:"apns_configured"`
+	APNsDeliveries map[uint]string           `json:"apns_deliveries"`
 }
 
 // RegisterDevice 注册或刷新设备 APNs Token
@@ -69,6 +70,7 @@ func (s *NotificationService) RegisterDevice(userID uint, in DeviceRegisterInput
 	if err == nil {
 		return model.DB.Model(&existing).Updates(map[string]any{
 			"user_id":      userID,
+			"device_id":    in.DeviceID,
 			"platform":     platform,
 			"environment":  env,
 			"app_version":  strings.TrimSpace(in.AppVersion),
@@ -83,6 +85,7 @@ func (s *NotificationService) RegisterDevice(userID uint, in DeviceRegisterInput
 
 	item := &model.DeviceToken{
 		UserID:      userID,
+		DeviceID:    in.DeviceID,
 		Token:       tok,
 		Platform:    platform,
 		Environment: env,
@@ -105,7 +108,7 @@ func (s *NotificationService) UnregisterDevice(userID uint, token string) error 
 }
 
 // ListEvents 获取当前用户站内通知与未读统计
-func (s *NotificationService) ListEvents(userID uint, afterID *uint, limit int) (*NotificationListResult, error) {
+func (s *NotificationService) ListEvents(userID uint, deviceID string, afterID *uint, limit int) (*NotificationListResult, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 30
 	}
@@ -129,15 +132,24 @@ func (s *NotificationService) ListEvents(userID uint, afterID *uint, limit int) 
 	}
 
 	var latestID uint
+	deliveries := make(map[uint]string)
+	now := time.Now()
 	for _, item := range items {
 		latestID = max(latestID, item.ID)
+		if state := item.APNsDeliveries[deviceID]; state != "" {
+			// 服务重启可能中断记录写回。结果未知时保留 APNs 归属，避免重发已弹过的消息。
+			if state == apnsPending && now.Sub(item.CreatedAt) >= apnsPendingLimit {
+				state = apnsRemote
+			}
+			deliveries[item.ID] = state
+		}
 	}
 
 	return &NotificationListResult{
 		Items:          items,
 		UnreadCount:    unreadCount,
 		LatestID:       latestID,
-		APNsConfigured: apnsConfigured(config.AppConfig.APNs),
+		APNsDeliveries: deliveries,
 	}, nil
 }
 
@@ -343,6 +355,7 @@ func (s *NotificationService) dispatch(
 	mealID *uint,
 	roomCode, deepLink string,
 ) {
+	cfg := config.AppConfig.APNs
 	for _, uid := range recipientIDs {
 		ev := &model.NotificationEvent{
 			UserID:      uid,
@@ -355,11 +368,20 @@ func (s *NotificationService) dispatch(
 			RoomCode:    roomCode,
 			DeepLink:    deepLink,
 		}
+		targets, bearer := apnsTargets(ev, cfg)
+		if len(targets) > 0 {
+			ev.APNsDeliveries = make(map[string]string, len(targets))
+			for _, device := range targets {
+				ev.APNsDeliveries[device.DeviceID] = apnsPending
+			}
+		}
 		if err := model.DB.Create(ev).Error; err != nil {
 			log.Printf("[Notification] 创建事件失败 uid=%d err=%v", uid, err)
 			continue
 		}
-		pushEventToUser(ev)
+		if len(targets) > 0 {
+			pushEventToDevices(ev, targets, cfg, bearer)
+		}
 	}
 }
 
@@ -455,35 +477,50 @@ func apnsConfigured(cfg config.APNsConfig) bool {
 	return cfg.Enabled && cfg.TeamID != "" && cfg.KeyID != "" && cfg.PrivateKeyPath != ""
 }
 
-func pushEventToUser(ev *model.NotificationEvent) {
-	if ev == nil {
-		return
-	}
+const (
+	apnsPending      = "pending"
+	apnsRemote       = "remote"
+	apnsPendingLimit = time.Minute
+)
+
+func apnsTargets(ev *model.NotificationEvent, cfg config.APNsConfig) ([]model.DeviceToken, string) {
 	var tokens []model.DeviceToken
-	if err := model.DB.Where("user_id = ? AND is_active = ?", ev.UserID, true).Find(&tokens).Error; err != nil {
+	if err := model.DB.Where("user_id = ? AND device_id <> ''", ev.UserID).
+		Order("last_seen_at DESC, id DESC").Find(&tokens).Error; err != nil {
 		log.Printf("[APNs] 查询设备令牌失败 uid=%d err=%v", ev.UserID, err)
-		return
+		return nil, ""
 	}
+	seen := make(map[string]bool)
 	tokens = slices.DeleteFunc(tokens, func(device model.DeviceToken) bool {
-		return slices.Contains(strings.Split(device.MutedKinds, ","), ev.Kind)
+		if seen[device.DeviceID] {
+			return true
+		}
+		seen[device.DeviceID] = true
+		return !device.IsActive || slices.Contains(strings.Split(device.MutedKinds, ","), ev.Kind)
 	})
 	if len(tokens) == 0 {
-		return
+		return nil, ""
 	}
-
-	cfg := config.AppConfig.APNs
 	if !apnsConfigured(cfg) {
 		log.Printf("[APNs-dryrun] uid=%d devices=%d kind=%s title=%q deep_link=%s",
 			ev.UserID, len(tokens), ev.Kind, ev.Title, ev.DeepLink)
-		return
+		return nil, ""
 	}
 
 	bearer, err := apnsBearerToken(cfg)
 	if err != nil {
 		log.Printf("[APNs] 生成鉴权 JWT 失败 err=%v", err)
-		return
+		return nil, ""
 	}
+	return tokens, bearer
+}
 
+func pushEventToDevices(ev *model.NotificationEvent, tokens []model.DeviceToken, cfg config.APNsConfig, bearer string) {
+	defer func() {
+		if err := model.DB.Model(ev).Select("APNsDeliveries").Updates(ev).Error; err != nil {
+			log.Printf("[APNs] 保存推送结果失败 event=%d err=%v", ev.ID, err)
+		}
+	}()
 	var unread int64
 	model.DB.Model(&model.NotificationEvent{}).
 		Where("user_id = ? AND is_read = ?", ev.UserID, false).
@@ -512,6 +549,7 @@ func pushEventToUser(ev *model.NotificationEvent) {
 	}
 	payloadBytes, err := json.Marshal(payloadMap)
 	if err != nil {
+		clear(ev.APNsDeliveries)
 		return
 	}
 
@@ -523,6 +561,7 @@ func pushEventToUser(ev *model.NotificationEvent) {
 		endpoint := fmt.Sprintf("%s/3/device/%s", host, dev.Token)
 		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payloadBytes))
 		if err != nil {
+			delete(ev.APNsDeliveries, dev.DeviceID)
 			continue
 		}
 		req.Header.Set("authorization", "bearer "+bearer)
@@ -531,6 +570,8 @@ func pushEventToUser(ev *model.NotificationEvent) {
 		req.Header.Set("apns-priority", "10")
 		req.Header.Set("content-type", "application/json")
 
+		// 传输超时无法知道 APNs 是否已接收。保留其归属，避免两边各弹一次。
+		ev.APNsDeliveries[dev.DeviceID] = apnsRemote
 		resp, err := sharedAPNsClient.Do(req)
 		if err != nil {
 			log.Printf("[APNs] 推送请求失败 dev=%d err=%v", dev.ID, err)
@@ -542,9 +583,10 @@ func pushEventToUser(ev *model.NotificationEvent) {
 		if resp.StatusCode == http.StatusOK {
 			continue
 		}
+		delete(ev.APNsDeliveries, dev.DeviceID)
 		log.Printf("[APNs] 推送拒绝 dev=%d status=%d body=%s", dev.ID, resp.StatusCode, string(respBody))
 		if resp.StatusCode == http.StatusGone || (resp.StatusCode == http.StatusBadRequest && strings.Contains(string(respBody), "BadDeviceToken")) {
-			model.DB.Model(&model.DeviceToken{}).Where("id = ?", dev.ID).Update("is_active", false)
+			model.DB.Model(&model.DeviceToken{}).Where("id = ? AND user_id = ?", dev.ID, ev.UserID).Update("is_active", false)
 		}
 	}
 }
